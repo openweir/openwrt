@@ -1,4 +1,4 @@
-import { card, h, select, segment, empty, clock, download, resultName, diagnosticMessage } from '../dom.js';
+import { card, h, select, segment, empty, clock, download, resultName, diagnosticMessage, datetime } from '../dom.js';
 
 const levels = { info: '信息', warn: '警告', error: '错误' };
 const sources = {
@@ -8,7 +8,7 @@ const sources = {
 	subscription: '订阅',
 	dns: 'DNS',
 	firewall: '防火墙',
-	watchdog: 'watchdog',
+	watchdog: '守护进程',
 };
 const outcome = (v) => (v === 'traffic_observed' ? '已建立' : resultName[v] || v || '—');
 export async function records(ui) {
@@ -21,11 +21,22 @@ export async function records(ui) {
 		query: ui.detail || '',
 		limit: 40,
 		device: '',
+		rule: '',
 	});
 	if (ui.detail && state.detail !== ui.detail) {
-		state.query = ui.detail;
+		const rule = !logs && ui.detail.startsWith('rule:') ? ui.detail.slice(5) : '';
+		state.query = rule ? '' : ui.detail;
+		state.rule = rule;
 		state.detail = ui.detail;
 	}
+	const ruleSetOf = (rule) => /^RuleSet,(.+)$/.exec(rule || '')?.[1] || '';
+	const ruleLabel = (rule) => {
+		if (!rule) return '—';
+		const set = ruleSetOf(rule);
+		if (set) return '规则集 ' + set;
+		const [type, ...payload] = rule.split(',');
+		return type === 'Match' ? '兜底' : type + (payload.length ? ' ' + payload.join(',') : '');
+	};
 	const deviceNames = new Map();
 	if (!logs) {
 		const [, devices] = await Promise.all([ui.catalog(), ui.rpc('devices').catch(() => ({ items: [] }))]);
@@ -69,6 +80,11 @@ export async function records(ui) {
 		state.device = device.value;
 		draw();
 	});
+	const ruleFilter = h('select', { 'aria-label': '命中规则集' });
+	ruleFilter.addEventListener('change', () => {
+		state.rule = ruleFilter.value;
+		draw();
+	});
 	let requestId = 0;
 	const follow = ui.button(
 		'实时跟随',
@@ -97,7 +113,7 @@ export async function records(ui) {
 			.map(ui.name)
 			.join(' → ') || '—',
 		ui.name(c.outbound),
-		c.rule || '—',
+		ruleLabel(c.rule),
 		outcome(c.result),
 	];
 	function draw() {
@@ -121,6 +137,7 @@ export async function records(ui) {
 			return (
 				(!state.category || state.category === type) &&
 				(!state.device || state.device === v.device) &&
+				(!state.rule || ruleSetOf(v.rule) === state.rule) &&
 				(!q || rowValues(v).join(' ').toLocaleLowerCase().includes(q))
 			);
 		});
@@ -132,6 +149,13 @@ export async function records(ui) {
 				...values.map((x) => h('option', { value: x }, deviceLabel(x))),
 			);
 			device.value = state.device;
+			const sets = [...new Set(entries.map((c) => ruleSetOf(c.rule)).filter(Boolean))].sort();
+			if (state.rule && !sets.includes(state.rule)) sets.unshift(state.rule);
+			ruleFilter.replaceChildren(
+				h('option', { value: '' }, '全部规则集'),
+				...sets.map((x) => h('option', { value: x }, x)),
+			);
+			ruleFilter.value = state.rule;
 		}
 		if (!shown.length)
 			display.replaceChildren(empty(entries.length || state.serverQuery ? '没有匹配的记录' : '暂无' + title));
@@ -150,7 +174,7 @@ export async function records(ui) {
 						h(
 							'div',
 							{ class: 'ow-muted' },
-							(sources[v.source] || v.source) + ' · ' + new Date(v.time).toLocaleString() + ' · ' + v.message,
+							(sources[v.source] || v.source) + ' · ' + datetime(v.time) + ' · ' + v.message,
 						),
 					);
 					return row;
@@ -251,7 +275,7 @@ export async function records(ui) {
 		ui.signal.addEventListener('abort', () => clearTimeout(timer), { once: true });
 	}
 	const text = () => JSON.stringify(shown, null, 2);
-	const toolbar = h('div', { class: 'ow-toolbar' }, category, logs ? source : device, search, remoteSearch);
+	const toolbar = h('div', { class: 'ow-toolbar' }, category, logs ? source : [device, ruleFilter], search, remoteSearch);
 	const header = h('div', { class: 'ow-records-header' }, h('h2', {}, title), follow);
 	if (logs)
 		header.append(
