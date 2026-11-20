@@ -121,10 +121,10 @@ func serve(ctx context.Context) error {
 	}
 	sources := subscription.OpenStore(router.Root + "/sources")
 	if err := sources.CollectSets(router.Root + "/rulesets"); err != nil {
-		sys.Records().Log("subscription", "warn", "could not clean unused rule providers")
+		sys.Records().Log("subscription", "warn", "rule_provider_cleanup_failed")
 	}
 	if _, err := selectInitialSource(m, sources, ""); err != nil {
-		sys.Records().Log("service", "warn", "could not select the initial subscription")
+		sys.Records().Log("service", "warn", "initial_subscription_select_failed")
 	}
 	s.queueFirstKernel()
 	go s.schedule(jobsCtx)
@@ -240,6 +240,8 @@ func (s *app) handle(ctx context.Context, method string, r request) (any, error)
 			r.Limit = 50
 		}
 		return map[string]any{"items": events.Page(method, r.Offset, r.Limit)}, nil
+	case "rule_hits":
+		return events.RuleHits(), nil
 	case "task":
 		return s.task(r.Task)
 	case "notify_clock":
@@ -462,7 +464,7 @@ func (s *app) dispatch(ctx context.Context, method string, r request) (any, erro
 	lane := method
 	switch method {
 	case "subscription_read":
-		if !slices.Contains([]string{"list", "status", "profile", "nodes", "groups", "rules", "agents"}, r.Action) {
+		if !slices.Contains([]string{"list", "status", "url", "profile", "nodes", "groups", "rules", "agents", "set_match"}, r.Action) {
 			return nil, errors.New("unknown read operation")
 		}
 		return child(ctx, bin, arg, body)
@@ -576,7 +578,7 @@ func (s *app) runJob(lane, action string, fn func(context.Context) (json.RawMess
 		s.jobs[id] = j
 		delete(s.busy, lane)
 		if err := s.saveJobs(); err != nil {
-			s.sys.Records().Log("task", "warn", "task journal write failed")
+			s.sys.Records().Log("task", "warn", "task_journal_write_failed")
 		}
 		s.mu.Unlock()
 		event := action + " " + j.Stage + " " + id

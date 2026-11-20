@@ -25,9 +25,30 @@ type Records struct {
 	connections []control.Connection
 	index       map[string]int
 	pos         int
+	ruleHits    map[string]*RuleHit
 }
 
-func NewRecords() *Records { return &Records{index: map[string]int{}} }
+// RuleHit counts the connections a rule set matched since the records were last
+// cleared, beyond the recordLimit connections that are kept.
+type RuleHit struct {
+	Count int   `json:"count"`
+	Last  int64 `json:"last"`
+}
+
+const ruleHitLimit = 1024
+
+func NewRecords() *Records { return &Records{index: map[string]int{}, ruleHits: map[string]*RuleHit{}} }
+
+// RuleHits returns the per-rule-set connection counts.
+func (r *Records) RuleHits() map[string]RuleHit {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make(map[string]RuleHit, len(r.ruleHits))
+	for k, v := range r.ruleHits {
+		out[k] = *v
+	}
+	return out
+}
 func (r *Records) Log(source, level, message string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -108,6 +129,13 @@ func corePermissionReason(line string) string {
 		return "core_capability_permission"
 	case strings.Contains(line, "pthread_create"), strings.Contains(line, "failed to create new os thread"):
 		return "core_thread_creation_failed"
+	case strings.Contains(line, "/proc/"), strings.Contains(line, "find process"), strings.Contains(line, "process name"):
+		return "core_process_lookup_permission"
+	case strings.Contains(line, "connect:"), strings.Contains(line, "sendto"), strings.Contains(line, "sendmsg"),
+		strings.Contains(line, "dial tcp"), strings.Contains(line, "dial udp"), strings.Contains(line, "write udp"), strings.Contains(line, "write tcp"):
+		return "core_outbound_blocked"
+	case strings.Contains(line, "open /"), strings.Contains(line, "stat /"), strings.Contains(line, "mkdir /"), strings.Contains(line, "rename /"):
+		return "core_file_permission"
 	default:
 		return "permission_denied"
 	}
@@ -150,7 +178,12 @@ func (s *logSink) recordLine(line string) {
 	if strings.Contains(line, "permission denied") || strings.Contains(line, "operation not permitted") {
 		reason = corePermissionReason(line)
 	} else {
-		for _, x := range []struct{ needle, reason string }{{"address already in use", "listen_address_in_use"}, {"connection refused", "connection_refused"}, {"network is unreachable", "network_unreachable"}, {"i/o timeout", "io_timeout"}, {"context deadline exceeded", "deadline_exceeded"}, {"no such host", "dns_name_not_found"}, {"certificate", "tls_certificate_error"}, {"handshake", "handshake_failed"}, {"no space left", "disk_full"}, {"invalid config", "invalid_configuration"}, {"failed to create new os thread", "core_thread_creation_failed"}, {"pthread_create failed", "core_thread_creation_failed"}} {
+		for _, x := range []struct{ needle, reason string }{{"address already in use", "listen_address_in_use"}, {"connection refused", "connection_refused"}, {"network is unreachable", "network_unreachable"}, {"i/o timeout", "io_timeout"}, {"context deadline exceeded", "deadline_exceeded"}, {"no such host", "dns_name_not_found"}, {"certificate", "tls_certificate_error"}, {"handshake", "handshake_failed"}, {"no space left", "disk_full"}, {"invalid config", "invalid_configuration"}, {"failed to create new os thread", "core_thread_creation_failed"}, {"pthread_create failed", "core_thread_creation_failed"},
+			{"no route to host", "network_unreachable"}, {"connection reset", "connection_reset"}, {"broken pipe", "connection_reset"}, {"unexpected eof", "connection_closed"}, {": eof", "connection_closed"},
+			{"geoip", "geodata_unavailable"}, {"geosite", "geodata_unavailable"}, {"mmdb", "geodata_unavailable"},
+			{"rule provider", "rule_provider_issue"}, {"rule-provider", "rule_provider_issue"}, {"ruleset", "rule_provider_issue"},
+			{"proxy provider", "node_provider_issue"}, {"proxy-provider", "node_provider_issue"}, {"healthcheck", "node_health_check_failed"}, {"health check", "node_health_check_failed"},
+			{"sniff", "sniffer_issue"}, {"[tun]", "core_tun_issue"}, {"tun device", "core_tun_issue"}, {"/dev/net/tun", "core_tun_issue"}, {"dial", "dial_failed"}, {"dns", "dns_query_failed"}} {
 			if strings.Contains(line, x.needle) {
 				reason = x.reason
 				break
@@ -186,6 +219,17 @@ func (r *Records) Observe(c control.Connection) {
 	}
 	if c.Created == 0 && c.Destination == "" {
 		return
+	}
+	if set, ok := strings.CutPrefix(c.Rule, "RuleSet,"); ok && set != "" {
+		hit := r.ruleHits[set]
+		if hit == nil && len(r.ruleHits) < ruleHitLimit {
+			hit = &RuleHit{}
+			r.ruleHits[set] = hit
+		}
+		if hit != nil {
+			hit.Count++
+			hit.Last = max(hit.Last, c.Created)
+		}
 	}
 	if len(r.connections) < recordLimit {
 		r.index[c.ID] = len(r.connections)
@@ -224,6 +268,7 @@ func (r *Records) Clear(kind string) {
 		r.minTime = time.Now().UnixMilli()
 		r.connections = nil
 		r.index = map[string]int{}
+		r.ruleHits = map[string]*RuleHit{}
 		r.pos = 0
 	}
 }

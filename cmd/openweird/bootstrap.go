@@ -21,7 +21,7 @@ func (s *app) queueFirstKernel() {
 	dir := filepath.Join(router.Root, "mihomo-kernel")
 	ready, err := firstInstallPending(dir)
 	if err != nil {
-		s.sys.Records().Log("kernel", "warn", "invalid initial kernel preparation marker")
+		s.sys.Records().Log("kernel", "warn", "kernel_bootstrap_marker_invalid")
 	}
 	if !ready {
 		return
@@ -103,7 +103,7 @@ func (s *app) queueBootstrap(retry bool) {
 	if err != nil {
 		cancel()
 		close(done)
-		s.sys.Records().Log("kernel", "warn", "initial kernel preparation could not be queued")
+		s.sys.Records().Log("kernel", "warn", "kernel_bootstrap_queue_failed")
 	}
 }
 
