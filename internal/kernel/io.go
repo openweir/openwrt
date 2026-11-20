@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/openweir/openwrt/internal/mirror"
 	"io"
 	"net"
 	"net/http"
@@ -166,7 +167,27 @@ func (s Source) open(ctx context.Context, tag, name string, isArchive bool) (io.
 	if e != nil {
 		return nil, e
 	}
-	return fetch(ctx, u.JoinPath(releaseRef(tag), name).String())
+	target := u.JoinPath(releaseRef(tag), name).String()
+	if s.Mirror != "" {
+		return fetch(ctx, target)
+	}
+	// GitHub first (or whichever address worked last), then the accelerators. The caller
+	// checks size and SHA-256 from the release metadata, so any copy that arrives is safe.
+	var first error
+	for _, c := range mirror.Candidates(target, mirror.Configured(ctx)) {
+		r, err := fetch(ctx, c.URL)
+		if err == nil {
+			mirror.Remember(c.Prefix)
+			return r, nil
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		if first == nil {
+			first = err
+		}
+	}
+	return nil, first
 }
 func getBounded(r io.ReadCloser, e error, limit int64) ([]byte, error) {
 	if e != nil {

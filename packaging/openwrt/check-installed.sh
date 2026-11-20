@@ -112,6 +112,10 @@ FETCH
   ;;
  reject-tampered-upgrade)
   updater=/usr/libexec/openweir/package-update
+  # Only the fixture's GitHub copy: no download mirrors outside the test network.
+  uci set openweir.main.download_mirrors_saved=1
+  uci -q delete openweir.main.download_mirror || true
+  uci commit openweir
   test "$("$updater" check | jsonfilter -e '@.available')" = true
   if "$updater" apply; then echo 'Updater accepted modified package bytes' >&2; exit 1; fi
   installed=$("$updater" check | jsonfilter -e '@.installed')

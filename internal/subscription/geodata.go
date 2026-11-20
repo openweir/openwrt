@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/openweir/openwrt/internal/mirror"
 	"io"
 	"net/http"
 	"os"
@@ -110,8 +111,27 @@ func PrepareGeodata(ctx context.Context, rules []string, dir, manifest string) e
 	}
 	return nil
 }
+
+// acquireGeo tries GitHub and the download mirrors in turn; each copy must match the pin.
 func acquireGeo(ctx context.Context, c *http.Client, dir, dst string, p geoPin) error {
-	req, e := http.NewRequestWithContext(ctx, http.MethodGet, p.url, nil)
+	var first error
+	for _, m := range mirror.Candidates(p.url, mirror.Configured(ctx)) {
+		err := acquireGeoFrom(ctx, c, dir, dst, p, m.URL)
+		if err == nil {
+			mirror.Remember(m.Prefix)
+			return nil
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if first == nil {
+			first = err
+		}
+	}
+	return first
+}
+func acquireGeoFrom(ctx context.Context, c *http.Client, dir, dst string, p geoPin, address string) error {
+	req, e := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
 	if e != nil {
 		return e
 	}

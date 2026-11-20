@@ -104,9 +104,31 @@ if [ "$action" = apply ] && [ "$available" = true ]; then
  free=$(df -Pk "$tmp" | awk 'END {print $4}')
  # The archive and its bundled CPU payload coexist on tmpfs during installation.
  test "$free" -ge "$(((size * 2 + 1023) / 1024 + 4096))" || fail 'Insufficient temporary storage for update'
- fetch "$downloads/v$release_version/$file" "$file" "$(((size + 511) / 512))"
- test "$(wc -c < "$tmp/$file")" -eq "$size" || fail 'Package size mismatch'
- printf '%s  %s\n' "$digest" "$tmp/$file" | sha256sum -c - >&2 || fail 'Package SHA256 mismatch'
+ # GitHub first (or the address that worked last), then the download mirrors from LuCI
+ # (internal/mirror keeps the same defaults). Each copy must match the release digest.
+ mirrors='https://ghfast.top/ https://gh-proxy.com/ https://ghproxy.net/ https://gh.idayer.com/ https://cors.isteed.cc/ https://ghm.078465.xyz/ https://ghfile.geekertao.top/ https://gh.ddlc.top/'
+ if [ "$(uci -q get openweir.main.download_mirrors_saved)" = 1 ]; then mirrors=$(uci -q get openweir.main.download_mirror || true); fi
+ state=/var/run/openweir/download-mirror
+ last=$(cat "$state" 2>/dev/null || true)
+ # Only a prefix from this list: the state file is shared with repository-file CDNs.
+ case " $mirrors " in *" $last "*) ;; *) last=;; esac
+ # 'direct' stands for GitHub itself; the remembered address goes first.
+ order=direct
+ for prefix in $mirrors; do case "$prefix" in https://*/) order="$order $prefix";; esac; done
+ [ -z "$last" ] || order="$last $(echo " $order " | sed "s# $last # #")"
+ fetched=
+ for choice in $order; do
+  prefix=$choice; [ "$choice" != direct ] || prefix=
+  rm -f "$tmp/$file"
+  if fetch "$prefix$downloads/v$release_version/$file" "$file" "$(((size + 511) / 512))" 2>/dev/null &&
+     [ "$(wc -c < "$tmp/$file")" -eq "$size" ] &&
+     printf '%s  %s\n' "$digest" "$tmp/$file" | sha256sum -c - >/dev/null 2>&1; then
+   fetched=1
+   mkdir -p "${state%/*}" && printf '%s\n' "$prefix" > "$state"
+   break
+  fi
+ done
+ [ -n "$fetched" ] || fail 'Cannot download a package matching the release digest'
  if [ "$pm" = apk ]; then
   apk --allow-untrusted adbdump --format json "$tmp/$file" > "$tmp/package.json"
   test "$(jsonfilter -i "$tmp/package.json" -e '@.info.name')" = "$name" &&
