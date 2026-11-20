@@ -107,7 +107,7 @@ func newPublishFixture(t *testing.T) *publishFixture {
 		sums.WriteString(d + "  " + name + "\n")
 	}
 	os.WriteFile(p.sums, []byte(sums.String()), 0o644)
-	p.notes = "Install packages\n\n```text\n" + sums.String() + "```\n"
+	p.notes = "Install packages\n"
 	return p
 }
 
@@ -143,7 +143,7 @@ func TestDraftUploadResumeAndImmutableFirstRelease(t *testing.T) {
 	if err := p.publish(other); err != nil {
 		t.Fatal(err)
 	}
-	want := AllNames(version)
+	want := releaseNames(tag)
 	slices.Sort(want)
 	uploaded := slices.Clone(p.github.uploaded)
 	slices.Sort(uploaded)

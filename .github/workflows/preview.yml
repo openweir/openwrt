@@ -11,11 +11,12 @@ on:
     types: [completed]
 permissions:
   contents: write
-  actions: read
+  actions: write
 
+# A newer develop commit supersedes the preview being published.
 concurrency:
   group: openwrt-preview
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   publish:
@@ -77,18 +78,9 @@ jobs:
           VERSION: ${{ steps.files.outputs.version }}
         run: |
           set -euo pipefail
-          sums=$(cat dist/SHA256SUMS)
-          cat > notes.md <<EOF
-          OpenWeir for OpenWrt $VERSION 预览版，由 develop 上的 ${HEAD_SHA:0:7} 构建。
-
-          - 安装包内的版本号仍是 $(cat VERSION)，与之后的同版本正式版不同，请勿混用；正式版发布后请重新安装正式版。
-          - 路由器的「检查更新」不会提供预览版。
-          - 按路由器架构选包（文件名末尾即 OpenWrt 架构，如 \`_aarch64_cortex-a53\`）；23.05 / 24.10 用 \`.ipk\`，25.12 用 \`.apk\`。
-
-          \`\`\`text
-          $sums
-          \`\`\`
-          EOF
+          # The same notes as a stable release, linking this preview's tag and naming its caveats.
+          go run ./cmd/openweir-release notes --preview-tag "$TAG" --commit "$HEAD_SHA" \
+            "$GITHUB_REPOSITORY" "$(cat VERSION)" dist/assets > notes.md
           gh release create "$TAG" dist/assets/* dist/SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" \
             --target "$HEAD_SHA" \
@@ -104,4 +96,12 @@ jobs:
             --jq '[.[] | select(.isPrerelease and (.tagName | test("^v.+-preview\\.[0-9]+$")))] | sort_by(.createdAt) | reverse | .[1:] | .[].tagName' |
           while read -r tag; do
             gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes
+          done
+      # Runs cancelled by a newer push only clutter the Actions list.
+      - name: Delete cancelled runs
+        if: always()
+        run: |
+          gh run list --repo "$GITHUB_REPOSITORY" --status cancelled --limit 100 --json databaseId --jq '.[].databaseId' |
+          while read -r id; do
+            gh run delete "$id" --repo "$GITHUB_REPOSITORY" || true
           done

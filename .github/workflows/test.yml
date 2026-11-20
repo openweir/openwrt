@@ -5,6 +5,10 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+# A newer push to the same branch cancels the older run; main always runs to the end.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 jobs:
   # main and develop often point at one commit after a release; main's run covers it, so the
   # develop run skips every check and the preview workflow publishes nothing.

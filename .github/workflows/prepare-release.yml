@@ -110,3 +110,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           go run ./cmd/openweir-release publish --repo "$GITHUB_REPOSITORY" --tag "v$VERSION" --commit "$COMMIT" --assets dist/assets --notes dist/notes.md
+      # The stable release replaces the previews of its version; remove them with their tags.
+      - name: Remove this version's previews
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName,isPrerelease \
+            --jq ".[] | select(.isPrerelease and (.tagName | startswith(\"v$VERSION-preview.\"))) | .tagName" |
+          while read -r tag; do
+            gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes
+          done

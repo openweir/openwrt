@@ -22,7 +22,7 @@ var (
 	semverTag   = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
 	commitSHA   = regexp.MustCompile(`^[0-9a-f]{40}$`)
 	manifestRow = regexp.MustCompile(`^([0-9a-f]{64}) [ *]([A-Za-z0-9][A-Za-z0-9_.+-]*)$`)
-	textBlock   = regexp.MustCompile("(?ms)^```text\n(.*?)^```$")
+	digestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 )
 
 // ValidTag reports whether tag is vMAJOR.MINOR.PATCH.
@@ -78,8 +78,17 @@ type API interface {
 }
 
 type expectation struct {
-	size   int64 // 0: not known (published release)
-	digest string
+	size   int64  // 0: not known (published release)
+	digest string // "": not known (published release)
+	path   string
+}
+
+// SumsName is the checksum manifest published beside the installer packages.
+const SumsName = "SHA256SUMS"
+
+// releaseNames lists every asset of the release for tag: the installers and SHA256SUMS.
+func releaseNames(tag string) []string {
+	return append(AllNames(strings.TrimPrefix(tag, "v")), SumsName)
 }
 
 func manifest(lines []string, tag string) (map[string]string, error) {
@@ -153,17 +162,15 @@ func localAssets(dir, tag string) (map[string]expectation, error) {
 		if d, err := Digest(path); err != nil || d != checksum {
 			return nil, errorf("Invalid local release asset: %s", name)
 		}
-		assets[name] = expectation{info.Size(), "sha256:" + checksum}
+		assets[name] = expectation{info.Size(), "sha256:" + checksum, path}
 	}
+	info, _ := os.Lstat(sums)
+	d, err := Digest(sums)
+	if err != nil {
+		return nil, err
+	}
+	assets[SumsName] = expectation{info.Size(), "sha256:" + d, sums}
 	return assets, nil
-}
-
-func releaseChecksums(notes, tag string) (map[string]string, error) {
-	blocks := textBlock.FindAllStringSubmatch(strings.ReplaceAll(notes, "\r\n", "\n"), -1)
-	if len(blocks) != 1 {
-		return nil, Error("Release notes must contain the installer checksums")
-	}
-	return manifest(splitLines(blocks[0][1]), tag)
 }
 
 func verifyTarget(api API, tag, commit string, release *Release) error {
@@ -208,7 +215,8 @@ func inspectAssets(api API, release int64, expected map[string]expectation, resu
 			placeholders = append(placeholders, a.ID)
 			continue
 		}
-		if a.State != "uploaded" || a.Size <= 0 || a.Digest == nil || *a.Digest != want.digest ||
+		if a.State != "uploaded" || a.Size <= 0 || a.Digest == nil || !digestPattern.MatchString(*a.Digest) ||
+			(want.digest != "" && *a.Digest != want.digest) ||
 			(want.size != 0 && a.Size != want.size) {
 			return nil, errorf("Remote asset does not match the build: %s", a.Name)
 		}
@@ -247,15 +255,11 @@ func Publish(api API, tag, commit, dir, notes string, out func(string)) error {
 		return err
 	}
 	if release != nil && !release.Draft {
-		// Later builds of the same version may have different signing bytes.
-		// A published release is checked against its own, immutable manifest.
-		sums, err := releaseChecksums(release.Body, tag)
-		if err != nil {
-			return err
-		}
+		// Later builds of the same version may have different signing bytes, so a
+		// published release is only checked for its complete, uploaded asset set.
 		expected := map[string]expectation{}
-		for name, c := range sums {
-			expected[name] = expectation{0, "sha256:" + c}
+		for _, name := range releaseNames(tag) {
+			expected[name] = expectation{}
 		}
 		present, err := inspectAssets(api, release.ID, expected, false)
 		if err != nil {
@@ -270,15 +274,6 @@ func Publish(api API, tag, commit, dir, notes string, out func(string)) error {
 	expected, err := localAssets(dir, tag)
 	if err != nil {
 		return err
-	}
-	sums, err := releaseChecksums(notes, tag)
-	if err != nil {
-		return err
-	}
-	for name, c := range sums {
-		if expected[name].digest != "sha256:"+c {
-			return Error("Release notes do not match the verified installers")
-		}
 	}
 	if err := api.RequireMain(commit); err != nil {
 		return err
@@ -306,7 +301,7 @@ func Publish(api API, tag, commit, dir, notes string, out func(string)) error {
 	}
 	slices.Sort(missing)
 	for _, name := range missing {
-		f, err := os.Open(filepath.Join(dir, name))
+		f, err := os.Open(expected[name].path)
 		if err != nil {
 			return err
 		}

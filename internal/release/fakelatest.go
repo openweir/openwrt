@@ -57,7 +57,7 @@ func FakeLatest(dir, response, invalid, contents string) (string, error) {
 		Prerelease bool    `json:"prerelease"`
 		Assets     []asset `json:"assets"`
 	}{TagName: tag, HTMLURL: repo + "/tag/" + tag}
-	for _, filename := range AllNames(m[1]) {
+	for _, filename := range releaseNames(tag) {
 		var size int64
 		var digest string
 		if filename == name {
@@ -74,7 +74,8 @@ func FakeLatest(dir, response, invalid, contents string) (string, error) {
 			}
 			size = info.Size()
 		} else {
-			// Each CI job builds one architecture and format. These sibling entries are never downloaded.
+			// Each CI job builds one architecture and format. These sibling entries
+			// and SHA256SUMS are never downloaded.
 			payload := sha256.Sum256([]byte("other package: " + filename))
 			size, digest = int64(len("other package: "+filename)), hex.EncodeToString(payload[:])
 		}

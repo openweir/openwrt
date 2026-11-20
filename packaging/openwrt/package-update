@@ -51,7 +51,8 @@ ucode -F "release=$tmp/release.json" -e '
  if (release.draft !== false || release.prerelease !== false || type(release.tag_name) != "string" ||
      length(release.tag_name) > 65 || !match(release.tag_name, /^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$/) ||
      release.html_url !== repo + "/tag/" + release.tag_name || type(release.assets) != "array" ||
-     length(release.assets) != length(arches.opkg) + length(arches.apk))
+     length(release.assets) != length(arches.opkg) + length(arches.apk) + 1 ||
+     length(filter(release.assets, x => x.name === "SHA256SUMS")) != 1)
      die("Invalid official package release");
  if (index(arches[format], arch) < 0) die("No official package for this router architecture");
  let version = substr(release.tag_name, 1);

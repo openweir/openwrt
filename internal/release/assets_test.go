@@ -102,7 +102,7 @@ func TestExactPublicAssetsAndOfflineCommands(t *testing.T) {
 	if string(sums) != expect.String() {
 		t.Fatalf("SHA256SUMS:\n%s", sums)
 	}
-	notes, err := RenderNotes("openweir/openwrt", version, f.output)
+	notes, err := RenderNotes("openweir/openwrt", version, f.output, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,14 +111,27 @@ func TestExactPublicAssetsAndOfflineCommands(t *testing.T) {
 			t.Errorf("notes miss %s", name)
 		}
 	}
-	for _, s := range []string{"```text\n" + string(sums) + "```", "opkg install ./luci-app-openweir_1.0.0-1_<架构 arch>.ipk",
-		"apk add --no-network --allow-untrusted ./luci-app-openweir-1.0.0-r1_<架构 arch>.apk", "| `riscv64_riscv64` | [luci-app-openweir_1.0.0-1_riscv64_riscv64.ipk]", "| —"} {
+	preview, err := RenderNotes("openweir/openwrt", version, f.output, &Preview{Tag: "v1.0.0-preview.2", Commit: strings.Repeat("a", 40)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []string{"Preview of 1.0.0-preview.2, built from aaaaaaa", "1.0.0-preview.2 预览版",
+		"https://github.com/openweir/openwrt/releases/download/v1.0.0-preview.2/" + want[0], "blob/v1.0.0-preview.2/README.md"} {
+		if !strings.Contains(preview, s) {
+			t.Errorf("preview notes miss %q", s)
+		}
+	}
+	if _, err := RenderNotes("openweir/openwrt", version, f.output, &Preview{Tag: "v2.0.0-preview.1", Commit: strings.Repeat("a", 40)}); err == nil {
+		t.Error("accepted a preview tag of another version")
+	}
+	if strings.Contains(notes, string(sums)) {
+		t.Error("notes repeat the checksums; they belong in the SHA256SUMS asset")
+	}
+	for _, s := range []string{"`SHA256SUMS`", "---\n\n## 安装包", "opkg install ./luci-app-openweir_1.0.0-1_<arch>.ipk",
+		"apk add --no-network --allow-untrusted ./luci-app-openweir-1.0.0-r1_<架构>.apk", "| `riscv64_riscv64` | [luci-app-openweir_1.0.0-1_riscv64_riscv64.ipk]", "| —"} {
 		if !strings.Contains(notes, s) {
 			t.Errorf("notes miss %q", s)
 		}
-	}
-	if sums, err := releaseChecksums(notes, "v"+version); err != nil || len(sums) != 28 {
-		t.Fatalf("publisher cannot read the notes: %v", err)
 	}
 }
 
@@ -186,7 +199,7 @@ func TestFakeLatest(t *testing.T) {
 		t.Fatal(asset, err)
 	}
 	data, _ := os.ReadFile(response)
-	if !strings.Contains(string(data), `"tag_name":"v1.0.0"`) || strings.Count(string(data), `"name"`) != 28 {
+	if !strings.Contains(string(data), `"tag_name":"v1.0.0"`) || strings.Count(string(data), `"name"`) != 29 || !strings.Contains(string(data), `"name":"SHA256SUMS"`) {
 		t.Fatalf("%s", data)
 	}
 	os.Rename(filepath.Join(dir, name), filepath.Join(dir, "luci-app-openweir_1.0.0-1_all.ipk"))

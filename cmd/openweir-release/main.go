@@ -5,7 +5,7 @@
 //	openweir-release arches ipk|apk
 //	openweir-release package-name VERSION ipk|apk ARCH
 //	openweir-release assets VERSION FEEDS OUTPUT
-//	openweir-release notes REPO VERSION ASSETS
+//	openweir-release notes [--preview-tag TAG --commit SHA] REPO VERSION ASSETS
 //	openweir-release publish --repo R --tag vX.Y.Z --commit SHA --assets DIR --notes FILE
 //	openweir-release fake-latest DIR RESPONSE [--invalid KIND] [--contents FILE]
 //	openweir-release licenses OUTPUT
@@ -85,8 +85,14 @@ func main() {
 		a := args(fs, argv, 3, "VERSION FEEDS OUTPUT")
 		check(release.Assemble(a[0], a[1], a[2]))
 	case "notes":
-		a := args(fs, argv, 3, "REPO VERSION ASSETS")
-		notes, err := release.RenderNotes(a[0], a[1], a[2])
+		previewTag := fs.String("preview-tag", "", "v<VERSION>-preview.<N> for a pre-release")
+		commit := fs.String("commit", "", "develop commit of the pre-release")
+		a := args(fs, argv, 3, "[--preview-tag TAG --commit SHA] REPO VERSION ASSETS")
+		var preview *release.Preview
+		if *previewTag != "" {
+			preview = &release.Preview{Tag: *previewTag, Commit: *commit}
+		}
+		notes, err := release.RenderNotes(a[0], a[1], a[2], preview)
 		check(err)
 		fmt.Print(notes)
 	case "publish":

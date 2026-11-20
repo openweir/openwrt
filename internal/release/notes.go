@@ -15,9 +15,16 @@ var (
 	sumLine     = regexp.MustCompile(`^([a-f0-9]{64})  ([A-Za-z0-9._-]+)$`)
 )
 
+// Preview describes a develop build published as a pre-release.
+type Preview struct {
+	Tag    string // v<VERSION>-preview.<N>
+	Commit string // the develop commit it was built from
+}
+
 // RenderNotes renders the bilingual installation notes of a GitHub Release from the staged
-// assets directory and the SHA256SUMS beside it.
-func RenderNotes(repo, version, assets string) (string, error) {
+// assets directory and the SHA256SUMS beside it. A non-nil preview links its own tag and
+// adds the preview caveats.
+func RenderNotes(repo, version, assets string, preview *Preview) (string, error) {
 	if !repoPattern.MatchString(repo) {
 		return "", errors.New("invalid GitHub repository")
 	}
@@ -54,7 +61,21 @@ func RenderNotes(repo, version, assets string) (string, error) {
 	if len(lines) != len(names) || len(listed) != len(names) {
 		return "", errors.New("release checksum entries do not match the installers")
 	}
-	url := fmt.Sprintf("https://github.com/%s/releases/download/v%s", repo, version)
+	tag, intro, introZh := "v"+version, "", ""
+	if preview != nil {
+		if !strings.HasPrefix(preview.Tag, tag+"-preview.") || !commitSHA.MatchString(preview.Commit) {
+			return "", errors.New("invalid preview tag or commit")
+		}
+		tag = preview.Tag
+		short := preview.Commit[:7]
+		intro = "Preview of " + strings.TrimPrefix(tag, "v") + ", built from " + short + " on develop.\n\n" +
+			"- The packages carry version " + version + " but are not the stable release's packages. Don't mix them; reinstall the stable release once it is out.\n" +
+			"- The router's **Check for updates** never offers previews.\n\n"
+		introZh = strings.TrimPrefix(tag, "v") + " 预览版，由 develop 上的 " + short + " 构建。\n\n" +
+			"- 安装包内的版本号是 " + version + "，但不是同版本正式版的安装包，请勿混用；正式版发布后请重新安装正式版。\n" +
+			"- 路由器的「检查更新」不会提供预览版。\n\n"
+	}
+	url := fmt.Sprintf("https://github.com/%s/releases/download/%s", repo, tag)
 	var rows []string
 	link := func(format, arch string) string {
 		if !slices.Contains(Arches[format], arch) {
@@ -68,28 +89,31 @@ func RenderNotes(repo, version, assets string) (string, error) {
 	}
 	r := strings.NewReplacer(
 		"{table}", strings.Join(rows, "\n"),
-		"{sums}", sums,
-		"{ipk}", PackageName(version, "ipk", "<架构 arch>"),
-		"{apk}", PackageName(version, "apk", "<架构 arch>"),
+		"{ipk}", PackageName(version, "ipk", "<arch>"),
+		"{apk}", PackageName(version, "apk", "<arch>"),
+		"{ipk_zh}", PackageName(version, "ipk", "<架构>"),
+		"{apk_zh}", PackageName(version, "apk", "<架构>"),
 		"{repo}", repo,
-		"{version}", version,
+		"{tag}", tag,
+		"{intro}", intro,
+		"{intro_zh}", introZh,
 	)
 	return r.Replace(notesTemplate), nil
 }
 
-const notesTemplate = "## 安装包 · Downloads\n\n" +
-	"按路由器架构选择安装包：在路由器上运行 `. /etc/openwrt_release; echo $DISTRIB_ARCH` 查看架构，在下表中找到对应的一行。OpenWrt 23.05 / 24.10 用 IPK（opkg），25.12 用 APK（apk）。\n\n" +
-	"Pick the package for the router's architecture: run `. /etc/openwrt_release; echo $DISTRIB_ARCH` on the router and find it below. OpenWrt 23.05 / 24.10 use the IPK (opkg), 25.12 uses the APK (apk).\n\n" +
-	"| OpenWrt 架构 · Architecture | 23.05 / 24.10 · IPK | 25.12 · APK |\n| --- | --- | --- |\n{table}\n\n" +
-	"安装包写明了所属架构，装错架构时 opkg / apk 会拒绝安装。离线安装前，请将对应安装包和下方校验值保存到本地，并准备好固件需要的系统依赖。\n\n" +
-	"Each package declares its architecture, so opkg / apk refuse a package for another one. For an offline installation, copy the package and its checksum to the router and make sure the firmware's system dependencies are available.\n\n" +
-	"### SHA-256\n\n" +
-	"将已下载安装包的对应校验行保存为 `SHA256SUMS`，在该包所在目录运行 `sha256sum -c SHA256SUMS`。\n" +
-	"Save the checksum line for your downloaded package as `SHA256SUMS`. Run `sha256sum -c SHA256SUMS` in the package directory.\n\n" +
-	"```text\n{sums}\n```\n\n" +
+const notesTemplate = "{intro}## Downloads\n\n" +
+	"Pick the package for the router's architecture: run `. /etc/openwrt_release; echo $DISTRIB_ARCH` on the router and find it below. OpenWrt 23.05 / 24.10 use the IPK (opkg), 25.12 uses the APK (apk). Each package declares its architecture, so opkg / apk refuse a package built for another one.\n\n" +
+	"| Architecture | 23.05 / 24.10 · IPK | 25.12 · APK |\n| --- | --- | --- |\n{table}\n\n" +
+	"Checksums are in the `SHA256SUMS` asset. Download it next to your package and run `grep \" <package>$\" SHA256SUMS | sha256sum -c -` (this also works with BusyBox on the router).\n\n" +
 	"### OpenWrt 23.05 / 24.10 · IPK\n\n```sh\nopkg install ./{ipk}\n```\n\n" +
 	"### OpenWrt 25.12 · APK\n\n```sh\napk add --no-network --allow-untrusted ./{apk}\n```\n\n" +
-	"已安装旧版 Cortex-A53 APK 的用户可按[离线升级步骤](https://github.com/{repo}/blob/v{version}/README.zh-CN.md#从旧版-cortex-a53-apk-手动升级)保留已有网络组件。\n" +
-	"If upgrading an older Cortex-A53 APK, follow the [offline upgrade instructions](https://github.com/{repo}/blob/v{version}/README.md#manual-upgrade-from-an-older-cortex-a53-apk) to retain existing network components.\n\n" +
-	"安装后进入 LuCI 的「服务 → OpenWeir」。mihomo 内核可单独选版，离线时可导入对应架构的原始发行包。\n" +
-	"Open **Services → OpenWeir** in LuCI. You can select the mihomo core separately or import its original archive for the router's architecture offline.\n\n"
+	"For an offline installation, make sure the firmware's system dependencies are available. If upgrading an older Cortex-A53 APK, follow the [offline upgrade instructions](https://github.com/{repo}/blob/{tag}/README.md#manual-upgrade-from-an-older-cortex-a53-apk) to keep the existing network components.\n\n" +
+	"After installing, open **Services → OpenWeir** in LuCI. The mihomo core is selected separately; offline, you can import its original archive for the router's architecture.\n\n" +
+	"---\n\n" +
+	"{intro_zh}## 安装包\n\n" +
+	"在路由器上运行 `. /etc/openwrt_release; echo $DISTRIB_ARCH` 查看架构，然后在上方 Downloads 表格中找到对应的一行。OpenWrt 23.05 / 24.10 用 IPK（opkg），25.12 用 APK（apk）。安装包写明了所属架构，装错架构时 opkg / apk 会拒绝安装。\n\n" +
+	"校验值在附件 `SHA256SUMS` 中。把它下载到安装包所在目录，运行 `grep \" <安装包文件名>$\" SHA256SUMS | sha256sum -c -`（路由器上的 BusyBox 也支持）。\n\n" +
+	"### OpenWrt 23.05 / 24.10 · IPK\n\n```sh\nopkg install ./{ipk_zh}\n```\n\n" +
+	"### OpenWrt 25.12 · APK\n\n```sh\napk add --no-network --allow-untrusted ./{apk_zh}\n```\n\n" +
+	"离线安装前，请准备好固件需要的系统依赖。已安装旧版 Cortex-A53 APK 的用户，可按[离线升级步骤](https://github.com/{repo}/blob/{tag}/README.zh-CN.md#从旧版-cortex-a53-apk-手动升级)保留已有网络组件。\n\n" +
+	"安装后进入 LuCI 的「服务 → OpenWeir」。mihomo 内核需单独选择版本，离线时可导入对应架构的原始发行包。\n"
