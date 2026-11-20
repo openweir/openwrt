@@ -1,4 +1,4 @@
-import { bytes, tlsMessage } from '../dom.js';
+import { bytes, tlsMessage, datetime, day } from '../dom.js';
 // LuCI loads this module on demand. Subscription secrets are submitted directly
 // to rpcd and never enter a route, storage key or display label.
 const formats = {
@@ -12,12 +12,12 @@ const formats = {
     shadowrocket: 'Shadowrocket',
 };
 const kinds = { platform: '服务商账户', file: '本地文件', external: '链接订阅' };
-const ids = () =>
+export const ids = () =>
     Array.from(crypto.getRandomValues(new Uint8Array(12)), (b) => b.toString(16).padStart(2, '0')).join('');
-const actions = (u, ...children) => u.h('div', { class: 'ow-actions' }, ...children);
-const muted = (u, text) => u.h('span', { class: 'ow-muted' }, text);
-const badge = (u, text) => u.h('span', { class: 'ow-badge' }, text);
-const field = (u, title, control) => u.h('label', { class: 'ow-field' }, u.h('span', {}, title), control);
+export const actions = (u, ...children) => u.h('div', { class: 'ow-actions' }, ...children);
+export const muted = (u, text) => u.h('span', { class: 'ow-muted' }, text);
+export const badge = (u, text) => u.h('span', { class: 'ow-badge' }, text);
+export const field = (u, title, control) => u.h('label', { class: 'ow-field' }, u.h('span', {}, title), control);
 async function write(u, action, args) {
     try {
         return await u.run('subscription_write', { action, args });
@@ -26,8 +26,8 @@ async function write(u, action, args) {
         throw err;
     }
 }
-const input = (u, attrs = {}) => u.h('input', attrs);
-const choice = (u, pairs, value, label) => {
+export const input = (u, attrs = {}) => u.h('input', attrs);
+export const choice = (u, pairs, value, label) => {
     const select = u.h(
         'select',
         { 'aria-label': label },
@@ -36,22 +36,13 @@ const choice = (u, pairs, value, label) => {
     select.value = value;
     return select;
 };
-async function read(u, action, args = {}) {
+export async function read(u, action, args = {}) {
     const result = await u.rpc('subscription_read', { action, args });
     if (result?.ok === false) throw new Error(result.error);
     return result?.data ?? result;
 }
-const date = (s) =>
-    s && Number.isFinite(Date.parse(s))
-        ? new Date(s).toLocaleString(undefined, {
-              year: 'numeric',
-              month: '2-digit',
-              day: '2-digit',
-              hour: '2-digit',
-              minute: '2-digit',
-          })
-        : '—';
-function form(u, controls, submitLabel, handler) {
+export const date = (s) => (s && Number.isFinite(Date.parse(s)) ? datetime(s).slice(0, 16) : '—');
+export function form(u, controls, submitLabel, handler) {
     const body = u.h('form', { class: 'ow-stack' }, ...controls);
     const submit = u.button(
         submitLabel,
@@ -69,7 +60,7 @@ function form(u, controls, submitLabel, handler) {
     });
     return body;
 }
-function confirm(u, title, content, label, handler) {
+export function confirm(u, title, content, label, handler) {
     const body = u.h('div', { class: 'ow-stack' }, content);
     const dialog = u.dialog(title, body);
     let accepted = false;
@@ -94,12 +85,12 @@ const notices = {
     mihomo_protocol_unsupported: '当前内核无法使用该协议，请切换到支持它的版本',
     mihomo_capability_unknown: '选择内核后可确认此节点是否可用',
     mihomo_router_field_ignored: '路由器使用自身的监听、安全及网络设置，已忽略模板中的对应选项',
-    mihomo_unsupported_rule: '这条规则无法转换为 mihomo 规则',
-    mihomo_unsupported_rule_set: '该规则集无法直接用于 mihomo，请提供 YAML、text 或 MRS 格式',
+    mihomo_unsupported_rule: '这条规则无法转换为内核规则',
+    mihomo_unsupported_rule_set: '该规则集无法被内核直接使用，请提供 YAML、text 或 MRS 格式',
     subconv_unsupported_proxy: '该节点的协议无法转换，已跳过',
     subconv_unsupported_option: '该节点有无法转换的选项，已跳过',
-    subconv_unsupported_rule: '这条规则无法转换为 mihomo 规则，已跳过',
-    subconv_unsupported_rule_set: '该规则集无法转换为 mihomo 规则集，已跳过',
+    subconv_unsupported_rule: '这条规则无法转换为内核规则，已跳过',
+    subconv_unsupported_rule_set: '该规则集无法转换为内核规则集，已跳过',
     subconv_unknown_reference: '引用了不存在的节点或策略组，已跳过',
     subconv_empty_group: '策略组没有可用成员，已跳过',
     subscription_tls_untrusted: '路由器不信任此订阅服务的 HTTPS 证书，请检查固件的 CA 证书和服务商的证书链',
@@ -175,8 +166,9 @@ function failureMessage(code, provider, tls) {
     return rows.length ? issue + '。模板提醒：' + rows.map(row => row.text).join('；') : issue;
 }
 
-function noticeRows(items = []) {
-    return items.flatMap((n) => {
+function noticeRows(items) {
+    // The service sends null rather than [] when there is nothing to report.
+    return (items || []).flatMap((n) => {
         if (n.code !== 'platform_routing_warnings') {
             const detail = missingRejectRule(n) ? '此拦截规则引用的规则集未载入' : notices[n.code] || n.code;
             return [{ count: 1, text: [n.at, n.resource, detail].filter(Boolean).join(' · ') }];
@@ -238,7 +230,7 @@ async function retryDownload(u, source, group, content, feedback, replacementURL
     await new Promise(resolve => dialog.addEventListener('close', resolve, { once: true }));
     return retry && !u.signal.aborted && importSource(u, source, content, feedback, undefined, replacementURL);
 }
-async function importSource(u, source, content, feedback, confirmation, replacementURL, present) {
+export async function importSource(u, source, content, feedback, confirmation, replacementURL, present) {
     const previous = (u.sources || []).some((s) => s.source === source && s.ready);
     if (feedback) {
         feedback.hidden = false;
@@ -306,7 +298,8 @@ async function chooseSource(u, s) {
     await u.refresh();
 }
 function agentField(u, agents, existing) {
-    const choices = [...agents.map((x) => [x, x]), ['custom', '自定义 UA']];
+    // Only the presets; a custom UA saved earlier stays selectable on that source.
+    const choices = [...agents.map((x) => [x, x]), ...(existing?.custom_agent ? [['custom', '自定义 UA']] : [])];
     const selected = existing?.custom_agent ? 'custom' : existing?.agent || agents[0];
     const sel = choice(u, choices, selected, '订阅请求 UA');
     const custom = input(u, {
@@ -349,7 +342,7 @@ function fileControl(u) {
         },
     };
 }
-function reimport(u, source, feedback) {
+export function reimport(u, source, feedback) {
     const f = fileControl(u);
     const dialog = u.dialog(
         '导入新文件',
@@ -443,11 +436,22 @@ function login(u, mount, close) {
         }),
     );
 }
+// Save the subscription first so its card shows at once, then import in the background;
+// the card reads "正在导入…" until the download and conversion finish.
 async function saveNewSource(u, config, content, close) {
     await write(u, 'configure', { config });
-    if (!(await importSource(u, config.id, content))) return false;
+    const importing = (u.memory.importing ||= new Set());
+    importing.add(config.id);
     if (close) close();
     await u.refresh();
+    // u.refresh() aborts the page's signal; the import must outlive the page it started on.
+    const background = { ...u, signal: new AbortController().signal };
+    importSource(background, config.id, content)
+        .catch((e) => u.notify(e.message))
+        .finally(async () => {
+            importing.delete(config.id);
+            await u.refresh();
+        });
     return true;
 }
 export function onboarding(u, environment, trigger) {
@@ -506,7 +510,10 @@ async function addSource(u, agents) {
             login(u, pane, () => dialog.close());
             return;
         }
-        const filename = input(u, { type: 'text', maxlength: 128, required: true, placeholder: '订阅名称' });
+        const filename = input(u, {
+            type: 'text', maxlength: 128,
+            placeholder: kind === 'file' ? '留空使用文件名' : '留空使用订阅名称或域名',
+        });
         const link = input(u, { type: 'url', required: true, placeholder: 'https://', autocomplete: 'off' });
         const f = fileControl(u),
             a = agentField(u, agents);
@@ -519,7 +526,10 @@ async function addSource(u, agents) {
                 async () => {
                     const content = kind === 'file' ? await f.text() : '';
                     if (!configured.id) configured.id = 'src-' + ids();
-                    const config = { id: configured.id, name: filename.value.trim(), kind };
+                    // Unnamed links are named by the router; unnamed files after the file.
+                    let name = filename.value.trim();
+                    if (!name && kind === 'file') name = (f.input.files[0]?.name || '').replace(/\.[^.]*$/, '') || '本地文件';
+                    const config = { id: configured.id, name, kind };
                     if (kind === 'external') {
                         config.url = link.value.trim();
                         config.user_agent = a.values().user_agent;
@@ -540,13 +550,16 @@ async function addSource(u, agents) {
     }
     select('external');
 }
-function editSource(u, s, agents) {
+async function editSource(u, s, agents) {
     const a = s.kind === 'external' ? agentField(u, agents, s) : null;
     const name = input(u, { type: 'text', value: s.name || '', required: true, maxlength: 128 });
+    const previousURL = s.kind === 'external' ? (await read(u, 'url', { source: s.source })).url || '' : '';
+    const url = input(u, { type: 'url', value: previousURL, required: true, placeholder: 'https://', autocomplete: 'off' });
     const fallback = input(u, { type: 'checkbox' });
     fallback.checked = !!s.local_fallback;
     const controls = [];
     if (s.kind !== 'platform') controls.push(field(u, '名称', name));
+    if (s.kind === 'external') controls.push(field(u, '订阅链接', url));
     if (a) controls.push(a.node);
     controls.push(field(u, '可转换时允许使用本地分流', fallback));
     const body = u.h('div', { class: 'ow-stack' });
@@ -559,6 +572,12 @@ function editSource(u, s, agents) {
                 allow_local_fallback: fallback.checked,
             };
             await write(u, 'preferences', { source: s.source, preferences });
+            const nextURL = url.value.trim();
+            // A changed link is verified by downloading it before it replaces the old one.
+            if (s.kind === 'external' && nextURL !== previousURL) {
+                const ok = await importSource(u, s.source, undefined, undefined, undefined, nextURL);
+                if (!ok) return;
+            }
             dialog.close();
             await u.refresh();
         }),
@@ -569,22 +588,6 @@ function editSource(u, s, agents) {
         dialog.close();
         await u.refresh();
     }));
-    if (s.kind === 'external')
-        other.push(
-            u.button('更换订阅链接', () => {
-                const url = input(u, { type: 'url', required: true, placeholder: 'https://', autocomplete: 'off' });
-                const child = u.dialog(
-                    '更换订阅链接',
-                    form(u, [field(u, '新订阅链接', url)], '验证并更换', async () => {
-                        const ok = await importSource(u, s.source, undefined, undefined, undefined, url.value.trim());
-                        if (!ok) return;
-                        child.close();
-                        dialog.close();
-                        await u.refresh();
-                    }),
-                );
-            }),
-        );
     if (s.has_history)
         other.push(
             u.button('恢复上一份快照', () =>
@@ -595,32 +598,32 @@ function editSource(u, s, agents) {
                 }),
             ),
         );
+    if (other.length) body.append(actions(u, ...other));
+}
+// Signing out of a provider or removing a subscription sits on the card, not in its editor.
+function removeButton(u, s) {
     const title = s.kind === 'platform' ? '退出服务商账户' : '移除订阅';
-    other.push(
-        u.button(
-            title,
-            () =>
-                confirm(
-                    u,
-                    title,
-                    u.h(
-                        'p',
-                        {},
-                        s.kind === 'platform'
-                            ? '此账户下所有套餐的凭据和快照都将移除。'
-                            : '此订阅的节点、规则和历史快照都将移除。',
-                    ),
-                    title,
-                    async () => {
-                        await write(u, s.kind === 'platform' ? 'logout' : 'revoke', { source: s.source });
-                        dialog.close();
-                        await u.refresh();
-                    },
+    return u.button(
+        s.kind === 'platform' ? '退出账户' : '移除',
+        () =>
+            confirm(
+                u,
+                title,
+                u.h(
+                    'p',
+                    {},
+                    s.kind === 'platform'
+                        ? '此账户下所有套餐的凭据和快照都将移除。'
+                        : '此订阅的节点、规则和历史快照都将移除。',
                 ),
-            'ow-danger',
-        ),
+                title,
+                async () => {
+                    await write(u, s.kind === 'platform' ? 'logout' : 'revoke', { source: s.source });
+                    await u.refresh();
+                },
+            ),
+        'ow-link ow-danger',
     );
-    body.append(actions(u, ...other));
 }
 export async function subscriptions(u) {
     const [agents, prefs] = await Promise.all([read(u, 'agents'), u.rpc('network_preferences').catch(() => ({}))]),
@@ -673,6 +676,11 @@ export async function subscriptions(u) {
                 if (await retryDownload(u, s.source, s.last_provider.download_group, undefined, message, undefined, s.kind === 'file')) await u.refresh();
             }));
         }
+        const importing = !!u.memory.importing?.has(s.source);
+        if (importing) {
+            message.hidden = false;
+            message.textContent = s.kind === 'file' ? '正在导入…' : '正在获取订阅…';
+        }
         feedback.set(s.source, message);
         const isCurrent = current === s.source;
         const use = isCurrent ? badge(u, '正在使用') : u.button('设为当前', () => chooseSource(u, s));
@@ -707,7 +715,7 @@ export async function subscriptions(u) {
                       muted(
                           u,
                           plan.expireAt
-                              ? '到期 ' + new Date(plan.expireAt).toLocaleDateString()
+                              ? '到期 ' + day(plan.expireAt)
                               : !s.usage || s.usage.no_expiry
                                 ? '长期有效'
                                 : '',
@@ -743,6 +751,7 @@ export async function subscriptions(u) {
                 updateAll.disabled = !sources.some(canRefresh);
             });
         });
+        update.disabled = importing;
         const card = u.h(
             'section',
             { class: 'ow-card ow-source-card' },
@@ -767,6 +776,7 @@ export async function subscriptions(u) {
                 u,
                 update,
                 u.button('编辑', () => editSource(u, s, agents)),
+                removeButton(u, s),
             ),
         );
         return card;
@@ -790,452 +800,5 @@ export async function subscriptions(u) {
         history.replaceState(history.state, '', '#subscriptions');
         addSource(u, agents);
     };
-    return body;
-}
-
-const matchType = {
-    domain: 'DOMAIN',
-    domain_suffix: 'DOMAIN-SUFFIX',
-    domain_keyword: 'DOMAIN-KEYWORD',
-    ip_cidr: 'IP-CIDR',
-    source_ip_cidr: 'SRC-IP',
-    source_mac_address: 'SRC-MAC',
-    network: 'NETWORK',
-    port: 'PORT',
-    port_range: 'PORT-RANGE',
-    protocol: 'PROTOCOL',
-    ip_version: 'IP-VERSION',
-    ip_is_private: 'PRIVATE',
-    rule_set: 'RULE-SET',
-};
-const editorTypes = [
-    ['domain', '域名'],
-    ['domain_suffix', '域名后缀'],
-    ['domain_keyword', '域名关键词'],
-    ['ip_cidr', '目标 IP 网段'],
-    ['source_ip_cidr', '来源 IP 网段'],
-    ['network', 'TCP / UDP'],
-    ['port', '目标端口'],
-    ['port_range', '端口范围'],
-    ['protocol', '流量协议'],
-    ['ip_version', 'IP 版本'],
-];
-const routeName = (u, target) =>
-    ({ '@direct': '直连', '@reject': '拦截', '@global': '全局', '@default': '默认代理' })[target] || u.name(target);
-function describeRule(match) {
-    return Object.entries(match || {}).map(([k, v]) => ({
-        type: matchType[k] || k,
-        value:
-            k === 'ip_is_private'
-                ? '私有地址'
-                : (Array.isArray(v) ? v : [v])
-                      .map((value) => (typeof value === 'object' ? JSON.stringify(value) : String(value)))
-                      .join('、'),
-    }));
-}
-function targetLink(u, id) {
-    if (!id || id === '@direct' || id === '@reject') return badge(u, routeName(u, id));
-    return u.button(routeName(u, id) + ' ›', () => u.go('proxy', id));
-}
-async function allGroups(u, source) {
-    const groups = [];
-    for (let offset = 0; ; offset += 256) {
-        if (u.signal?.aborted) throw new DOMException('页面已切换', 'AbortError');
-        const page = await read(u, 'groups', { source, limit: 256, offset });
-        groups.push(...page.items);
-        if (groups.length >= page.total || page.items.length < 256) return groups;
-    }
-}
-function matchValue(key, typed) {
-    const values = typed
-        .split(/[,，\n]/)
-        .map((v) => v.trim())
-        .filter(Boolean);
-    if (!values.length) throw Error('请输入匹配内容');
-    if (key === 'port' || key === 'ip_version') {
-        const nums = values.map((v) => (/^\d+$/.test(v) ? Number(v) : NaN));
-        if (nums.some((n) => !Number.isInteger(n) || (key === 'port' ? n < 1 || n > 65535 : n !== 4 && n !== 6)))
-            throw Error('无效的端口或 IP 版本');
-        if (key === 'ip_version') {
-            if (nums.length !== 1) throw Error('请选择一个 IP 版本');
-            return nums[0];
-        }
-        return nums;
-    }
-    if (key === 'network' && values.some((v) => !['tcp', 'udp'].includes(v.toLowerCase())))
-        throw Error('网络类型必须为 tcp 或 udp');
-    return key === 'network' ? values.map((v) => v.toLowerCase()) : values;
-}
-async function editRule(u, custom, index, source, isLocal) {
-    const old = custom[index],
-        key = Object.keys(old?.match || { domain_suffix: '' })[0];
-    const complex = old && (Object.keys(old.match).length !== 1 || !editorTypes.some(([k]) => k === key));
-    const kind = choice(u, editorTypes, key, '匹配类型');
-    const val = input(u, {
-        required: true,
-        placeholder: 'example.com',
-        value: old ? [old.match[key]].flat().join(', ') : '',
-    });
-    const targets = [
-        ['@direct', '直连'],
-        ['@reject', '拦截'],
-    ];
-    if (isLocal) targets.push(['@default', '默认代理']);
-    if (source && u.sources?.some((s) => s.source === source && s.ready))
-        for (const g of u.ruleGroups || (await allGroups(u, source))) targets.push([g.id, g.name]);
-    for (const g of u.status.intent?.policy?.groups || []) targets.push([g.id, g.name]);
-    if (old && !targets.some(([id]) => id === old.target))
-        targets.push([old.target, '不可用 · ' + routeName(u, old.target)]);
-    const target = choice(u, targets, old?.target || '@direct', '去向');
-    const note = input(u, { value: old?.note || '', maxlength: 256 }),
-        enabled = input(u, { type: 'checkbox' });
-    enabled.checked = old?.enabled !== false;
-    const raw = u.h('textarea', { rows: 5, required: true, spellcheck: false, 'aria-label': '匹配条件 JSON' });
-    if (complex) raw.value = JSON.stringify(old.match, null, 2);
-    const controls = complex
-        ? [field(u, '匹配条件 JSON', raw)]
-        : [field(u, '类型', kind), field(u, '匹配内容（多个值以逗号分隔）', val)];
-    const save = async (list) => {
-        await u.run('save_rules', { args: list, revision: u.status.intent.revision });
-        await u.refresh();
-    };
-    const body = u.h('div', { class: 'ow-stack' }),
-        dialog = u.dialog(old ? '编辑规则' : '添加自定义规则', body);
-    body.append(
-        form(
-            u,
-            [...controls, field(u, '去向', target), field(u, '说明', note), field(u, '启用规则', enabled)],
-            '保存',
-            async () => {
-                let match;
-                if (complex) {
-                    try {
-                        match = JSON.parse(raw.value);
-                    } catch {
-                        throw Error('匹配条件必须是有效的 JSON 对象');
-                    }
-                    if (
-                        !match ||
-                        Array.isArray(match) ||
-                        typeof match !== 'object' ||
-                        !Object.keys(match).length ||
-                        Object.keys(match).some((k) => !editorTypes.some(([key]) => key === k))
-                    )
-                        throw Error('存在不支持的匹配条件');
-                } else {
-                    match = { [kind.value]: matchValue(kind.value, val.value) };
-                }
-                const rule = {
-                    ...old,
-                    id: old?.id || 'rule-' + ids(),
-                    match,
-                    target: target.value,
-                    note: note.value.trim(),
-                    enabled: enabled.checked,
-                };
-                const next = custom.slice();
-                if (old) next[index] = rule;
-                else next.push(rule);
-                await save(next);
-                dialog.close();
-            },
-        ),
-    );
-    if (old)
-        body.append(
-            u.button(
-                '删除规则',
-                () =>
-                    confirm(
-                        u,
-                        '删除规则',
-                        muted(
-                            u,
-                            describeRule(old.match)
-                                .map((x) => x.value)
-                                .join(' · '),
-                        ),
-                        '删除',
-                        async () => {
-                            await save(custom.filter((_, i) => i !== index));
-                            dialog.close();
-                        },
-                    ),
-                'ow-danger',
-            ),
-        );
-}
-const limitRules = 50;
-export async function rules(u) {
-    const source = u.status.intent?.source,
-        primary = (u.sources || []).find((s) => s.source === source),
-        ready = primary?.ready;
-    const tab = ['custom', 'sets'].includes(u.detail) ? u.detail : 'effective';
-    const menu = u.h('div', { class: 'ow-segment', role: 'group', 'aria-label': '规则页面' });
-    for (const [id, title] of [
-        ['effective', '生效规则'],
-        ['custom', '自定义规则'],
-        ['sets', '规则集'],
-    ]) {
-        const b = u.button(title, () => u.go('rules', id === 'effective' ? '' : id));
-        b.setAttribute('aria-pressed', String(id === tab));
-        menu.append(b);
-    }
-    const [customResponse, groups] = await Promise.all([u.rpc('custom_rules'), ready ? allGroups(u, source) : []]);
-    const name = u.name,
-        labels = new Map([...groups, ...(u.status.intent?.policy?.groups || [])].map((g) => [g.id, g.name]));
-    u = { ...u, ruleGroups: groups, name: (id) => labels.get(id) || name(id) };
-    const custom = customResponse.items || [];
-    const emptyPage = { items: [], positions: [], sets: {}, binary: {}, total: 0, local: false };
-    const initial = ready ? await read(u, 'rules', { source, limit: limitRules }) : emptyPage;
-    const mode = u.status.intent?.mode,
-        content = u.h('div', { class: 'ow-stack' }),
-        body = u.h('div', { class: 'ow-stack' }, menu, content);
-    const move = async (from, to) => {
-        if (from === to || to < 0 || to >= custom.length) return;
-        const list = custom.slice();
-        list.splice(to, 0, list.splice(from, 1)[0]);
-        await u.run('save_rules', { args: list, revision: u.status.intent.revision });
-        await u.refresh();
-    };
-    if (tab === 'custom') {
-        const rows = u.h('div', { class: 'ow-rule-list' });
-        let dragging = -1;
-        for (const [i, r] of custom.entries()) {
-            const up = u.button('↑', () => move(i, i - 1)),
-                down = u.button('↓', () => move(i, i + 1));
-            up.setAttribute('aria-label', '上移第 ' + (i + 1) + ' 条规则');
-            down.setAttribute('aria-label', '下移第 ' + (i + 1) + ' 条规则');
-            up.disabled = i === 0;
-            down.disabled = i === custom.length - 1;
-            const detail = describeRule(r.match);
-            const row = u.h(
-                'div',
-                { class: 'ow-rule-row', draggable: 'true' },
-                u.h('span', { class: 'ow-mono' }, String(i + 1)),
-                u.h(
-                    'div',
-                    {},
-                    u.h('strong', {}, detail.map((x) => x.value).join(' · ')),
-                    u.h('div', { class: 'ow-muted' }, detail.map((x) => x.type).join(' + ')),
-                ),
-                targetLink(u, r.target),
-                u.h('div', { class: 'ow-muted' }, r.note || '', r.enabled === false ? badge(u, '已停用') : null),
-                actions(
-                    u,
-                    up,
-                    down,
-                    u.button('编辑', () => editRule(u, custom, i, source, initial.local)),
-                ),
-            );
-            row.addEventListener('dragstart', (e) => {
-                dragging = i;
-                e.dataTransfer.effectAllowed = 'move';
-                e.dataTransfer.setData('text/plain', String(i));
-            });
-            row.addEventListener('dragend', () => {
-                dragging = -1;
-            });
-            row.addEventListener('dragover', (e) => {
-                if (dragging >= 0) e.preventDefault();
-            });
-            row.addEventListener('drop', async (e) => {
-                e.preventDefault();
-                const old = dragging;
-                dragging = -1;
-                if (old >= 0)
-                    try {
-                        await move(old, i);
-                    } catch (err) {
-                        u.notify(err.message);
-                    }
-            });
-            rows.append(row);
-        }
-        content.append(
-            u.h(
-                'section',
-                { class: 'ow-card' },
-                u.h(
-                    'div',
-                    { class: 'ow-row ow-toolbar' },
-                    u.h('h2', {}, '自定义规则'),
-                    u.button('＋ 添加规则', () => editRule(u, custom, -1, source, initial.local), 'ow-primary'),
-                ),
-                custom.length ? rows : u.h('p', { class: 'ow-empty' }, '暂无自定义规则'),
-            ),
-        );
-        return body;
-    }
-    const names = Object.keys(initial.sets || {});
-    if (initial.local) names.push(...['geosite-cn', 'geoip-cn'].filter((s) => !names.includes(s)));
-    if (tab === 'sets') {
-        const area = u.h('div', { class: 'ow-rule-list' }),
-            feedback = u.h('div', { class: 'ow-muted', role: 'status', hidden: true });
-        const btn = u.button('更新订阅规则集', () =>
-            primary?.kind === 'file' ? reimport(u, source, feedback) : importSource(u, source, '', feedback),
-        );
-        btn.disabled = !ready || initial.local || !names.length;
-        for (const name of names) {
-            const builtIn = !!initial.local,
-                binary = !!initial.binary?.[name],
-                count = initial.sets[name];
-            area.append(
-                u.h(
-                    'div',
-                    { class: 'ow-rule-row' },
-                    u.h('strong', {}, name),
-                    muted(u, builtIn ? '内置' : '订阅'),
-                    muted(
-                        u,
-                        builtIn
-                            ? '随插件更新'
-                            : binary
-                              ? (initial.entries?.[name] ?? '—') + ' 条 · 二进制'
-                              : count + ' 条规则',
-                    ),
-                    muted(u, !builtIn && primary?.updated_at ? date(primary.updated_at) : ''),
-                    u.button('查看规则', () => u.go('rules', 'set:' + name)),
-                ),
-            );
-        }
-        content.append(
-            u.h(
-                'section',
-                { class: 'ow-card' },
-                u.h('div', { class: 'ow-row ow-toolbar' }, u.h('h2', {}, '规则集'), btn),
-                feedback,
-                names.length ? area : u.h('p', { class: 'ow-empty' }, '当前来源没有规则集'),
-            ),
-        );
-        return body;
-    }
-    const initialFilter = u.detail?.startsWith('set:') ? u.detail.slice(4) : '';
-    const filter = choice(
-        u,
-        [['', '全部规则集'], ...names.map((s) => [s, s])],
-        names.includes(initialFilter) ? initialFilter : '',
-        '按规则集筛选',
-    );
-    const list = u.h('div', { class: 'ow-rule-list' }),
-        pager = u.h('div', { class: 'ow-actions' }),
-        summary = u.h('p', { class: 'ow-muted', role: 'status' });
-    const card = u.h(
-        'section',
-        { class: 'ow-card' },
-        u.h('div', { class: 'ow-row ow-toolbar' }, u.h('h2', {}, '规则'), filter),
-        summary,
-        list,
-        pager,
-    );
-    content.append(card);
-    const prepend = [];
-    function effective(number, r, action) {
-        const detail = describeRule(r.match);
-        return u.h(
-            'div',
-            { class: 'ow-rule-row ow-effective-rule' },
-            u.h('span', { class: 'ow-rule-number ow-mono' }, String(number)),
-            u.h('span', { class: 'ow-rule-type ow-muted' }, detail.map(x => x.type).join(' + ')),
-            u.h('strong', { class: 'ow-rule-match' }, detail.map(x => x.value).join(' · ')),
-            targetLink(u, r.target),
-            action || null,
-        );
-    }
-    if (ready && mode !== 'direct') {
-        prepend.push({ match: { ip_is_private: true }, target: '@direct' });
-        for (const d of u.status.intent?.policy?.devices || [])
-            if (d.target !== '@proxy' && (mode === 'smart' || d.target === '@direct'))
-                prepend.push({
-                    match: {
-                        [/^(?:[0-9a-f]{2}:){5}[0-9a-f]{2}$/i.test(d.address) ? 'source_mac_address' : 'source_ip_cidr']:
-                            d.address,
-                    },
-                    target: d.target,
-                });
-        if (mode === 'smart' && u.status.intent?.policy?.default_direct) {
-            const explicit = (u.status.intent.policy.devices || [])
-                .filter((d) => d.target === '@proxy')
-                .map((d) => d.address);
-            prepend.push({
-                match: { LAN: explicit.length ? '默认设备（除 ' + explicit.join('、') + '）' : '默认设备' },
-                target: '@direct',
-            });
-        }
-        if (mode === 'smart')
-            for (const [i, r] of custom.entries()) if (r.enabled !== false) prepend.push({ ...r, edit: i });
-    }
-    let seq = 0;
-    async function renderPage(offset) {
-        const token = ++seq,
-            tag = filter.value;
-        const data =
-            mode === 'smart' && ready && !initial.local
-                ? !offset && !tag
-                    ? initial
-                    : await read(u, 'rules', { source, offset, limit: limitRules, rule_set: tag })
-                : emptyPage;
-        if (token !== seq || u.signal?.aborted) return;
-        list.replaceChildren();
-        pager.replaceChildren();
-        if (!ready) {
-            summary.textContent = '选择可用订阅后显示匹配顺序。';
-            return;
-        }
-        summary.textContent = mode === 'direct' ? '直连模式' : mode === 'global' ? '全局模式' : '智能分流 · 按匹配顺序';
-        if (!tag && !offset)
-            prepend.forEach((r, i) =>
-                list.append(
-                    effective(
-                        i + 1,
-                        r,
-                        r.edit !== undefined
-                            ? u.button('编辑', () => editRule(u, custom, r.edit, source, initial.local))
-                            : null,
-                    ),
-                ),
-            );
-        data.items.forEach((r, i) =>
-            list.append(effective(prepend.length + (data.positions?.[i] || offset + i + 1), r)),
-        );
-        if (initial.local && mode === 'smart' && (!tag || names.includes(tag)))
-            list.append(
-                effective(prepend.length + 1, {
-                    match: { rule_set: tag || ['geosite-cn', 'geoip-cn'] },
-                    target: '@direct',
-                }),
-            );
-        if (offset + limitRules >= data.total && !tag) {
-            const target =
-                mode === 'direct'
-                    ? '@direct'
-                    : mode === 'global'
-                      ? '@global'
-                      : initial.local
-                        ? '@default'
-                        : initial.final || groups[0]?.id;
-            if (target)
-                list.append(
-                    effective(prepend.length + (initial.local && mode === 'smart' ? 1 : data.total) + 1, {
-                        match: { MATCH: '其余流量' },
-                        target,
-                    }),
-                );
-        }
-        if (!list.children.length) list.append(u.h('p', { class: 'ow-empty' }, '当前模式下没有命中此筛选的规则'));
-        if (data.total > limitRules) {
-            const prev = u.button('上一页', () => renderPage(offset - limitRules)),
-                next = u.button('下一页', () => renderPage(offset + limitRules));
-            prev.disabled = !offset;
-            next.disabled = offset + limitRules >= data.total;
-            pager.append(
-                prev,
-                muted(u, Math.floor(offset / limitRules + 1) + ' / ' + Math.ceil(data.total / limitRules)),
-                next,
-            );
-        }
-    }
-    filter.addEventListener('change', () => renderPage(0).catch((e) => u.notify(e.message)));
-    await renderPage(0);
     return body;
 }

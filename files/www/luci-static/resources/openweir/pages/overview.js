@@ -1,6 +1,6 @@
-import { diagnosticMessage } from '../dom.js';
+import { diagnosticMessage, day } from '../dom.js';
 import { h, card, bytes, select, field, empty, segment, modeNames, clock, resultName } from '../dom.js';
-import { kernelDialog, kernelSummary } from './versions.js';
+import { installLatest, kernelMessage, kernelStorage, kernelSummary } from './versions.js';
 
 const states = {
 	running: '已连接',
@@ -156,7 +156,7 @@ function sourceCard(ui) {
 			p?.total > 0
 				? h('span', {}, bytes(p.upload + p.download) + ' / ' + bytes(p.total))
 				: h('span', {}, (s.node_count || 0) + ' 个节点'),
-			p?.expireAt ? h('span', {}, '到期 ' + new Date(p.expireAt).toLocaleDateString()) : null,
+			p?.expireAt ? h('span', {}, '到期 ' + day(p.expireAt)) : null,
 		);
 		const content = h(
 			'div',
@@ -278,11 +278,10 @@ function deviceCard(ui, devices) {
 			'div',
 			{ class: 'ow-row' },
 			h('h2', {}, '设备'),
-			h('small', { class: 'ow-muted' }, '在线 ' + online + ' / ' + devices.length),
+			h('small', { class: 'ow-muted' }, '在线 ' + online + ' / ' + devices.length + ' · 「默认」跟随新设备默认'),
 		),
-		h('div', { class: 'ow-toolbar' }, filters, query),
+		h('div', { class: 'ow-toolbar ow-device-toolbar' }, filters, query),
 		list,
-		h('small', { class: 'ow-devices-note ow-muted' }, '「默认」跟随新设备默认'),
 	);
 	return section;
 }
@@ -345,14 +344,26 @@ export async function overview(ui) {
 			return;
 		}
 		if (!kernel.selected) {
-			await kernelDialog(ui, kernel, kernelUpdates);
-			return;
+			// Connecting needs a kernel: download the newest stable one first.
+			try {
+				kernel = await installLatest(ui, kernelUpdates);
+			} catch (error) {
+				if (error.name !== 'AbortError') ui.notify(kernelMessage(error.message));
+				return;
+			}
 		}
 		await ui.run('start', { revision: intent.revision });
 		await ui.refresh();
 	};
 	const power = ui.button('', start, 'ow-power' + (running ? ' on' : ''));
-	power.setAttribute('aria-label', intent.enabled ? '点按断开' : '点按连接');
+	const powerLabel = intent.enabled
+		? '点按断开'
+		: !cat.primary
+			? '先添加订阅'
+			: !kernel.selected
+				? kernel.bootstrap?.stage === 'running' ? '内核准备中' : '先选择内核'
+				: '点按连接';
+	power.setAttribute('aria-label', powerLabel);
 	const icon = shape('svg', { viewBox: '0 0 24 24', width: 38, height: 38, 'aria-hidden': 'true' });
 	icon.append(
 		shape('path', {
@@ -363,7 +374,7 @@ export async function overview(ui) {
 			'stroke-linecap': 'round',
 		}),
 	);
-	power.append(icon, h('span', {}, intent.enabled ? '点按断开' : '点按连接'));
+	power.append(icon, h('span', {}, powerLabel));
 	let history = (ui.memory.traffic ||= []);
 	if (!running || ui.memory.run !== ui.status.running_since) {
 		history.length = 0;
@@ -480,24 +491,44 @@ export async function overview(ui) {
 	if (intent.mode === 'global') {
 		const groups = await ui.rpc('groups'),
 			sel = groups['@global'];
-		const choices = cat.nodes.filter((n) => !n.special && n.availability !== 'unsupported').map((n) => [n.id, n.name]);
+		const nodes = cat.nodes.filter((n) => !n.special && n.availability !== 'unsupported');
+		const saved = sel?.saved || nodes[0]?.id;
+		const grid = h('div', { class: 'ow-routes ow-global-nodes', role: 'group', 'aria-label': '全局节点' });
+		for (const n of nodes) {
+			const cell = h(
+				'button',
+				{ type: 'button', class: 'ow-route', 'aria-pressed': String(n.id === saved) },
+				h('span', { class: 'ow-route-icon', 'aria-hidden': 'true' }, '⇢'),
+				h(
+					'span',
+					{},
+					h('strong', {}, n.name),
+					h(
+						'small',
+						{},
+						n.id === sel?.applied ? '实际出口' : n.id === saved ? '已选择 · 启动后生效' : n.protocol || '',
+					),
+				),
+			);
+			cell.addEventListener('click', async () => {
+				if (n.id === saved) return;
+				try {
+					await ui.run('select_node', { source: intent.source, group: '@global', node: n.id });
+					await ui.refresh();
+				} catch (e) {
+					ui.notify(e.message);
+				}
+			});
+			grid.append(cell);
+		}
 		right.append(
-			field(
-				'全局节点',
-				select('全局节点', choices, sel?.saved || choices[0]?.[0], async (v) => {
-					try {
-						await ui.run('select_node', { source: intent.source, group: '@global', node: v });
-						await ui.refresh();
-					} catch (e) {
-						ui.notify(e.message);
-					}
-				}),
-			),
 			h(
-				'small',
-				{ class: 'ow-muted' },
-				sel?.applied ? '实际出口 · ' + ui.name(sel.applied) : '已保存的选择将在全局模式启动后生效',
+				'div',
+				{ class: 'ow-row' },
+				h('h3', {}, '全局节点'),
+				ui.button('管理代理', () => ui.go('proxy'), 'ow-link'),
 			),
+			nodes.length ? grid : empty('当前订阅没有可用节点'),
 		);
 	} else if (intent.mode === 'direct') {
 		right.append(
@@ -586,13 +617,8 @@ export async function overview(ui) {
 				(v) => savePolicy({ default_direct: v === 'direct' }),
 			),
 		),
-		h(
-			'div',
-			{ class: 'ow-row' },
-			'DNS 保护',
-			toggle('DNS 保护', prefs.dns, (v) => saveP({ dns: v })),
-		),
-		h('small', { class: 'ow-muted' }, '路由器保留本地域名解析，通过内核查询上游'),
+		updateRow('DNS 保护', toggle('DNS 保护', prefs.dns, (v) => saveP({ dns: v })),
+			h('small', { class: 'ow-muted' }, '本地域名照常解析，其余经内核查询')),
 		prefs.dns ? h('div', { class: 'ow-row' }, '接管设备 DNS（端口 53）',
 			toggle('接管设备 DNS（端口 53）', !!prefs.dns_intercept, (v) => saveP({ dns_intercept: v }))) : null,
 		h(
@@ -618,17 +644,12 @@ export async function overview(ui) {
 			const env = await ui.rpc('environment');
 			if (!ui.signal.aborted) ui.dialog('防火墙运行环境', environmentRows(firewallDetails(env)));
 		}, 'ow-link')),
-		h('div', { class: 'ow-row' }, failOpenLabel, fallback),
-		h('small', { id: 'ow-fail-open-help', class: 'ow-muted' }, failOpen
+		updateRow(failOpenLabel, fallback, h('small', { id: 'ow-fail-open-help', class: 'ow-muted' }, failOpen
 			? '连续 3 次本地检查失败后恢复直连。关闭后，代理流量将暂停至内核恢复。'
-			: '内核故障时保持保护，需代理的流量将中断。主动断开可恢复直连。'),
-		h(
-			'div',
-			{ class: 'ow-row' },
-			'节点失联时自动切换',
+			: '内核故障时保持保护，需代理的流量将中断。主动断开可恢复直连。')),
+		updateRow('节点失联时自动切换',
 			toggle('节点失联时自动切换', !!policy.auto_failover, (v) => savePolicy({ auto_failover: v })),
-		),
-		h('small', { class: 'ow-muted' }, '切换到同组可用节点'),
+			h('small', { class: 'ow-muted' }, '切换到同组可用节点')),
 		h(
 			'div',
 			{ class: 'ow-row' },
@@ -643,55 +664,14 @@ export async function overview(ui) {
 			'div',
 			{ class: 'ow-row' },
 			'订阅自动更新',
-			select(
-				'订阅自动更新',
-				[
-					[0, '关闭'],
-					[6, '每 6 小时'],
-					[12, '每 12 小时'],
-					[24, '每天'],
-					...([0, 6, 12, 24].includes(prefs.update_hours)
-						? []
-						: [[prefs.update_hours, prefs.update_hours + ' 小时']]),
-				],
-				prefs.update_hours,
-				(v) => saveP({ update_hours: Number(v) }).catch((e) => ui.notify(e.message)),
+			toggle('订阅自动更新', prefs.update_hours > 0, (on) =>
+				saveP({ update_hours: on ? ui.memory.updateHours || 6 : 0 }).catch((e) => ui.notify(e.message)),
 			),
 		),
-		h(
-			'div',
-			{ class: 'ow-row' },
-			'OpenWeir 插件',
-			ui.button(
-				'检查更新',
-				async () => {
-					const info = await ui.run('plugin_check', {});
-					const d = ui.dialog(
-						'插件更新',
-						h(
-							'div',
-							{ class: 'ow-stack' },
-							h('p', {}, info.available ? '可更新至 ' + info.candidate : '当前已是最新版本'),
-							h('small', { class: 'ow-muted' }, '已安装 · ' + info.installed),
-							info.available && ui.button(
-								'安装已验证更新',
-								async () => {
-									await ui.run('plugin_update', {});
-									d.close();
-								},
-								'ow-primary',
-							),
-						),
-					);
-				},
-				'ow-link',
-			),
-		),
-		h(
-			'div',
-			{ class: 'ow-row' },
-			kernelSummary(ui, kernel, kernelUpdates),
-		),
+		prefs.update_hours > 0 && updateInterval(ui, prefs.update_hours, saveP),
+		updateRow('OpenWeir 插件', ...pluginUpdate(ui)),
+		updateRow(...kernelSummary(ui, kernel, kernelUpdates)),
+		updateRow('内核存储位置', ...kernelStorage(ui, kernel, kernelUpdates, segment)),
 	);
 	const grid = h(
 		'div',
@@ -732,7 +712,7 @@ export async function overview(ui) {
 				'section',
 				{ class: 'ow-warning' },
 				h('strong', {}, '检测到其他服务正在接管流量'),
-				h('span', {}, (conflicts.resources || []).map((x) => x.name).join('、')),
+				h('span', {}, [...new Set((conflicts.resources || []).map((x) => x.name))].join('、')),
 				ui.button('查看并处理', () => {
 					const d = ui.dialog(
 						'接管冲突',
@@ -782,4 +762,70 @@ export async function overview(ui) {
 		}
 	}, 2500);
 	return content;
+}
+
+// 检查更新, then 更新到 vX only when a newer verified package exists.
+// Title with its note underneath on the left, the control on the right, centred on both.
+function updateRow(title, action, note) {
+	return h('div', { class: 'ow-row' }, h('span', { class: 'ow-label' }, title, note), action);
+}
+function pluginUpdate(ui) {
+	const action = ui.button('检查更新', () => {}, 'ow-link'),
+		note = h('small', { class: 'ow-muted', role: 'status' });
+	let candidate = '', latest = false;
+	function show(text) {
+		action.textContent = text || (candidate ? '更新到 ' + candidate : latest ? '已是最新' : '检查更新');
+		action.disabled = !!text || (latest && !candidate);
+		action.classList.toggle('ow-primary', !text && !!candidate);
+		action.classList.toggle('ow-link', !!text || !candidate);
+	}
+	action.addEventListener('click', async () => {
+		note.textContent = '';
+		try {
+			if (candidate) {
+				show('正在更新…');
+				await ui.run('plugin_update', {});
+				note.textContent = '已安装 ' + candidate + '，刷新页面后生效';
+				candidate = '';
+				latest = true;
+				return;
+			}
+			show('正在检查…');
+			const info = await ui.run('plugin_check', {});
+			candidate = info.available ? info.candidate : '';
+			latest = !candidate;
+			note.textContent = '当前 ' + info.installed;
+		} catch (error) {
+			if (error.name !== 'AbortError') note.textContent = error.message;
+		} finally {
+			show();
+		}
+	});
+	return [action, note];
+}
+
+// Hours between automatic subscription refreshes, typed by the user (1–720).
+function updateInterval(ui, hours, saveP) {
+	ui.memory.updateHours = hours;
+	const input = h('input', {
+		type: 'number', min: 1, max: 720, step: 1, inputmode: 'numeric', value: hours,
+		'aria-label': '更新间隔（小时）', class: 'ow-hours',
+	});
+	input.addEventListener('change', async () => {
+		const value = Number(input.value);
+		if (!Number.isInteger(value) || value < 1 || value > 720) {
+			ui.notify('请输入 1 到 720 之间的整数小时');
+			input.value = hours;
+			return;
+		}
+		if (value === hours) return;
+		try {
+			ui.memory.updateHours = value;
+			await saveP({ update_hours: value });
+		} catch (e) {
+			ui.notify(e.message);
+			input.value = hours;
+		}
+	});
+	return h('div', { class: 'ow-row' }, '更新间隔', h('span', { class: 'ow-actions' }, '每', input, '小时'));
 }

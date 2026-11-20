@@ -26,13 +26,10 @@ try {
 		const source=setup.getByLabel('粘贴订阅链接');
 		if(await setup.isVisible()) await source.fill('https://example.invalid/draft');
 		const owner=await setup.isVisible() ? setup : page.locator('.ow-main');
-		const alternate=owner.getByRole('button',{name:limited ? '上传原始发行包 ›' : '镜像或手动安装 ›'});
-		await alternate.waitFor({timeout:90000});
+		const retry=owner.getByRole('button',{name:'重新下载'});
+		await retry.waitFor({timeout:90000});
 		if(await setup.isVisible()) assert.equal(await source.inputValue(),'https://example.invalid/draft');
-		await alternate.click();
-		const manager=page.getByRole('dialog',{name:'mihomo 内核'});
-		await manager.getByText(limited ? /GitHub 的发行版本查询已达限额/ : /自动准备失败/).waitFor();
-		assert.equal(await manager.getByLabel('下载来源').inputValue(),limited ? 'bundle' : 'mirror');
+		await owner.getByText(limited ? 'GitHub 查询次数已达上限，请稍后重试' : /无法|暂时|未通过/).first().waitFor();
 		await page.keyboard.press('Escape');
 		if(await setup.isVisible()) assert.equal(await source.inputValue(),'https://example.invalid/draft');
 	}

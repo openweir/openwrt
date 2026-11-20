@@ -89,7 +89,9 @@ export function fixture(empty = false, preparing = false) {
 				const action = r.action;
 				reads.push(action);
 				if (action === 'list') return { ok: true, data: sources };
-				if (action === 'agents') return { ok: true, data: ['clash.meta', 'sing-box', 'clash', 'OpenWeir'] };
+				if (action === 'url') return { ok: true, data: { url: 'https://fixture.invalid/current' } };
+				if (action === 'set_match') return { ok: true, data: { matched: /stream/i.test(r.args.query) } };
+				if (action === 'agents') return { ok: true, data: ['clash', 'sing-box', 'OpenWeir'] };
 				if (action === 'profile')
 					return {
 						ok: true,
@@ -232,10 +234,13 @@ export function fixture(empty = false, preparing = false) {
 			case 'kernel_write':
 				if (controls.kernelInstallError) throw Error(controls.kernelInstallError);
 				installs.push(r.args);
+				kernel.mode = r.args.mode;
 				kernel.selected = r.args.tag;
 				return job({ selected: kernel.selected });
 			case 'conflicts':
 				return { resources: [], blocked: false };
+			case 'rule_hits':
+				return { Streaming: { count: 3, last: Date.now() } };
 			case 'routes':
 				return {
 					items: connections.map((v) => ({

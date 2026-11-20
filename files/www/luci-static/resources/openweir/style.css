@@ -97,10 +97,34 @@
 	min-height: 36px;
 	min-width: 0;
 }
+/* A checkbox field reads as one line: the box, then its label. */
+.ow .ow-field:has(> input:is([type='checkbox'], [type='radio'])) {
+	flex-direction: row-reverse;
+	justify-content: flex-end;
+	align-items: center;
+	gap: 8px;
+}
+.ow .ow-field:has(> input:is([type='checkbox'], [type='radio'])) > span {
+	color: var(--ow-text);
+	font-size: 13px;
+	line-height: 20px;
+}
+.ow .ow-picker label {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	min-width: 0;
+}
 .ow input[type='checkbox'],
 .ow input[type='radio'] {
 	accent-color: var(--ow-accent);
-	margin: 0 4px 0 0;
+	/* LuCI themes nudge checkboxes with offsets; keep them on the text's centre line. */
+	margin: 0;
+	position: static;
+	top: auto;
+	vertical-align: middle;
+	align-self: center;
+	flex: none;
 }
 .ow select {
 	appearance: none;
@@ -167,6 +191,9 @@
 	background: none;
 	color: var(--ow-accent);
 }
+.ow button.ow-link.ow-danger {
+	color: var(--ow-danger);
+}
 .ow small,
 .ow .ow-muted,
 .ow .ow-field > span {
@@ -178,8 +205,7 @@
 .ow nav,
 .ow .ow-toolbar,
 .ow .ow-actions,
-.ow .ow-row,
-.ow .ow-inline {
+.ow .ow-row {
 	display: flex;
 	align-items: center;
 	gap: 9px;
@@ -220,6 +246,15 @@
 	justify-content: space-between;
 	flex-wrap: wrap;
 }
+/* LuCI themes give headings a full-width block; keep a row's title beside its actions. */
+.ow .ow-row > :is(h2, h3) {
+	width: auto;
+	flex: 0 1 auto;
+	min-width: 0;
+}
+.ow .ow-route-side > .ow-row {
+	flex-wrap: nowrap;
+}
 .ow .ow-actions,
 .ow .ow-toolbar {
 	flex-wrap: wrap;
@@ -229,9 +264,6 @@
 	flex-direction: column;
 	gap: 5px;
 	min-width: 0;
-}
-.ow .ow-inline {
-	font-size: 13px;
 }
 .ow .ow-main,
 .ow .ow-stack,
@@ -300,10 +332,18 @@
 	color: var(--ow-accent);
 	margin: 14px 0 11px;
 }
+/* Connected, the whole button is the red disconnect control. */
 .ow button.ow-power.on {
-	color: #002c28;
-	background: var(--ow-teal);
-	box-shadow: 0 0 0 7px var(--ow-tint);
+	color: #fff;
+	background: var(--ow-danger);
+	box-shadow: 0 0 0 7px color-mix(in srgb, var(--ow-danger) 22%, transparent);
+}
+.ow button.ow-power.on:is(:hover, :focus-visible, :active) {
+	background: color-mix(in srgb, var(--ow-danger) 85%, #000);
+	box-shadow: 0 0 0 7px color-mix(in srgb, var(--ow-danger) 32%, transparent);
+}
+.ow button.ow-power {
+	transition: background-color 0.15s, box-shadow 0.15s, color 0.15s;
 }
 .ow .ow-power span {
 	font-size: 12px;
@@ -437,6 +477,14 @@
 .ow .ow-route-icon {
 	color: var(--ow-accent);
 }
+.ow button.ow-route[aria-pressed='true'] {
+	border-color: var(--ow-accent);
+	background: var(--ow-tint);
+}
+.ow .ow-global-nodes {
+	max-height: 232px;
+	overflow-y: auto;
+}
 .ow .ow-checks {
 	display: flex;
 	flex-wrap: wrap;
@@ -445,6 +493,9 @@
 	margin-top: auto;
 	font-size: 12px;
 	color: var(--ow-secondary);
+}
+.ow .ow-checks > button {
+	margin-left: auto;
 }
 .ow .ow-checks span {
 	display: inline-flex;
@@ -552,6 +603,9 @@
 .ow .ow-switch {
 	position: relative;
 	padding: 0;
+	margin: 0;
+	align-self: center;
+	vertical-align: middle;
 	min-height: 0;
 	width: 44px;
 	height: 26px;
@@ -623,11 +677,6 @@
 .ow dialog.ow-modal[open] {
 	display: flex;
 	flex-direction: column;
-}
-.ow .ow-kernel-dialog .ow-field input,
-.ow .ow-kernel-dialog .ow-field select {
-	width: 100%;
-	max-width: 100%;
 }
 .ow .ow-modal::backdrop {
 	background: #05151680;
@@ -719,6 +768,72 @@
 	overflow-wrap: anywhere;
 }
 .ow .ow-log time,
+.ow .ow-mono {
+	font-family: ui-monospace, monospace;
+}
+.ow .ow-log > div {
+	padding: 0 0 9px 124px;
+}
+.ow .ow-level.warn {
+	background: #ffebc8;
+	color: #774609;
+}
+.ow .ow-level.error {
+	background: #ffe0dd;
+	color: #992d26;
+}
+.ow .ow-table {
+	width: 100%;
+	border-collapse: collapse;
+	table-layout: fixed;
+}
+.ow .ow-table th,
+.ow .ow-table td {
+	text-align: left;
+	overflow-wrap: anywhere;
+	padding: 9px 6px;
+	border-bottom: 1px solid var(--ow-line);
+	background: transparent;
+	color: inherit;
+}
+.ow .ow-table th {
+	color: var(--ow-secondary);
+	font-size: 12px;
+}
+.ow .ow-table td small {
+	display: block;
+}
+.ow .ow-rule-list {
+	display: grid;
+	gap: 0;
+}
+.ow .ow-rule-row {
+	display: flex;
+	align-items: center;
+	flex-wrap: wrap;
+	gap: 10px;
+	padding: 10px 0;
+	border-bottom: 1px solid var(--ow-line);
+}
+.ow .ow-rule-sets td:last-child {
+	text-align: right;
+	white-space: nowrap;
+}
+.ow .ow-rule-sets td:last-child .ow-actions {
+	justify-content: flex-end;
+}
+.ow .ow-facts {
+	display: grid;
+	grid-template-columns: max-content 1fr;
+	gap: 6px 16px;
+	margin: 0;
+}
+.ow .ow-facts dt {
+	color: var(--ow-secondary);
+}
+.ow .ow-facts dd {
+	margin: 0;
+}
 .ow .ow-mono {
 	font-family: ui-monospace, monospace;
 }
@@ -902,7 +1017,7 @@
 	.ow .ow-routes {
 		grid-template-columns: repeat(2, minmax(0, 1fr));
 	}
-	.ow .ow-routes > .ow-route:nth-child(n + 5) {
+	.ow .ow-routes:not(.ow-global-nodes) > .ow-route:nth-child(n + 5) {
 		display: none;
 	}
 	.ow .ow-field input,
@@ -925,8 +1040,32 @@
 		overflow-wrap: anywhere;
 	}
 	.ow .ow-table.ow-connections,
-	.ow .ow-connections tbody {
+	.ow .ow-connections tbody,
+	.ow .ow-table.ow-rule-sets,
+	.ow .ow-rule-sets tbody {
 		display: block;
+	}
+	.ow .ow-rule-sets thead {
+		display: none;
+	}
+	.ow .ow-rule-sets tr {
+		display: grid;
+		grid-template-columns: 1fr auto;
+		gap: 2px 8px;
+		padding: 9px 0;
+		border-bottom: 1px solid var(--ow-line);
+	}
+	.ow .ow-rule-sets td {
+		border: 0;
+		padding: 0;
+	}
+	.ow .ow-rule-sets td:nth-child(n + 2):not(:last-child) {
+		color: var(--ow-secondary);
+		font-size: 12px;
+	}
+	.ow .ow-rule-sets td:last-child {
+		grid-area: 1 / 2 / 5 / 3;
+		align-self: center;
 	}
 	.ow .ow-connections thead {
 		display: none;
@@ -987,12 +1126,6 @@
 .ow .ow-source-card .ow-actions:last-child { margin-top: auto; }
 .ow .ow-source-mobile { display: none; }
 .ow .ow-sources > .ow-row { flex-direction: row; }
-.ow .ow-effective-rule {
-	display: grid;
-	grid-template-columns: 2.2em minmax(7em, 0.55fr) minmax(0, 1.8fr) minmax(6em, 0.75fr) 4em;
-	overflow-wrap: anywhere;
-}
-.ow .ow-effective-rule > :is(button,.ow-badge) { justify-self: start; }
 @container (max-width: 650px) {
 	.ow .ow-source-grid { grid-template-columns: minmax(0, 1fr); }
 	.ow .ow-sources:has(.ow-source-mobile) > :not(.ow-source-mobile) { display: none; }
@@ -1001,10 +1134,15 @@
 	.ow .ow-source-mobile > summary::after { content: '›'; color: var(--ow-secondary); font-size: 20px; }
 	.ow .ow-source-mobile[open] > summary::after { transform: rotate(90deg); }
 	.ow .ow-source-mobile > div { margin-top: 12px; }
-	.ow .ow-effective-rule { grid-template-columns: 1.6em minmax(0, 1fr) auto; gap: 2px 8px; }
-	.ow .ow-rule-number { grid-area: 1 / 1 / 3 / 2; }
-	.ow .ow-rule-match { grid-area: 1 / 2; }
-	.ow .ow-rule-type { grid-area: 2 / 2; }
-	.ow .ow-effective-rule > :nth-child(4) { grid-area: 1 / 3; }
-	.ow .ow-effective-rule > :nth-child(5) { grid-area: 2 / 3; }
 }
+.ow input.ow-hours {
+	width: 5em;
+	text-align: right;
+}
+
+.ow .ow-label { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ow .ow-device-toolbar { justify-content: space-between; }
+.ow .ow-device-toolbar > input[type='search'] { margin-left: auto; }
+.ow .ow-warning > button:last-child { margin-left: auto; }
+.ow .ow-source-card .ow-actions > .ow-danger:last-child { margin-left: auto; }
+.ow .ow-label > small:empty { display: none; }

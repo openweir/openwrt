@@ -1,7 +1,8 @@
 import { h, card, knownNames, pages } from './dom.js';
 import { overview } from './pages/overview.js';
 import { proxy } from './pages/proxy.js';
-import { subscriptions, rules } from './pages/sources.js';
+import { subscriptions } from './pages/sources.js';
+import { rules } from './pages/rules.js';
 import { records } from './pages/records.js';
 
 const views = {
@@ -58,8 +59,24 @@ export function mount(root, invoke, upload) {
 		catalogKey = '',
 		catalogRequest;
 	const name = (id) => names.get(id) || knownNames[id] || id || '—';
+	// Starting or stopping the proxy reloads the firewall, DNS and routes, which can drop the
+	// browser's open requests ("XHR request aborted by browser"). Reads are retried briefly.
+	const transient = (e) => /aborted|timed? ?out|network|xhr/i.test(e?.message || '');
+	const rereadable = new Set(['task', 'status', 'routes', 'traffic', 'groups', 'live_groups', 'latencies', 'logs',
+		'connections', 'live_rules', 'environment', 'devices', 'custom_rules', 'network_preferences', 'plugin_check',
+		'subscription_read', 'kernel_read', 'conflicts', 'kernel_impact']);
+	const call = async (method, args) => {
+		for (let attempt = 1; ; attempt++) {
+			try {
+				return await invoke(method, args);
+			} catch (e) {
+				if (!transient(e) || !rereadable.has(method) || attempt >= 8 || disconnected) throw e;
+				await delay(Math.min(4000, 500 * attempt));
+			}
+		}
+	};
 	const rpc = async (method, args = {}) => {
-		const v = await invoke(method, args);
+		const v = await call(method, args);
 		// uhttpd encodes a successful empty ubus table as just status 0.
 		if ((v === 0 || v == null) && (method === 'groups' || method === 'latencies')) return {};
 		if (!v || v.ok === false || (v.error && !('saved' in v || 'stage' in v)))
@@ -144,7 +161,16 @@ export function mount(root, invoke, upload) {
 		}
 	}
 	async function run(method, args = {}, onAccepted) {
-		const accepted = await rpc(method, args);
+		let accepted;
+		try {
+			accepted = await rpc(method, args);
+		} catch (e) {
+			// The router may already be applying the change when the connection drops; the
+			// next status read shows what actually happened.
+			if (!transient(e) || !['start', 'stop', 'mode'].includes(method)) throw e;
+			await delay(1500);
+			return {};
+		}
 		onAccepted?.();
 		if (!accepted.task || accepted.task.startsWith('intent-')) return accepted;
 		const id = accepted.task;

@@ -87,7 +87,7 @@ async function checkKernelPreparation(browser, base, viewport) {
 		await page.clock.install();
 		await page.goto(base + '/?empty&bootstrap');
 		const setup = page.getByRole('dialog', {name:'启用全屋代理'});
-		await setup.getByText('正在准备最新稳定版', {exact:true}).waitFor();
+		await setup.getByText('正在下载', {exact:true}).waitFor();
 		const link = setup.getByLabel('粘贴订阅链接');
 		await link.fill('https://fixture.invalid/unfinished');
 		await page.evaluate(() => {
@@ -95,40 +95,27 @@ async function checkKernelPreparation(browser, base, viewport) {
 			Object.assign(window.model.kernel.bootstrap, {stage:'failed', error:'latest stable release unreachable'});
 		});
 		await page.clock.runFor(4000);
-		await setup.getByText('自动准备失败', {exact:true}).waitFor();
+		await setup.getByText('下载失败', {exact:true}).waitFor();
 		assert.equal(await link.inputValue(), 'https://fixture.invalid/unfinished');
 		assert.ok(await link.evaluate(element => element === document.activeElement));
-		await setup.getByRole('button', {name:'镜像或手动安装 ›'}).click();
-		const modal = page.getByRole('dialog', {name:'mihomo 内核'});
-		await modal.getByText('自动准备失败。无法连接原仓库获取最新稳定版。').waitFor();
-		assert.equal(await modal.getByLabel('下载来源').inputValue(), 'mirror');
-		await modal.getByLabel('版本号').fill('v0.1.4');
-		await modal.getByLabel('HTTPS 地址').fill('https://mirror.example/core');
-		await modal.getByRole('button', {name:'验证并安装'}).click();
-		await modal.waitFor({state:'detached'});
+		// One button downloads the newest stable kernel; no dialog, no choices.
+		await page.evaluate(() => { window.model.controls.kernelInstallError = 'GitHub release API rate limit reached'; });
+		await setup.getByRole('button', {name:'重新下载'}).click();
+		await setup.getByText('GitHub 查询次数已达上限，请稍后重试').waitFor();
+		await page.evaluate(() => { window.model.controls.kernelInstallError = ''; });
+		await setup.getByRole('button', {name:'重新下载'}).click();
 		await setup.getByText('v0.1.4', {exact:true}).waitFor();
+		assert.deepEqual(await page.evaluate(() => window.model.installs), [{tag:'v0.1.4', mode:'double'}]);
 		assert.equal(await link.inputValue(), 'https://fixture.invalid/unfinished');
 		await page.keyboard.press('Escape');
-		await page.getByText('mihomo · v0.1.4', {exact:true}).waitFor();
-		await page.goto(base + '/?bootstrap');
-		await page.getByText('mihomo · 正在准备最新稳定版').waitFor();
-		await page.getByRole('button', {name:'查看进度 ›'}).click();
-		await modal.getByLabel('版本号').fill('v0.1.5');
-		await page.evaluate(() => {
-			window.model.kernel.bootstrap.stage = 'done';
-			window.model.kernel.selected = 'v0.1.4';
-		});
-		await page.clock.runFor(4000);
-		await modal.getByText('v0.1.4', {exact:true}).waitFor();
-		assert.equal(await modal.getByLabel('版本号').inputValue(), 'v0.1.5');
-		await page.keyboard.press('Escape');
-		await page.getByText('mihomo · v0.1.4', {exact:true}).waitFor();
+		await page.getByText('内核 · v0.1.4', {exact:true}).waitFor();
 		const reads = () => page.evaluate(() => window.model.trace.filter(op => op === 'kernel_read').length);
+		await page.clock.runFor(4000); // let the overview finish re-rendering after the setup closes
 		const count = await reads();
 		await page.clock.runFor(12000);
 		assert.equal(await reads(), count, 'installed kernels do not poll the release status');
 		await page.goto(base + '/?bootstrap');
-		await page.getByRole('button', {name:'查看进度 ›'}).click();
+		await page.getByText('内核 · 正在下载').waitFor();
 		await page.evaluate(() => {
 			const kernel = window.model.kernel;
 			kernel.staged = 'v0.1.5';
@@ -136,34 +123,8 @@ async function checkKernelPreparation(browser, base, viewport) {
 				result:{staged:kernel.staged, reason:'preflight_failed'}};
 		});
 		await page.clock.runFor(4000);
-		await modal.getByText(/已暂存 v0\.1\.5。此版本未通过当前配置校验/).waitFor();
-		await page.keyboard.press('Escape');
-		await page.getByRole('button', {name:'查看暂存版本 ›'}).click();
-		await modal.getByRole('button', {name:'使用已暂存 v0.1.5'}).click();
-		await modal.waitFor({state:'detached'});
-		await page.getByText('mihomo · v0.1.5', {exact:true}).waitFor();
-		await page.goto(base + '/?bootstrap');
-		await page.getByText('mihomo · 正在准备最新稳定版').waitFor();
-		await page.evaluate(() => Object.assign(window.model.kernel.bootstrap, {stage:'failed', error:'publisher has no stable release'}));
-		await page.clock.runFor(4000);
-		await page.getByRole('button', {name:'选择测试版 ›'}).click();
-		await modal.getByLabel('发行版本', {exact:true}).selectOption('v0.0.0-alpha.2ca4a53');
-		assert.equal(await modal.getByLabel('版本号').inputValue(), 'v0.0.0-alpha.2ca4a53');
-		assert.equal(await page.evaluate(() => window.model.installs.length), 0);
-		await page.keyboard.press('Escape');
-        await page.evaluate(() => Object.assign(window.model.kernel.bootstrap,
-			{stage:'failed', error:'GitHub release API rate limit reached'}));
-		await page.clock.runFor(4000);
-		await page.getByRole('button', {name:'上传原始发行包 ›'}).click();
-		await modal.getByText(/GitHub 的发行版本查询已达限额/).waitFor();
-		assert.equal(await modal.getByLabel('下载来源').inputValue(),'bundle');
-		await modal.getByLabel('下载来源').selectOption('upstream');
-		await modal.getByLabel('版本号').fill('v0.1.6');
-		await page.evaluate(() => { window.model.controls.kernelInstallError = 'GitHub release API rate limit reached'; });
-		await modal.getByRole('button', {name:'验证并安装'}).click();
-		await modal.getByRole('button', {name:'改为上传原始发行包'}).click();
-		assert.equal(await modal.getByLabel('下载来源').inputValue(),'bundle');
-		assert.equal(await modal.getByLabel('版本号').inputValue(),'v0.1.6');
+		await page.getByRole('button', {name:'使用 v0.1.5'}).click();
+		await page.getByText('内核 · v0.1.5', {exact:true}).waitFor();
 	} finally { await page.close(); }
 }
 // Advance the browser clock through ten minutes of normal overview polling.
@@ -284,44 +245,40 @@ try {
 		const hero = page.locator('.ow-connection'),
 			fixed = (await hero.boundingBox()).height;
 		await page.screenshot({ path: path.join(output, 'overview-' + width + '.png'), fullPage: true });
-		await page.getByRole('button', { name: '其他版本 ›' }).click();
-		const kernel = page.getByRole('dialog', { name: 'mihomo 内核' });
-		await centered(kernel, { width, height });
-		assert.doesNotMatch(await kernel.innerText(), /undefined|\bfalse\b/);
-		await kernel.getByRole('button', { name: '查看发行版本' }).click();
-		const picker = kernel.getByLabel('发行版本', { exact: true });
-		await picker.selectOption('v0.1.4');
-		assert.equal(await kernel.getByLabel('版本号').inputValue(), 'v0.1.4');
-		assert.equal(await picker.locator('[value="v0.1.5-rc1"]').evaluate(el => el.disabled), true);
-		assert.equal(await kernel.getByRole('button', { name: '验证并安装' }).isEnabled(), true);
-		const transport = kernel.getByRole('combobox', { name: '下载来源' });
-		await transport.selectOption('url');
-		await kernel.getByLabel('HTTPS 地址').fill('http://mirror.example/core.tar.gz');
-		await kernel.getByRole('button', { name: '验证并安装' }).click();
-		await kernel.getByText('请填写不含用户名或密码的 HTTPS 地址。').waitFor();
-		assert.equal(await page.evaluate(() => window.model.installs.length), 0);
-		await transport.selectOption('bundle');
-		const input = kernel.getByLabel('原始内核归档', { exact: true });
-		assert.equal(await input.evaluate(el => el.multiple), false);
-		assert.equal(await kernel.getByLabel('存储模式').locator('[value=tmp]').evaluate(el => el.disabled), true);
-		await input.setInputFiles({ name: 'wrong.tar.gz', mimeType: 'application/gzip', buffer: Buffer.from('fixture') });
-		await kernel.getByRole('button', { name: '验证并安装' }).click();
-		await kernel.getByText('此版本和架构需要 mihomo-0.1.4-linux-arm64.tar.gz').waitFor();
-		const original = 'mihomo-0.1.4-linux-arm64.tar.gz';
-		await input.setInputFiles({ name: original, mimeType: 'application/gzip', buffer: Buffer.from('fixture') });
-		assert.equal(await kernel.locator('[aria-live]').textContent(), '');
+		// 检查更新 offers 更新到 vX only when a newer stable kernel exists.
+		const kernelRow = page.locator('.ow-row').filter({ hasText: '内核 ·' });
+		await kernelRow.getByRole('button', { name: '检查更新' }).click();
+		const upgrade = kernelRow.getByRole('button', { name: '更新到 v0.1.4' });
+		await upgrade.waitFor();
 		await page.screenshot({ path: path.join(output, 'kernel-' + width + '.png') });
-		await kernel.getByRole('button', { name: '验证并安装' }).click();
-		await kernel.waitFor({ state: 'detached' });
-		assert.deepEqual(await page.evaluate(() => window.model.installs), [
-			{ tag: 'v0.1.4', mode: 'double', bundle: '/tmp/openweir-upload/fixture-upload' },
-		]);
-		assert.deepEqual(await page.evaluate(() => window.model.uploads), [
-			{ path: '/tmp/openweir-upload/fixture-upload/' + original, name: original, bytes: 7 },
-		]);
-		await page.getByText('mihomo · v0.1.4', { exact: false }).first().waitFor();
+		await upgrade.click();
+		await kernelRow.getByRole('button', { name: '已是最新' }).waitFor();
+		assert.deepEqual(await page.evaluate(() => window.model.installs), [{ tag: 'v0.1.4', mode: 'double' }]);
+		const storage = page.getByRole('group', { name: '内核存储位置' });
+		await storage.getByRole('button', { name: '内存' }).click();
+		await page.waitForFunction(() => window.model.installs.length === 2);
+		assert.deepEqual(await page.evaluate(() => window.model.installs[1]), { tag: 'v0.1.4', mode: 'tmp' });
+		await storage.getByRole('button', { name: '闪存' }).click();
+		await page.waitForFunction(() => window.model.installs.length === 3);
+		await page.evaluate(() => window.model.installs.splice(1));
+		await page.getByText('内核 · v0.1.4', { exact: false }).first().waitFor();
 		await page.getByRole('button', { name: '检测', exact: true }).click();
 		await page.getByText('百度 32 ms').waitFor();
+		// Automatic subscription refresh: a switch, then the hours the user types.
+		const hours = page.getByRole('spinbutton', { name: '更新间隔（小时）' });
+		await hours.fill('8');
+		await hours.press('Enter');
+		await hours.blur();
+		await page.waitForFunction(async () => (await window.model.rpc('network_preferences')).update_hours === 8);
+		await page.getByRole('switch', { name: '订阅自动更新', checked: true }).click();
+		await page.getByRole('switch', { name: '订阅自动更新', checked: false }).waitFor();
+		assert.equal(await hours.count(), 0);
+		await page.getByRole('switch', { name: '订阅自动更新', checked: false }).click();
+		await page.getByRole('spinbutton', { name: '更新间隔（小时）' }).waitFor();
+		assert.equal((await page.evaluate(() => window.model.rpc('network_preferences'))).update_hours, 8);
+		await hours.fill('6');
+		await hours.blur();
+		await page.waitForFunction(async () => (await window.model.rpc('network_preferences')).update_hours === 6);
 		// The running core supports URL probes. Exercise cancellation before
 		// completing another batch on the same screen.
 		await page.getByRole('link', { name: '代理', exact: true }).click();
@@ -371,13 +328,13 @@ try {
 		await page.screenshot({ path: path.join(output, 'proxy-' + width + '.png'), fullPage: true });
 		for (const name of ['订阅', '规则', '日志', '连接记录']) {
 			await page.getByRole('link', { name, exact: true }).click();
-			await page.getByRole('heading', { name, exact: true }).first().waitFor();
+			await page.getByRole('heading', { name: name === '规则' ? '自定义规则' : name, exact: true }).first().waitFor();
 			if (name === '订阅') {
 				const clockProblem = page.locator('.ow-source-card').filter({hasText:'备用订阅'});
 				await clockProblem.getByText(/证书尚未生效.*1970-01-02.*2026-01-01.*2027-01-01.*UTC/).waitFor();
 				const savedProblem = page.locator('.ow-source-card').filter({hasText:'家庭套餐'});
 				await savedProblem.locator('details summary').filter({hasText:'1 条导入提醒'}).click();
-                await savedProblem.locator('details p').filter({hasText:/Media.*SRS.*该规则集无法直接用于 mihomo/}).waitFor();
+                await savedProblem.locator('details p').filter({hasText:/Media.*SRS.*该规则集无法被内核直接使用/}).waitFor();
                 const account = page.locator('.ow-source-card').filter({ hasText: '示例服务商' });
 				await account.getByText('1 条导入提醒', {exact:true}).click();
 				const aggregate = account.locator('details[open] p');
@@ -416,7 +373,7 @@ try {
 				const partial = page.getByRole('dialog',{name:'确认订阅变更'});
 				await partial.getByText(/跳过这些条目，保留其余分流/).waitFor();
 				await partial.getByText(/此次变更会跳过拦截规则.*继续匹配其余规则和兜底出口/).waitFor();
-				await partial.getByText(/Streaming · SRS.*无法直接用于 mihomo/).waitFor();
+				await partial.getByText(/Streaming · SRS.*无法被内核直接使用/).waitFor();
                 await partial.getByText(/rule 1 · Streaming.*此拦截规则引用的规则集未载入/).waitFor();
                 assert.equal(await partial.getByRole('checkbox').count(), 0);
 				await partial.getByRole('button',{name:'保留其余分流并应用'}).click();
@@ -434,27 +391,25 @@ try {
 				await account.getByRole('button', { name: '编辑', exact: true }).click();
 				const edit = page.getByRole('dialog', { name: '编辑订阅' });
 				assert.equal(await edit.getByRole('combobox', { name: '订阅请求 UA' }).count(), 0);
-				const leaveAccount = edit.getByRole('button', { name: '退出服务商账户' });
+				await edit.getByRole('button', { name: '保存', exact: true }).click();
+				await edit.waitFor({ state: 'hidden' });
+				// Signing out sits on the card, outside the editor.
+				const leaveAccount = account.getByRole('button', { name: '退出账户' });
 				await leaveAccount.focus();
 				await page.keyboard.press('Enter');
 				const confirm = page.getByRole('dialog', { name: '退出服务商账户' });
 				await centered(confirm, { width, height });
 				await page.keyboard.press('Escape');
 				await confirm.waitFor({ state: 'detached' });
-				await leaveAccount.waitFor();
-				assert.ok(await leaveAccount.evaluate(el => el === document.activeElement), 'escape returns to parent dialog trigger');
-				await edit.getByRole('button', { name: '保存', exact: true }).click();
-				await edit.waitFor({ state: 'hidden' });
+				assert.ok(await leaveAccount.evaluate(el => el === document.activeElement), 'escape returns to the card button');
 				await page.evaluate(() => { window.model.controls.longRefresh = true; });
 				const external = page.locator('.ow-source-card').filter({ hasText: '外部订阅' });
 				await external.getByRole('button', { name: '编辑' }).click();
-				const replaceTrigger = edit.getByRole('button', { name: '更换订阅链接' });
-				await replaceTrigger.click();
-				const replace = page.getByRole('dialog', { name: '更换订阅链接' });
-				const address = replace.getByLabel('新订阅链接');
+				// The editor shows the current link; a changed link is verified before it replaces the old one.
+				const address = edit.getByLabel('订阅链接');
+				assert.equal(await address.inputValue(), 'https://fixture.invalid/current');
 				await address.fill('https://fixture.invalid/replacement');
-				const verify = replace.getByRole('button', { name: '验证并更换' });
-				await verify.click();
+				await edit.getByRole('button', { name: '保存', exact: true }).click();
 				const failure = page.getByRole('dialog', { name: '已保留上次配置' });
 				await centered(failure, { width, height });
 				await failure.getByText('测试节点 24 · 规则无法转换').scrollIntoViewIfNeeded();
@@ -464,12 +419,8 @@ try {
 				await page.screenshot({path: path.join(output, 'subscription-review-' + width + '.png')});
 				await failure.getByRole('button', { name: '关闭' }).click();
 				await failure.waitFor({ state: 'detached' });
-				await replace.waitFor();
+				await edit.waitFor();
 				assert.equal(await address.inputValue(), 'https://fixture.invalid/replacement');
-				assert.ok(await verify.evaluate(el => el === document.activeElement), 'close returns to validation button');
-				await page.keyboard.press('Escape');
-				await replace.waitFor({state: 'detached'});
-				assert.ok(await replaceTrigger.evaluate(el => el === document.activeElement), 'escape returns to edit form');
 				await page.keyboard.press('Escape');
 				await edit.waitFor({state: 'detached'});
 				await page.getByRole('button', { name: '＋ 添加订阅' }).click();
@@ -477,19 +428,22 @@ try {
 				await centered(dialog, { width, height });
 				const ua = dialog.getByRole('combobox', { name: '订阅请求 UA' });
 				assert.deepEqual(await ua.locator('option').evaluateAll(items => items.map(item => item.value)), [
-					'clash.meta', 'sing-box', 'clash', 'OpenWeir', 'custom',
+					'clash', 'sing-box', 'OpenWeir',
 				]);
-				assert.equal(await ua.inputValue(), 'clash.meta');
-				await ua.selectOption('custom');
-				await dialog.getByRole('textbox', { name: '自定义 UA' }).fill('Example/1.0');
+				assert.equal(await ua.inputValue(), 'clash');
+				assert.equal(await dialog.getByPlaceholder('留空使用订阅名称或域名').getAttribute('required'), null);
 				await page.keyboard.press('Escape');
 			}
 			if (name === '规则') {
 				await page.getByRole('button',{name:'规则集',exact:true}).click();
-				const setRow = tag => page.locator('.ow-rule-row').filter({has:page.getByText(tag,{exact:true})});
+				const setRow = tag => page.locator('.ow-rule-sets tr').filter({has:page.getByText(tag,{exact:true})});
 				await setRow('Streaming').getByText('订阅',{exact:true}).waitFor();
-                await setRow('Streaming').getByRole('button',{name:'查看规则'}).click();
-				assert.equal(await page.getByRole('combobox',{name:'按规则集筛选'}).inputValue(), 'Streaming');
+				await setRow('Streaming').getByRole('button',{name:'详情'}).click();
+				const detail = page.getByRole('dialog',{name:'Streaming'});
+				await detail.getByText('引用此规则集的规则').waitFor();
+				await page.keyboard.press('Escape');
+				await setRow('Streaming').getByRole('button',{name:'连接记录'}).click();
+				assert.equal(await page.getByRole('combobox',{name:'命中规则集'}).inputValue(), 'Streaming');
 			}
 			if (name === '日志') {
 				const row = page.locator('.ow-log').filter({has:page.getByText('内核发起连接时，系统报告网络不可达 ×3', {exact:true})});
