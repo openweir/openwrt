@@ -1,0 +1,312 @@
+import { h, card, knownNames, pages } from './dom.js';
+import { overview } from './pages/overview.js';
+import { proxy } from './pages/proxy.js';
+import { subscriptions, rules } from './pages/sources.js';
+import { records } from './pages/records.js';
+
+const views = {
+	overview: ['概览', overview],
+	proxy: ['代理', proxy],
+	subscriptions: ['订阅', subscriptions],
+	rules: ['规则', rules],
+	logs: ['日志', records],
+	connections: ['连接记录', records],
+};
+const aliases = {
+	nodes: 'proxy',
+	groups: 'proxy',
+	subscriptions: 'subscriptions',
+	subs: 'subscriptions',
+	devices: 'overview',
+	settings: 'overview',
+	events: 'logs',
+};
+function route() {
+	const [key, raw = ''] = location.hash.slice(1).split('/');
+	let detail = '';
+	try {
+		detail = decodeURIComponent(raw);
+	} catch (_) {}
+	const page = aliases[key] || key;
+	return { page: Object.hasOwn(views, page) ? page : 'overview', detail };
+}
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+export function mount(root, invoke, upload) {
+	root.className = 'ow';
+	const nav = h('nav', { 'aria-label': 'OpenWeir' });
+	const main = h('div', { class: 'ow-main' });
+	const alert = h('div', { class: 'ow-alert', role: 'status', hidden: true });
+	const header = h(
+		'div',
+		{ class: 'ow-header' },
+		h(
+			'div',
+			{ class: 'ow-brand' },
+			h('img', { src: new URL('mark.svg', import.meta.url).href, alt: '', width: 36, height: 36 }),
+			h('h1', {}, 'OpenWeir'),
+		),
+		nav,
+	);
+	for (const [page, [name]] of Object.entries(views)) nav.append(h('a', { href: '#' + page }, name));
+	root.replaceChildren(header, alert, main);
+	let scope,
+		disconnected = false,
+		noticeTimer,
+		onceMounted = root.isConnected;
+	const memory = {};
+	let names = new Map(),
+		catalogKey = '',
+		catalogRequest;
+	const name = (id) => names.get(id) || knownNames[id] || id || '—';
+	const rpc = async (method, args = {}) => {
+		const v = await invoke(method, args);
+		// uhttpd encodes a successful empty ubus table as just status 0.
+		if ((v === 0 || v == null) && (method === 'groups' || method === 'latencies')) return {};
+		if (!v || v.ok === false || (v.error && !('saved' in v || 'stage' in v)))
+			throw new Error(v?.error || '路由器未返回结果');
+		return v;
+	};
+	const notify = (message) => {
+		if (disconnected) return;
+		const open = [...root.querySelectorAll('dialog[open]')].pop();
+		const target = open?.querySelector('.ow-modal-status') || alert;
+		target.textContent = String(message);
+		target.hidden = false;
+		if (target !== alert) return;
+		clearTimeout(noticeTimer);
+		noticeTimer = setTimeout(() => {
+			alert.hidden = true;
+		}, 8000);
+	};
+	function button(text, handler, cls = '') {
+		const el = h('button', { type: 'button', class: cls }, text);
+		el.addEventListener('click', async (ev) => {
+			if (el.disabled || el.hasAttribute('aria-busy')) {
+				ev.preventDefault();
+				return;
+			}
+			// Keep the trigger focusable so native dialogs can restore focus after
+			// an asynchronous action. The view owns the actual disabled state.
+			el.setAttribute('aria-busy', 'true');
+			el.setAttribute('aria-disabled', 'true');
+			try {
+				await handler(ev);
+			} catch (e) {
+				if (e.name !== 'AbortError') notify(e.message);
+			} finally {
+				el.removeAttribute('aria-busy');
+				el.removeAttribute('aria-disabled');
+			}
+		});
+		return el;
+	}
+	function dialog(title, body) {
+		const heading = h('h2', {}, title);
+		const d = h(
+			'dialog',
+			{ class: 'ow-modal', 'aria-label': title },
+			h(
+				'div',
+				{ class: 'ow-modal-head' },
+				heading,
+				button('×', () => d.close(), 'ow-close'),
+			),
+			h('div', { class: 'ow-modal-body' }, h('p', { class: 'ow-modal-status', role: 'alert', hidden: true }), body),
+		);
+		d.querySelector('.ow-close').setAttribute('aria-label', '关闭');
+		root.append(d);
+		d.addEventListener('close', () => d.remove(), { once: true });
+		d.showModal();
+		d.addEventListener('click', (e) => {
+			if (e.target === d) {
+				const r = d.getBoundingClientRect();
+				if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) d.close();
+			}
+		});
+		return d;
+	}
+	function go(page, detail = '') {
+		const dest = '#' + page + (detail ? '/' + encodeURIComponent(detail) : '');
+		if (location.hash === dest) render();
+		else location.hash = dest;
+	}
+	const storageKey = 'openweir.pending.' + location.pathname;
+	function track(ids) {
+		try {
+			sessionStorage.setItem(storageKey, JSON.stringify(ids.slice(-32)));
+		} catch (_) {}
+	}
+	function pending() {
+		try {
+			return JSON.parse(sessionStorage.getItem(storageKey)) || [];
+		} catch (_) {
+			return [];
+		}
+	}
+	async function run(method, args = {}, onAccepted) {
+		const accepted = await rpc(method, args);
+		onAccepted?.();
+		if (!accepted.task || accepted.task.startsWith('intent-')) return accepted;
+		const id = accepted.task;
+		track([...new Set([...pending(), id])]);
+		for (let pause = 250; !disconnected; pause = Math.min(1600, pause + 150)) {
+			await delay(pause);
+			const info = await rpc('task', { task: id });
+			if (info.stage === 'running') continue;
+			track(pending().filter((x) => x !== id));
+			if (info.stage !== 'done') {
+				const failure = new Error(info.result?.error || info.error || '任务未完成');
+				if (method === 'subscription_write') {
+					failure.provider = info.result?.provider;
+					failure.tls = info.result?.tls;
+				}
+				throw failure;
+			}
+			return info.result?.ok === true ? info.result.data : info.result;
+		}
+		throw new DOMException('已离开页面', 'AbortError');
+	}
+	async function render() {
+		scope?.abort();
+		const controller = new AbortController();
+		scope = controller;
+		const { page, detail } = route();
+		for (const a of nav.children) {
+			if (a.hash === '#' + page) a.setAttribute('aria-current', 'page');
+			else a.removeAttribute('aria-current');
+		}
+		main.setAttribute('aria-busy', 'true');
+		try {
+			const [status, sourceList] = await Promise.all([
+				rpc('status'),
+				rpc('subscription_read', { action: 'list', args: {} }),
+			]);
+			if (controller.signal.aborted) return;
+			status.intent = status.saved;
+			const sources = sourceList.data || [];
+			const ui = {
+				h,
+				card,
+				rpc,
+				run,
+				go,
+				dialog,
+				notify,
+				name,
+				button,
+				memory,
+				page,
+				detail,
+				status,
+				sources,
+				upload,
+				signal: controller.signal,
+				refresh: render,
+			};
+			let kernelState;
+			ui.kernelStatus = () => kernelState ||= rpc('kernel_read', { action: 'status' });
+			ui.catalog = async () => {
+				const source = status.intent.source;
+				const selectedKernel = (await ui.kernelStatus()).selected || '';
+				const key = JSON.stringify([
+					selectedKernel, source,
+					sources.map((x) => [x.source, x.generation, x.epoch]),
+					status.intent.policy?.groups,
+				]);
+				if (catalogKey !== key) {
+					catalogKey = key;
+					names = new Map();
+					const primary = sources.find((s) => s.source === source);
+					catalogRequest = Promise.all(
+						primary?.ready ? [pages({ rpc }, source, 'nodes'), pages({ rpc }, source, 'groups')] : [[], []],
+					)
+						.then(([nodes, groups]) => {
+							const local = (status.intent.policy?.groups || []).map((g) => ({
+								...g,
+								kind: 'selector',
+								members: g.members.map((m) => m.node),
+							}));
+							const g = [...groups, ...local];
+							if (primary?.local)
+								g.unshift({
+									id: '@default',
+									name: '默认代理',
+									kind: 'selector',
+									members: nodes.filter((n) => !n.special).map((n) => n.id),
+								});
+							if (catalogKey === key) names = new Map([...nodes, ...g].map((x) => [x.id, x.name]));
+							return { nodes, groups: g, primary };
+						})
+						.catch((e) => {
+							if (catalogKey === key) catalogKey = '';
+							throw e;
+						});
+				}
+				return catalogRequest;
+			};
+			ui.poll = (callback, interval = 3500) => {
+				let timer;
+				const tick = async () => {
+					if (controller.signal.aborted) return;
+					if (!document.hidden) {
+						try {
+							await callback();
+						} catch (e) {
+							if (!controller.signal.aborted) notify(e.message);
+						}
+					}
+					if (!controller.signal.aborted) timer = setTimeout(tick, interval);
+				};
+				timer = setTimeout(tick, interval);
+				controller.signal.addEventListener('abort', () => clearTimeout(timer), { once: true });
+			};
+			const content = await views[page][1](ui);
+			if (controller.signal.aborted) return;
+			main.replaceChildren(content);
+			ui.afterRender?.();
+		} catch (e) {
+			if (!controller.signal.aborted)
+				main.replaceChildren(card('无法加载页面', h('p', {}, e.message), button('重试', render)));
+		} finally {
+			if (!controller.signal.aborted) main.setAttribute('aria-busy', 'false');
+		}
+	}
+	function changePage() {
+		for (const d of root.querySelectorAll('dialog[open]')) d.close();
+		render();
+	}
+	window.addEventListener('hashchange', changePage);
+	const observer = new MutationObserver(() => {
+		if (root.isConnected && !onceMounted) {
+			onceMounted = true;
+			render();
+		}
+		else if (!root.isConnected && onceMounted) dispose();
+	});
+	observer.observe(document.documentElement, { childList: true, subtree: true });
+	function dispose() {
+		disconnected = true;
+		scope?.abort();
+		clearTimeout(noticeTimer);
+		observer.disconnect();
+		window.removeEventListener('hashchange', changePage);
+	}
+	if (onceMounted) render();
+	async function restoreTasks() {
+		for (const id of pending()) {
+			try {
+				const task = await rpc('task', { task: id });
+				if (task.stage !== 'running') {
+					track(pending().filter((x) => x !== id));
+					if (task.stage !== 'done') notify(task.error || '上次任务未完成');
+					else render();
+				}
+			} catch (_) {
+				track(pending().filter((x) => x !== id));
+			}
+		}
+		if (!disconnected && pending().length) setTimeout(restoreTasks, 2000);
+	}
+	if (pending().length) restoreTasks();
+	return dispose;
+}

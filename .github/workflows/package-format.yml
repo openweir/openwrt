@@ -1,0 +1,97 @@
+name: Build and test the per-architecture OpenWrt packages
+on:
+  workflow_call:
+    inputs:
+      format:
+        type: string
+        required: true
+permissions:
+  contents: read
+jobs:
+  build:
+    name: Build per-architecture installers and upgrade fixtures
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.targets.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: runtime-*
+          merge-multiple: true
+          path: dist/runtime
+      - name: Package one installer per OpenWrt architecture
+        env:
+          FORMAT: ${{ inputs.format }}
+          OPENWEIR_FEED_MODE: test
+          OPENWEIR_RUNTIME_DIR: dist/runtime
+          OPENWEIR_MIHOMO_PUBLIC_KEY: ${{ vars.MIHOMO_PUBLISHER_KEY }}
+        run: |
+          case "$FORMAT" in ipk) sdk=24.10.8;; apk) sdk=25.12.6;; *) exit 1;; esac
+          for arch in $(go run ./cmd/openweir-release arches "$FORMAT"); do
+            OPENWEIR_PACKAGE_ARCH=$arch packaging/openwrt/build.sh "$sdk" x86_64 "$(cat VERSION)" "dist/feed/$arch"
+          done
+      - uses: actions/upload-artifact@v7
+        with:
+          name: test-feed-${{ inputs.format }}
+          path: dist/feed/
+          if-no-files-found: error
+          retention-days: 3
+      - name: Isolate the tested installers for publication
+        env:
+          FORMAT: ${{ inputs.format }}
+        run: |
+          set -eu
+          mkdir -p dist/release
+          version=$(cat VERSION)
+          for arch in $(go run ./cmd/openweir-release arches "$FORMAT"); do
+            name=$(go run ./cmd/openweir-release package-name "$version" "$FORMAT" "$arch")
+            (cd "dist/feed/$arch" && grep -F "  $name" SHA256SUMS | sha256sum --check -)
+            cp "dist/feed/$arch/$name" dist/release/
+          done
+          (cd dist/release && sha256sum -- * > ../release-sums && mv ../release-sums SHA256SUMS)
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-installer-${{ inputs.format }}
+          path: dist/release/
+          if-no-files-found: error
+          retention-days: 14
+      - id: targets
+        env:
+          FORMAT: ${{ inputs.format }}
+        run: echo "matrix=$(go run ./cmd/openweir-release matrix --format "$FORMAT")" >> "$GITHUB_OUTPUT"
+
+  install:
+    name: ${{ matrix.arch }} / ${{ matrix.firmware }}
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.build.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/download-artifact@v8
+        with:
+          name: test-feed-${{ inputs.format }}
+          path: dist/feed
+      - name: Enable target execution including MIPS32 and LoongArch
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends qemu-user-binfmt
+          sudo systemctl restart systemd-binfmt
+          for arch in aarch64 arm mips mipsel riscv64 loongarch64; do
+            grep -Eq '^flags: [A-Z]*F' "/proc/sys/fs/binfmt_misc/qemu-$arch"
+          done
+          if [ "${{ matrix.arch }}" = i386_pentium4 ]; then
+            # Go uses the i386 socketcall ABI, which hosted amd64 containers filter.
+            sudo /usr/lib/systemd/systemd-binfmt /usr/share/qemu/binfmt.d/qemu-i386.conf
+            grep -Eq '^flags: [A-Z]*F' /proc/sys/fs/binfmt_misc/qemu-i386
+          fi
+      - name: Install offline, verify the Release update and uninstall
+        run: packaging/openwrt/install-test.sh "${{ matrix.firmware }}" "${{ matrix.arch }}" "dist/feed/${{ matrix.arch }}"

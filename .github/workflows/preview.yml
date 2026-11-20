@@ -1,0 +1,107 @@
+# Previews as GitHub pre-releases: after Router service CI passes on a push to develop, its
+# tested installers go out as v<VERSION>-preview.<N> (N counts from 1 per version), so testers download them from
+# the release page instead of Actions artifacts. main holds what is to be released and makes the
+# releases (prepare-release.yml). The router's package updater skips pre-releases
+# (packaging/openwrt/package-update), and only the newest preview is kept.
+name: Publish OpenWrt preview
+on:
+  workflow_run:
+    workflows: [Router service CI]
+    branches: [develop]
+    types: [completed]
+permissions:
+  contents: write
+  actions: read
+
+concurrency:
+  group: openwrt-preview
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Skip a run that develop has moved past
+        id: current
+        run: |
+          set -euo pipefail
+          develop=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/develop" --jq .object.sha)
+          main=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)
+          if [[ "$main" == "$HEAD_SHA" ]]; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "main is at this commit; the release covers it, so no preview." >> "$GITHUB_STEP_SUMMARY"
+          elif [[ "$develop" == "$HEAD_SHA" ]]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "A later develop commit has superseded this CI run." >> "$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/download-artifact@v8
+        if: steps.current.outputs.publish == 'true'
+        with:
+          pattern: release-installer-*
+          path: dist/tested
+          github-token: ${{ github.token }}
+          run-id: ${{ github.event.workflow_run.id }}
+      - name: Verify both tested installers
+        if: steps.current.outputs.publish == 'true'
+        id: files
+        run: |
+          set -euo pipefail
+          version=$(cat VERSION)
+          go run ./cmd/openweir-release assets "$version" dist/tested dist/assets
+          (cd dist/assets && sha256sum --check ../SHA256SUMS)
+          # Previews of a version count from 1: the next number after this version's newest preview.
+          last=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName \
+            --jq "[.[].tagName | select(startswith(\"v$version-preview.\")) | ltrimstr(\"v$version-preview.\") | select(test(\"^[0-9]+\$\")) | tonumber] | max // 0")
+          number=$((last + 1))
+          echo "tag=v$version-preview.$number" >> "$GITHUB_OUTPUT"
+          echo "version=$version-preview.$number" >> "$GITHUB_OUTPUT"
+      - name: Publish the pre-release
+        if: steps.current.outputs.publish == 'true'
+        env:
+          TAG: ${{ steps.files.outputs.tag }}
+          VERSION: ${{ steps.files.outputs.version }}
+        run: |
+          set -euo pipefail
+          sums=$(cat dist/SHA256SUMS)
+          cat > notes.md <<EOF
+          OpenWeir for OpenWrt $VERSION 预览版，由 develop 上的 ${HEAD_SHA:0:7} 构建。
+
+          - 安装包内的版本号仍是 $(cat VERSION)，与之后的同版本正式版不同，请勿混用；正式版发布后请重新安装正式版。
+          - 路由器的「检查更新」不会提供预览版。
+          - 按路由器架构选包（文件名末尾即 OpenWrt 架构，如 \`_aarch64_cortex-a53\`）；23.05 / 24.10 用 \`.ipk\`，25.12 用 \`.apk\`。
+
+          \`\`\`text
+          $sums
+          \`\`\`
+          EOF
+          gh release create "$TAG" dist/assets/* dist/SHA256SUMS \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$HEAD_SHA" \
+            --title "$TAG" \
+            --notes-file notes.md \
+            --prerelease \
+            --latest=false
+      # Only the newest preview stays; the older ones go, with their tags.
+      - name: Remove older previews
+        if: steps.current.outputs.publish == 'true'
+        run: |
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName,isPrerelease,createdAt \
+            --jq '[.[] | select(.isPrerelease and (.tagName | test("^v.+-preview\\.[0-9]+$")))] | sort_by(.createdAt) | reverse | .[1:] | .[].tagName' |
+          while read -r tag; do
+            gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes
+          done

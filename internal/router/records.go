@@ -1,0 +1,229 @@
+package router
+
+import (
+	"bytes"
+	"github.com/openweir/openwrt/internal/control"
+	"regexp"
+	"strings"
+	"sync"
+	"time"
+)
+
+const recordLimit = 512
+
+type Event struct {
+	Count   int    `json:"count,omitempty"`
+	Time    int64  `json:"time"`
+	Source  string `json:"source"`
+	Level   string `json:"level"`
+	Message string `json:"message"`
+}
+type Records struct {
+	minTime     int64
+	mu          sync.Mutex
+	events      []Event
+	connections []control.Connection
+	index       map[string]int
+	pos         int
+}
+
+func NewRecords() *Records { return &Records{index: map[string]int{}} }
+func (r *Records) Log(source, level, message string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	now := time.Now().UnixMilli()
+	if (source == "core" || source == "dns") && len(r.events) > 0 {
+		last := &r.events[len(r.events)-1]
+		if last.Source == source && last.Level == level && last.Message == message && now >= last.Time && now-last.Time <= 5000 {
+			last.Count = max(last.Count, 1) + 1
+			last.Time = now
+			return
+		}
+	}
+	if len(r.events) == recordLimit {
+		copy(r.events, r.events[1:])
+		r.events = r.events[:recordLimit-1]
+	}
+	r.events = append(r.events, Event{Time: now, Source: source, Level: level, Message: message})
+}
+
+// Core stderr is free form, and can contain signed URLs or full config values.
+// Keep a bounded redacted event without echoing attacker-controlled content.
+type logSink struct {
+	r        *Records
+	line     []byte
+	terminal string // read after the process and its stderr reader have exited
+}
+
+// os/exec can deliver partial lines and multiple lines in one write. Keep a
+// bounded prefix while waiting for the delimiter, even for malformed output.
+func (s *logSink) Write(p []byte) (int, error) {
+	count := len(p)
+	for len(p) > 0 {
+		end := bytes.IndexByte(p, '\n')
+		n := end
+		if n < 0 {
+			n = len(p)
+		}
+		s.line = append(s.line, p[:min(n, 4096-len(s.line))]...)
+		if end < 0 {
+			break
+		}
+		s.flush()
+		p = p[end+1:]
+	}
+	return count, nil
+}
+func (s *logSink) flush() {
+	if line := strings.TrimSpace(string(s.line)); line != "" {
+		s.recordLine(line)
+	}
+	s.line = s.line[:0]
+}
+
+// Mihomo may color its log headers even when stderr is a pipe.
+var logColor = regexp.MustCompile("\x1b\\[[0-9;]*m")
+
+func corePermissionReason(line string) string {
+	switch {
+	case strings.Contains(line, "fswatch: watch /etc/openweir/rulesets:"), strings.Contains(line, "fswatch: watch /usr/share/openweir/rules:"):
+		return "core_rule_watch_permission"
+	case strings.Contains(line, "/var/run/openweir/mihomo/rulesets/"), strings.Contains(line, "/etc/openweir/rulesets/"), strings.Contains(line, "/usr/share/openweir/rules/"):
+		return "core_rule_file_permission"
+	case strings.Contains(line, "/etc/openweir/mihomo-kernel/configs/"):
+		return "core_config_file_permission"
+	case strings.Contains(line, "/dev/net/tun"):
+		return "core_tun_device_permission"
+	case strings.Contains(line, "/var/run/openweir/core/"), strings.Contains(line, "/tmp/run/openweir/core/"):
+		return "core_work_file_permission"
+	case strings.Contains(line, "ping_group_range"), strings.Contains(line, "listen ip4:icmp"), strings.Contains(line, "listen ip6:ipv6-icmp"), strings.Contains(line, "icmp socket"):
+		return "core_icmp_socket_permission"
+	case strings.Contains(line, "ip_transparent"), strings.Contains(line, "transparent socket"), strings.Contains(line, "set transparent"), strings.Contains(line, "ipv6_transparent"):
+		return "core_tproxy_socket_permission"
+	case strings.Contains(line, "so_mark"), strings.Contains(line, "set routing mark"):
+		return "core_route_mark_permission"
+	case strings.Contains(line, "listen tcp"), strings.Contains(line, "listen udp"), strings.Contains(line, "bind:"):
+		return "core_listener_permission"
+	case strings.Contains(line, "capset"), strings.Contains(line, "pr_cap_ambient"), strings.Contains(line, "raising capability"):
+		return "core_capability_permission"
+	case strings.Contains(line, "pthread_create"), strings.Contains(line, "failed to create new os thread"):
+		return "core_thread_creation_failed"
+	default:
+		return "permission_denied"
+	}
+}
+
+func (s *logSink) recordLine(line string) {
+	if strings.Contains(line, "\x1b") {
+		line = logColor.ReplaceAllString(line, "")
+	}
+	line = strings.ToLower(line)
+	level := "warn"
+	fatal := false
+	// Only a leading log level (optionally after a timestamp) can classify a
+	// process exit. Free-form DNS names, server names and paths stay private.
+	for i, field := range strings.Fields(line) {
+		if i > 3 {
+			break
+		}
+		field = strings.TrimPrefix(field, "level=")
+		field, _, _ = strings.Cut(field, "[")
+		switch strings.Trim(field, "[]:") {
+		case "fatal", "panic":
+			level, fatal = "error", true
+		case "error":
+			level = "error"
+		case "warn", "warning":
+			level = "warn"
+		case "info", "debug", "trace":
+			return
+		default:
+			continue
+		}
+		break
+	}
+	source := "core"
+	if strings.Contains(line, "dns:") || strings.Contains(line, "dns/") {
+		source = "dns"
+	}
+	reason := "core_diagnostic"
+	if strings.Contains(line, "permission denied") || strings.Contains(line, "operation not permitted") {
+		reason = corePermissionReason(line)
+	} else {
+		for _, x := range []struct{ needle, reason string }{{"address already in use", "listen_address_in_use"}, {"connection refused", "connection_refused"}, {"network is unreachable", "network_unreachable"}, {"i/o timeout", "io_timeout"}, {"context deadline exceeded", "deadline_exceeded"}, {"no such host", "dns_name_not_found"}, {"certificate", "tls_certificate_error"}, {"handshake", "handshake_failed"}, {"no space left", "disk_full"}, {"invalid config", "invalid_configuration"}, {"failed to create new os thread", "core_thread_creation_failed"}, {"pthread_create failed", "core_thread_creation_failed"}} {
+			if strings.Contains(line, x.needle) {
+				reason = x.reason
+				break
+			}
+		}
+	}
+	if fatal && reason != "core_diagnostic" {
+		s.terminal = reason
+	}
+	s.r.Log(source, level, reason)
+}
+
+func (r *Records) Observe(c control.Connection) {
+	c = sliceConnection(c)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if c.Created != 0 && c.Created <= r.minTime {
+		return
+	}
+	if idx, ok := r.index[c.ID]; ok {
+		old := r.connections[idx]
+		if c.Created != 0 {
+			old = c
+		}
+		if c.Closed != 0 {
+			old.Closed = c.Closed
+		}
+		if c.Result == "traffic_observed" {
+			old.Result = c.Result
+		}
+		r.connections[idx] = old
+		return
+	}
+	if c.Created == 0 && c.Destination == "" {
+		return
+	}
+	if len(r.connections) < recordLimit {
+		r.index[c.ID] = len(r.connections)
+		r.connections = append(r.connections, c)
+	} else {
+		delete(r.index, r.connections[r.pos].ID)
+		r.index[c.ID] = r.pos
+		r.connections[r.pos] = c
+		r.pos = (r.pos + 1) % recordLimit
+	}
+}
+func (r *Records) Page(kind string, offset, limit int) any {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	limit = min(max(limit, 1), 100)
+	offset = max(offset, 0)
+	if kind == "logs" {
+		out := []Event{}
+		for j := len(r.events) - 1 - offset; j >= 0 && len(out) < limit; j-- {
+			out = append(out, r.events[j])
+		}
+		return out
+	}
+	out := []control.Connection{}
+	for j := len(r.connections) - 1 - offset; j >= 0 && len(out) < limit; j-- {
+		out = append(out, r.connections[(j+r.pos)%len(r.connections)])
+	}
+	return out
+}
+func (r *Records) Clear(kind string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if kind == "logs" {
+		r.events = nil
+	} else {
+		r.minTime = time.Now().UnixMilli()
+		r.connections = nil
+		r.index = map[string]int{}
+		r.pos = 0
+	}
+}

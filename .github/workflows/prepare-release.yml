@@ -1,0 +1,112 @@
+name: Publish OpenWrt release
+on:
+  workflow_run:
+    workflows: [Router service CI]
+    branches: [main]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      test_run:
+        description: Successful Router service CI run for this main or tag commit
+        required: true
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: openwrt-production-release
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    outputs:
+      test_run: ${{ steps.plan.outputs.test_run }}
+      version: ${{ steps.plan.outputs.version }}
+      commit: ${{ steps.plan.outputs.commit }}
+      publish: ${{ steps.plan.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
+      - name: Verify the tested commit and repository version
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TEST_RUN: ${{ github.event.workflow_run.id || inputs.test_run }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          commit=$(git rev-parse 'HEAD^{commit}')
+          main=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)
+          if [[ "$GITHUB_EVENT_NAME" == workflow_run && "$commit" != "$main" ]]; then
+            printf 'publish=false\n' >> "$GITHUB_OUTPUT"
+            echo "A later main commit has superseded this CI run." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          echo "test_run=$TEST_RUN" >> "$GITHUB_OUTPUT"
+          version=$(cat VERSION)
+          [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          tag="v$version"
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            [[ "$GITHUB_REF_NAME" == "$tag" ]]
+          else
+            [[ "$GITHUB_REF" == refs/heads/main ]]
+          fi
+          [[ "$TEST_RUN" =~ ^[0-9]+$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$TEST_RUN" > "$RUNNER_TEMP/ci.json"
+          jq -e --arg sha "$commit" --arg repo "$GITHUB_REPOSITORY" '
+            .head_sha==$sha and .head_repository.full_name==$repo and .head_branch=="main" and
+            (.event=="push" or .event=="workflow_dispatch") and .path==".github/workflows/test.yml" and
+            .status=="completed" and .conclusion=="success"' "$RUNNER_TEMP/ci.json"
+          gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[]|select(.draft==false)|.tag_name' > "$RUNNER_TEMP/public-tags"
+          publish=false
+          if [[ "$main" == "$commit" ]] && ! grep -Fxq "$tag" "$RUNNER_TEMP/public-tags"; then
+            newest=$( { sed -nE '/^v[0-9]+\.[0-9]+\.[0-9]+$/p' "$RUNNER_TEMP/public-tags"; echo "$tag"; } | sort -V | tail -1 )
+            [[ "$newest" == "$tag" ]] || { echo "::error::VERSION is older than an existing release."; exit 1; }
+            publish=true
+          else
+            echo "No release needed for $tag at $commit." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          printf 'version=%s\ncommit=%s\npublish=%s\n' "$version" "$commit" "$publish" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: qualify
+    if: needs.qualify.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: write
+    env:
+      VERSION: ${{ needs.qualify.outputs.version }}
+      COMMIT: ${{ needs.qualify.outputs.commit }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.qualify.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: release-installer-*
+          path: dist/tested
+          github-token: ${{ github.token }}
+          run-id: ${{ needs.qualify.outputs.test_run }}
+      - name: Verify both tested installers and render installation notes
+        run: |
+          set -eu
+          go run ./cmd/openweir-release assets "$VERSION" dist/tested dist/assets
+          (cd dist/assets && sha256sum --check ../SHA256SUMS)
+          go run ./cmd/openweir-release notes "$GITHUB_REPOSITORY" "$VERSION" dist/assets > dist/notes.md
+      - name: Publish the verified draft for the current main commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          go run ./cmd/openweir-release publish --repo "$GITHUB_REPOSITORY" --tag "v$VERSION" --commit "$COMMIT" --assets dist/assets --notes dist/notes.md

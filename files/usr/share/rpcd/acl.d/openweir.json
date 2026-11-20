@@ -1,0 +1,62 @@
+{
+  "openweir": {
+    "description": "Manage OpenWeir routing on this router",
+    "read": {
+      "ubus": {
+        "openweir": [
+          "environment",
+          "devices",
+          "kernel_impact",
+          "network_preferences",
+          "custom_rules",
+          "plugin_check",
+          "routes",
+          "traffic",
+          "latencies",
+          "status",
+          "groups",
+          "live_groups",
+          "logs",
+          "connections",
+          "live_rules",
+          "task",
+          "subscription_read",
+          "kernel_read",
+          "conflicts"
+        ]
+      }
+    },
+    "write": {
+      "ubus": {
+        "openweir": [
+          "health_check",
+          "save_network",
+          "save_rules",
+          "plugin_update",
+          "test_nodes",
+          "cancel_tests",
+          "start",
+          "stop",
+          "mode",
+          "source",
+          "policy",
+          "select_node",
+          "clear",
+          "close_connection",
+          "subscription_write",
+          "kernel_write",
+          "confirm_conflicts",
+          "kernel_upload"
+        ]
+      },
+      "cgi-io": [
+        "upload"
+      ],
+      "file": {
+        "/tmp/openweir-upload/*/*.gz": [
+          "write"
+        ]
+      }
+    }
+  }
+}

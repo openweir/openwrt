@@ -1,0 +1,150 @@
+name: Router service CI
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  # main and develop often point at one commit after a release; main's run covers it, so the
+  # develop run skips every check and the preview workflow publishes nothing.
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.same.outputs.run }}
+    steps:
+      - id: same
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          run=true
+          if [ "$GITHUB_EVENT_NAME" = push ] && [ "$GITHUB_REF" = refs/heads/develop ] &&
+             [ "$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)" = "$GITHUB_SHA" ]; then
+            run=false
+            echo "main is at this commit; its CI run covers it." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+  core:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    name: Router configuration and authenticated mihomo controller
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: openweir/mihomo
+          ref: 15fb245e92789566cff12e3060ae861534dcf892
+          path: .ci-mihomo
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Build the pinned Linux core
+        working-directory: .ci-mihomo
+        run: CGO_ENABLED=0 go build -trimpath -tags with_gvisor -o "$RUNNER_TEMP/mihomo" .
+      - name: Exercise the real core on loopback
+        run: |
+          go test -c -o "$RUNNER_TEMP/router.test" ./internal/router
+          go test -c -o "$RUNNER_TEMP/control.test" ./internal/control
+          sudo unshare --net sh -ec '
+            ip link set lo up
+            export OPENWEIR_MIHOMO_TEST_CORE="$1/mihomo"
+            export OPENWEIR_DIAGNOSTIC_CORE="$1/mihomo" OPENWEIR_TEST_CORE="$1/mihomo"
+            "$1/control.test" -test.v -test.run "^TestMihomoController$"
+            "$1/router.test" -test.v -test.run "^Test(UpstreamCoreControl|WireSharedOutbound)$"
+          ' sh "$RUNNER_TEMP"
+      - name: Install the publisher's latest stable ARM64 asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # openweir/mihomo releases stable kernels as openweir-vX.Y.Z from main; its Alpha
+          # branch mirrors upstream and publishes no OpenWeir prerelease.
+          gh api repos/openweir/mihomo/releases/latest > "$RUNNER_TEMP/release.json"
+          tag=$(jq -er '.tag_name | select(test("^openweir-v[0-9]+\\.[0-9]+\\.[0-9]+$"))' "$RUNNER_TEMP/release.json")
+          name="mihomo-linux-arm64-$tag.gz"
+          digest=$(jq -er --arg name "$name" '
+            [.assets[] | select(.name == $name)] | select(length == 1) | .[0].digest |
+            capture("^sha256:(?<hash>[0-9a-f]{64})$").hash
+          ' "$RUNNER_TEMP/release.json")
+          gh release download "$tag" --repo openweir/mihomo --pattern "$name" --dir "$RUNNER_TEMP"
+          export OPENWEIR_RELEASE_TEST_ARCHIVE="$RUNNER_TEMP/$name"
+          export OPENWEIR_RELEASE_TEST_TAG="$tag" OPENWEIR_RELEASE_TEST_SHA256="$digest"
+          go test -count=1 -run '^TestPublishedARM64Archive$' ./internal/kernel
+  browser:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    name: LuCI navigation and interactions
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - name: Install test browser
+        run: |
+          npm install --prefix "$RUNNER_TEMP/ui" --no-save playwright@1.62.1
+          "$RUNNER_TEMP/ui/node_modules/.bin/playwright" install --with-deps chromium
+      - run: OPENWEIR_PLAYWRIGHT="$RUNNER_TEMP/ui/node_modules/playwright/index.mjs" node scripts/qualification/ui/check.mjs
+  source:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check router shell scripts
+        run: |
+          set -eu
+          curl -fsSL -o "$RUNNER_TEMP/shellcheck.tar.xz" \
+            https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
+          echo "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  $RUNNER_TEMP/shellcheck.tar.xz" | sha256sum --check -
+          tar -xJf "$RUNNER_TEMP/shellcheck.tar.xz" -C "$RUNNER_TEMP"
+          "$RUNNER_TEMP/shellcheck-v0.11.0/shellcheck" --shell=busybox --severity=warning --external-sources --check-sourced \
+            --source-path=SCRIPTDIR files/usr/libexec/openweir/network \
+            files/usr/libexec/openweir/{procd-delete,tun-jail} files/usr/libexec/rpcd/openweir \
+            files/etc/init.d/openweir files/etc/hotplug.d/*/*-openweir \
+            packaging/openwrt/{activate-runtime,runtime-abi,package-update,package-recovery}
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go test -race ./...
+      - run: go vet ./...
+
+  runtime:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
+    name: Build offline management runtime / ${{ matrix.abi }}
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [amd64, '386', arm64, arm5, arm6, arm7, mips, mipsle, riscv64, loong64]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Cross-compile the bundled management commands
+        env:
+          OPENWEIR_MIHOMO_PUBLIC_KEY: ${{ vars.MIHOMO_PUBLISHER_KEY }}
+          ABI: ${{ matrix.abi }}
+        run: packaging/openwrt/build-runtime.sh "$ABI" "$(cat VERSION)" dist/runtime
+      - uses: actions/upload-artifact@v7
+        with:
+          name: runtime-${{ matrix.abi }}
+          path: dist/runtime/
+          if-no-files-found: error
+          retention-days: 7
+  ipk:
+    name: Universal IPK
+    needs: [source, runtime]
+    uses: ./.github/workflows/package-format.yml
+    with:
+      format: ipk
+  apk:
+    name: Universal APK
+    needs: [source, runtime]
+    uses: ./.github/workflows/package-format.yml
+    with:
+      format: apk

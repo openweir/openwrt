@@ -1,0 +1,356 @@
+package router
+
+import (
+	"bufio"
+	"context"
+
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/netip"
+	"os"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"time"
+
+	"github.com/openweir/openwrt/internal/control"
+	"gopkg.in/yaml.v3"
+)
+
+func pulse() error { return Atomic(RunDir+"/pulse", []byte("ok\n"), 0600) }
+func (s *System) ready(ctx context.Context) error {
+	c, stop := context.WithTimeout(ctx, 1500*time.Millisecond)
+	defer stop()
+	if _, e := s.Client().Version(c); e != nil {
+		return errors.New("local core control unavailable")
+	}
+	conn, e := (&net.Dialer{}).DialContext(c, "tcp", "127.0.0.1:19763")
+	if e != nil {
+		return errors.New("local proxy listener unavailable")
+	}
+	defer conn.Close()
+	deadline, _ := c.Deadline()
+	_ = conn.SetDeadline(deadline)
+	if _, e = conn.Write([]byte{5, 1, 0}); e != nil {
+		return e
+	}
+	var reply [2]byte
+	if _, e = io.ReadFull(conn, reply[:]); e != nil || reply != [2]byte{5, 0} {
+		return errors.New("local proxy negotiation failed")
+	}
+	s.mu.Lock()
+	dns, method, v6 := s.dns, s.method, s.family6
+	s.mu.Unlock()
+	if method == "tun" {
+		tun, e := net.InterfaceByName("owtun0")
+		if e != nil || tun.Flags&net.FlagUp == 0 {
+			return errors.New("local TUN not ready")
+		}
+	} else if method == "tproxy" {
+		if !listening("tcp", v6) || !listening("udp", v6) {
+			return errors.New("transparent listeners not ready")
+		}
+	}
+	if dns {
+		return probeDNS(c, DNSPort)
+	}
+	return nil
+}
+func listening(protocol string, need6 bool) bool {
+	for _, suffix := range []string{"", "6"} {
+		if need6 && suffix == "" {
+			continue
+		}
+		f, e := os.Open("/proc/net/" + protocol + suffix)
+		if e != nil {
+			continue
+		}
+		// Avoid materializing the system connection table on low-memory routers.
+		sc := bufio.NewScanner(f)
+		found := false
+		for sc.Scan() {
+			fields := strings.Fields(sc.Text())
+			if len(fields) < 4 || protocol == "tcp" && fields[3] != "0A" || protocol == "udp" && fields[3] != "07" {
+				continue
+			}
+			addr, port, ok := strings.Cut(fields[1], ":")
+			if ok && strings.EqualFold(port, "4D32") && strings.Trim(addr, "0") == "" {
+				found = true
+				break
+			}
+		}
+		f.Close()
+		if found {
+			return true
+		}
+	}
+	return false
+}
+func (s *System) beat(ctx context.Context) error {
+	if e := s.ready(ctx); e != nil {
+		return e
+	}
+	return pulse()
+}
+func (s *System) verify(ctx context.Context) error {
+	if e := s.ready(ctx); e != nil {
+		return e
+	}
+	_, e := command(ctx, networkHelper, "verify")
+	return e
+}
+func (s *System) Healthy(ctx context.Context) error {
+	s.mu.Lock()
+	audit := s.audit
+	s.mu.Unlock()
+	if audit != nil {
+		if failure := audit.err.Load(); failure != nil {
+			return *failure
+		}
+	}
+	if _, e := os.Stat(RunDir + "/network/owned"); e != nil {
+		return errors.New("network ownership lost")
+	}
+	return s.beat(ctx)
+}
+
+// Verify firewall, RPDB, managed LAN DNS and management access out of band.
+// A slow but healthy low-power router must still renew its local heartbeat
+// while nft/ubus or a LAN DNS query is in progress.
+type routingAudit struct{ err atomic.Pointer[error] }
+
+func (a *routingAudit) run(ctx context.Context) {
+	delay := 30 * time.Second
+	misses := 0
+	for ctxWait(ctx, delay) == nil {
+		probe, end := context.WithTimeout(ctx, 10*time.Second)
+		_, e := command(probe, networkHelper, "verify")
+		end()
+		if e == nil {
+			a.err.Store(nil)
+			misses = 0
+			delay = 30 * time.Second
+			continue
+		}
+		misses++
+		delay = 2 * time.Second
+		if misses >= 3 {
+			a.err.Store(&e)
+		}
+	}
+}
+
+// The last completed probe can be much more informative than a canceled
+// socket read performed as the startup deadline expires.
+func startupTimeout(ctx context.Context, stage string, last error) error {
+	if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return ctx.Err()
+	}
+	if last == nil {
+		return fmt.Errorf("%s: %w", stage, ctx.Err())
+	}
+	return fmt.Errorf("%s: %w (last failed check: %w)", stage, ctx.Err(), last)
+}
+
+func waitCoreReady(ctx context.Context, exited <-chan struct{}, interval time.Duration, ready func(context.Context) error) error {
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	var last error
+	for {
+		select {
+		case <-exited:
+			return errors.New("core exited during startup")
+		default:
+		}
+		err := ready(ctx)
+		if ctx.Err() != nil {
+			if last == nil {
+				last = err
+			}
+			return startupTimeout(ctx, "waiting for local core readiness", last)
+		}
+		if err == nil {
+			return nil
+		}
+		last = err
+		select {
+		case <-ctx.Done():
+			return startupTimeout(ctx, "waiting for local core readiness", last)
+		case <-exited:
+			return errors.New("core exited during startup")
+		case <-t.C:
+		}
+	}
+}
+
+// Full-path checks establish the confirmation window. The core and network
+// have already passed startup and apply checks on entry. A slow first LAN
+// check must keep renewing the independent heartbeat while the core is ready.
+func confirmWindow(ctx context.Context, window, interval, heartbeat time.Duration, check, beat func(context.Context) error) error {
+	c, stop := context.WithCancel(ctx)
+	done := make(chan struct{})
+	var mayHeartbeat atomic.Bool
+	mayHeartbeat.Store(true)
+	var beatFailure atomic.Pointer[error]
+	go func() {
+		defer close(done)
+		t := time.NewTicker(heartbeat)
+		defer t.Stop()
+		for {
+			select {
+			case <-c.Done():
+				return
+			case <-t.C:
+				if mayHeartbeat.Load() {
+					if err := beat(c); err != nil && c.Err() == nil {
+						beatFailure.Store(&err)
+					}
+				}
+			}
+		}
+	}()
+	defer func() { stop(); <-done }()
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	var since time.Time
+	var lastFailure error
+	for {
+		err := check(ctx)
+		if failure := beatFailure.Swap(nil); failure != nil {
+			since = time.Time{}
+			lastFailure = *failure
+		}
+		if ctx.Err() != nil {
+			if lastFailure == nil {
+				lastFailure = err
+			}
+			return startupTimeout(ctx, "confirming core and LAN health", lastFailure)
+		}
+		mayHeartbeat.Store(err == nil)
+		if err == nil {
+			now := time.Now()
+			if since.IsZero() {
+				since = now
+			}
+			if now.Sub(since) >= window {
+				return nil
+			}
+		} else {
+			if window == 0 {
+				return err
+			}
+			since = time.Time{}
+			lastFailure = err
+		}
+		select {
+		case <-ctx.Done():
+			if failure := beatFailure.Load(); failure != nil {
+				lastFailure = *failure
+			}
+			return startupTimeout(ctx, "confirming core and LAN health", lastFailure)
+		case <-t.C:
+		}
+	}
+}
+func (s *System) Selected(ctx context.Context) (map[string]string, error) {
+	c, stop := context.WithTimeout(ctx, 2*time.Second)
+	defer stop()
+	gs, e := s.Client().Groups(c)
+	if e != nil {
+		return nil, e
+	}
+	ret := make(map[string]string, len(gs))
+	for _, g := range gs {
+		ret[g.Tag] = g.Selected
+	}
+	return ret, nil
+}
+func (s *System) verifyChoices(ctx context.Context, config []byte) error {
+	var cfg struct {
+		Groups []struct {
+			Name, Type string
+			Default    string `yaml:"default-selected"`
+			Proxies    []string
+		} `yaml:"proxy-groups"`
+	}
+	if e := yaml.Unmarshal(config, &cfg); e != nil {
+		return e
+	}
+	selections, e := s.Selected(ctx)
+	if e != nil {
+		return e
+	}
+	for _, g := range cfg.Groups {
+		if g.Type == "select" && g.Default != "" && coreTarget(selections[g.Name]) != g.Default {
+			return errors.New("core did not confirm saved group selection")
+		}
+	}
+	return nil
+}
+func probeDNS(ctx context.Context, port int) error {
+	r := &net.Resolver{PreferGo: true, Dial: func(c context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(c, network, net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	}}
+	ans, e := r.LookupNetIP(ctx, "ip4", "probe.openweir.invalid.")
+	if e != nil || len(ans) != 1 || ans[0].Unmap() != netip.MustParseAddr("192.0.2.1") {
+		return errors.New("local core DNS answer unavailable")
+	}
+	return nil
+}
+
+// Guard has its own procd process. The router boot clock may step at any time,
+// so missed-heartbeat detection compares file identity across monotonic ticks.
+func Guard(ctx context.Context) error {
+	tick := time.NewTicker(2 * time.Second)
+	defer tick.Stop()
+	var previous os.FileInfo
+	miss := 0
+	for {
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-tick.C:
+			if _, e := os.Stat(RunDir + "/network/owned"); os.IsNotExist(e) {
+				miss = 0
+				previous = nil
+				continue
+			}
+			current, e := os.Stat(RunDir + "/pulse")
+			if e == nil {
+				token, keyErr := os.ReadFile(Root + "/private/control.token")
+				if keyErr != nil || len(token) != 64 {
+					e = errors.New("core credential unavailable")
+				} else {
+					c, end := context.WithTimeout(ctx, 700*time.Millisecond)
+					_, e = (control.Client{Secret: string(token)}).Version(c)
+					end()
+					if e == nil {
+						// A live API can coexist with a blocked DNS listener. Probe the
+						// local synthetic answer only after DNS takeover is established.
+						if _, statErr := os.Stat(RunDir + "/network/dns-probed"); statErr == nil {
+							c, end := context.WithTimeout(ctx, 700*time.Millisecond)
+							e = probeDNS(c, DNSPort)
+							end()
+						}
+					}
+				}
+			}
+			if e != nil || previous != nil && os.SameFile(previous, current) && previous.ModTime() == current.ModTime() {
+				miss++
+			} else {
+				miss = 0
+				previous = current
+			}
+			if miss >= 3 {
+				c, end := context.WithTimeout(ctx, 12*time.Second)
+				_, e = command(c, networkHelper, "fault")
+				end()
+				if e == nil {
+					miss = 0
+				}
+			}
+		}
+	}
+}

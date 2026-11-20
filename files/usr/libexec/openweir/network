@@ -1,0 +1,415 @@
+#!/bin/sh
+# The caller supplies one verb. Interfaces and DNS directories come from netifd
+# and the running dnsmasq instances, never from an RPC request.
+set -eu
+umask 077
+. "${0%/*}/firewall-backend"
+devices() {
+ for net in $(uci -q get openweir.main.network); do
+  case "$net" in ''|*[!a-zA-Z0-9_]*) return 1 ;; esac
+  dev=$(ubus call "network.interface.$net" status | jsonfilter -e '@.l3_device')
+  case "$dev" in ''|*[!a-zA-Z0-9_.-]*) return 1 ;; esac
+  [ "$dev" != lo ] && [ -e "/sys/class/net/$dev" ] || return 1
+  echo "$dev"
+ done
+}
+dnsdirs() {
+ # Netifd returns only validated kernel interface names in devices().
+ # shellcheck disable=SC2086
+ openweir-net dns-directories $interfaces
+}
+case "${1:-}" in
+ environment) firewall_status; exit 0 ;;
+ capabilities) firewall_capabilities all; exit 0 ;;
+ prerequisites) firewall_capabilities selected; exit $? ;;
+esac
+state=/var/run/openweir/network
+mkdir -p "$state"
+exec 9>"$state/lock"
+attempt=0
+while ! flock -n 9; do
+ [ "$attempt" -lt 8 ] || exit 1
+ attempt=$((attempt+1))
+ sleep 1
+done
+table=21998
+mark=0x4f57
+proto=199
+note=openweir-owned-v1
+port=19762
+dnsfile=99-openweir-upstream.conf
+. "${0%/*}/fault-policy"
+
+stage=initializing
+apply_started=0
+fail_stage() { printf '%s\n' "$1" >"$state/error.new" && mv -f "$state/error.new" "$state/error"; }
+firewall_held=
+lock_firewall() {
+ [ "$firewall_held" != "$1" ] || return 0
+ [ -z "$firewall_held" ] || return 1
+ # Both OpenWrt firewalls hold this same lock across their rule commits.
+ exec 8>"/var/run/$1.lock" || return 1
+ count=0
+ until flock -n 8; do
+  count=$((count+1))
+  if [ "$count" -ge 8 ]; then exec 8>&-; return 1; fi
+  sleep 1
+ done
+ firewall_held=$1
+}
+unlock_firewall() {
+ if [ -n "$firewall_held" ]; then flock -u 8; exec 8>&-; firewall_held=; fi
+}
+owned_table() {
+ [ "$(nft -j list table inet openweir 2>/dev/null | jsonfilter -e '@.nftables[*].table.comment' 2>/dev/null)" = "$note" ]
+}
+valid_dir() {
+ case "$1" in /tmp/*|/var/*) ;; *) return 1 ;; esac
+ case "$1" in */../*|*/..|*' '*) return 1 ;; esac
+ [ -d "$1" ] && [ ! -L "$1" ]
+}
+dns_restore() {
+ [ -e "$state/dns" ] || return 0
+ while IFS= read -r dir; do
+  [ -d "$dir" ] || continue
+  valid_dir "$dir" || return 1
+  file="$dir/$dnsfile"
+  if [ -f "$file" ]; then
+   grep -Fqx '# OpenWeir managed upstream' "$file" || return 1
+   rm -f "$file"
+  fi
+ done <"$state/dns"
+ /etc/init.d/dnsmasq restart || return 1
+ rm -f "$state/dns"
+}
+dns_setup() {
+ if ! dnsdirs >"$state/dns.raw"; then
+  read -r prefix issue <"$state/dns.raw" && [ "$prefix" = missing ] && stage=$issue
+  return 1
+ fi
+ sort -u "$state/dns.raw" >"$state/dns.new"
+ rm -f "$state/dns.raw"
+ [ -s "$state/dns.new" ] || { echo 'dnsmasq include directories unavailable' >&2; return 1; }
+ while IFS= read -r dir; do valid_dir "$dir" && [ ! -e "$dir/$dnsfile" ] || return 1; done <"$state/dns.new"
+ mv "$state/dns.new" "$state/dns"
+ while IFS= read -r dir; do
+  tmp=$(mktemp "$dir/.openweir.XXXXXX")
+  printf '%s\n' '# OpenWeir managed upstream' 'no-resolv' 'server=127.0.0.1#19764' 'server=/probe.openweir.invalid/127.0.0.1#19764' 'rebind-domain-ok=/probe.openweir.invalid/' >"$tmp"
+  chmod 0644 "$tmp"; mv -f "$tmp" "$dir/$dnsfile"
+ done <"$state/dns"
+ /etc/init.d/dnsmasq restart
+}
+clean_routes() {
+ family=$1
+ [ -e "$state/route$family" ] || return 0
+ # Only delete a route with our table number, protocol and nexthop.
+ if ip -N "-$family" rule show | grep -Eq '^21998:.*fwmark 0x4f57/0xffff.*lookup 21998 proto 199([[:space:]]|$)' ; then
+  ip "-$family" rule del pref "$table" fwmark "$mark/0xffff" table "$table" protocol "$proto" || return 1
+ fi
+ routes=$(ip "-$family" route show table "$table" proto "$proto" 2>/dev/null || :)
+ if printf '%s\n' "$routes" | grep -Eq '^prohibit default '; then
+  ip "-$family" route del prohibit default metric 32760 table "$table" proto "$proto" || return 1
+ fi
+ if printf '%s\n' "$routes" | grep -Eq '^(local )?default dev '; then
+  case "$(cat "$state/route$family")" in tun) ip "-$family" route del default dev owtun0 table "$table" proto "$proto" ;;
+   tproxy) ip "-$family" route del local default dev lo table "$table" proto "$proto" ;; *) return 1 ;; esac
+ fi
+ rm -f "$state/route$family"
+}
+release_active() {
+ failure=0
+ if [ -e "$state/fw4" ] || [ "$(cat "$state/backend" 2>/dev/null)" = fw4 ] || { command -v nft >/dev/null && owned_table; }; then
+  if lock_firewall fw4; then
+   if [ -e "$state/fw4" ]; then remove_fw4 || { failure=1; fail_stage fw4_restore; }; fi
+   if ! tables=$(nft list tables); then failure=1; fail_stage firewall_inspection
+   elif printf '%s\n' "$tables" | grep -Fqx 'table inet openweir'; then
+    if ! nft -j list table inet openweir >/dev/null; then failure=1; fail_stage firewall_inspection
+    elif owned_table; then nft delete table inet openweir || { failure=1; fail_stage firewall_release; }; fi
+   fi
+  else failure=1; fail_stage fw4_restore; fi
+  unlock_firewall
+ fi
+ if [ -e "$state/fw3.4" ] || [ -e "$state/fw3.6" ]; then
+  if lock_firewall fw3; then
+   for family in 4 6; do legacy_remove "$family" || { failure=1; fail_stage fw3_restore; }; done
+  else failure=1; fail_stage fw3_restore; fi
+  unlock_firewall
+ fi
+ dns_restore || { failure=1; fail_stage dns_restore; }
+ clean_routes 4 || { failure=1; fail_stage ipv4_restore; }
+ clean_routes 6 || { failure=1; fail_stage ipv6_restore; }
+ if [ "$failure" -eq 0 ] && [ -e "$state/owned" ]; then
+  restored=0
+  for _ in 1 2 3 4; do if verify_direct; then restored=1; break; fi; sleep 1; done
+  [ "$restored" = 1 ] || { fail_stage direct_lan_probe; return 1; }
+  rm -f "$state/owned" "$state/armed" "$state/interfaces" "$state/dns-probed" "$state/ipv6" "$state/management.json" "$state/backend"
+ fi
+ return "$failure"
+}
+release() {
+ active_rc=0
+ release_active || active_rc=1
+ guard_remove || { fail_stage fault_restore; return 1; }
+ if [ "$active_rc" = 0 ] && [ -d "$guard_plan" ]; then
+  rm -f "$guard_plan/fw4" "$guard_plan/fw3.4" "$guard_plan/fw3.6" "$guard_plan/default" && rmdir "$guard_plan" || return 1
+ fi
+ return "$active_rc"
+}
+add_routes() {
+ family=$1
+ # Refuse to borrow another policy table even if its number matches.
+ if ip -N "-$family" rule show | grep -Eq '^21998:'; then return 1; fi
+ if ip "-$family" route show table "$table" 2>/dev/null | grep -q .; then return 1; fi
+ echo "$method" >"$state/route$family"
+ if [ "$method" = tun ]; then ip "-$family" route add default dev owtun0 table "$table" proto "$proto"
+ else ip "-$family" route add local default dev lo table "$table" proto "$proto"; fi
+ if [ "$method" = tun ] && [ "$fail_open" = 0 ]; then
+  # Removing a dead TUN removes its device route immediately. Prevent RPDB
+  # fallthrough even before either health monitor observes the process exit.
+  ip "-$family" route add prohibit default metric 32760 table "$table" proto "$proto"
+ fi
+ ip "-$family" rule add pref "$table" fwmark "$mark/0xffff" table "$table" protocol "$proto"
+}
+# Probe the actual router address of every configured ingress. The kernel's
+# route lookup includes iif and the reserved mark, so it exercises the RPDB.
+probe_interfaces() {
+ phase=$1
+ [ -s "$state/interfaces" ] || return 1
+ for dev in $(cat "$state/interfaces"); do
+  [ -e "/sys/class/net/$dev" ] || { [ "$phase" = direct ] && continue; return 1; }
+  checked=0
+  for family in 4 6; do
+   [ "$family" = 4 ] || [ -f "$state/ipv6" ] || continue
+   ips=$(ip "-$family" -o address show dev "$dev" scope global | awk '{print $4}')
+   for prefix in $ips; do
+    addr=${prefix%/*}
+    checked=1
+    if [ "$phase" = active ]; then
+     if [ "$family" = 4 ]; then dst=198.19.255.254; alt=203.0.113.253; else dst=2001:db8::1; alt=2001:db8:ffff::2; fi
+     if ip "-$family" route get "$dst" 2>/dev/null | grep -q '^local '; then dst=$alt; fi
+     # No external packets are sent. Verify a nonlocal LAN flow receives the
+     # expected routing decision and that the management address stays local.
+     if [ "$family" = 4 ]; then
+      peer=$(echo "$addr" | awk -F . -v bits="${prefix#*/}" '{ n=$4; if (bits==31) n+=(n%2 ? -1 : 1); else n+=(n%4<2 ? 1 : -1); print $1"."$2"."$3"."n }')
+     else peer=::; fi
+     ip -N "-$family" route get "$dst" from "$peer" iif "$dev" mark "$mark" | grep -Eq 'table 21998( |$)' || return 1
+    fi
+    ip "-$family" route get "$addr" | grep -Eq '^local ' || return 1
+    if [ -e "$state/dns-probed" ]; then
+     if [ "$phase" = active ]; then
+      nslookup -retry=1 -timeout=1 -type=A probe.openweir.invalid "$addr" 2>/dev/null | grep -Eq '^Address([[:space:]][0-9]+)?:[[:space:]]+192\.0\.2\.1([[:space:]]|$)' || return 1
+     else
+      nslookup -retry=1 -timeout=1 -type=A localhost "$addr" >/dev/null 2>&1 || return 1
+     fi
+    fi
+   done
+  done
+  [ "$checked" = 1 ] || [ "$phase" = direct ] || return 1
+ done
+}
+# Land in the fw4 input/forward chains, including on a guest zone with
+# a default reject policy. The include globs also replay exactly these narrow
+# allowances during an atomic fw4 reload. They expand to nothing when stopped.
+owned_handles() {
+ chain=$1
+ nft -a list chain inet fw4 "$chain" 2>/dev/null | awk -v token="$note-$chain" '
+  index($0, "comment \"" token "\"") && $(NF-1)=="handle" && $NF ~ /^[0-9]+$/ {print $NF}'
+}
+remove_fw4() {
+ rm -f "$state/allow/input/rules.nft" "$state/allow/forward/rules.nft"
+ # Keep the cleanup marker when nft itself is unavailable; a retry must
+ # still be able to remove runtime rules after the daemon recovers.
+ nft list tables >/dev/null || return 1
+ for chain in input forward; do
+  for handle in $(owned_handles "$chain"); do
+   nft delete rule inet fw4 "$chain" handle "$handle" || return 1
+  done
+ done
+ rm -f "$state/fw4"
+}
+prepare_fw4() {
+ nft list chain inet fw4 input >/dev/null && nft list chain inet fw4 forward >/dev/null || return 1
+ for chain in input forward; do
+  [ -z "$(owned_handles "$chain")" ] || return 1
+  mkdir -p "$state/allow/$chain"
+ done
+ touch "$state/fw4"
+ : >"$state/allow/input/rules.new"
+ if [ "$method" = tproxy ]; then
+  printf 'iifname { %s } meta mark & 0xffff == %s accept comment "%s-input"\n' "$names" "$mark" "$note" >"$state/allow/input/rules.new"
+ else
+  {
+   printf 'iifname { %s } oifname "owtun0" meta mark & 0xffff == %s accept comment "%s-forward"\n' "$names" "$mark" "$note"
+   printf 'iifname "owtun0" oifname { %s } ct state established,related accept comment "%s-forward"\n' "$names" "$note"
+  } >"$state/allow/forward/rules.new"
+  mv "$state/allow/forward/rules.new" "$state/allow/forward/rules.nft"
+ fi
+ if [ -s /var/run/openweir/telegram-input.rule ]; then
+  # The root manager writes this only after checking the address, interface
+  # and source prefixes against live netifd data and signed capabilities.
+  cat /var/run/openweir/telegram-input.rule >>"$state/allow/input/rules.new"
+ fi
+ if [ -s "$state/allow/input/rules.new" ]; then mv "$state/allow/input/rules.new" "$state/allow/input/rules.nft"
+ else rm -f "$state/allow/input/rules.new"; fi
+ for chain in input forward; do
+  file="$state/allow/$chain/rules.nft"
+  [ -s "$file" ] || continue
+  while IFS= read -r rule; do printf 'insert rule inet fw4 %s %s\n' "$chain" "$rule" ; done <"$file"
+ done >>"$batch"
+}
+verify_fw4() {
+ for chain in input forward; do
+  file="$state/allow/$chain/rules.nft"
+  [ -f "$file" ] || continue
+  want=$(wc -l <"$file")
+  actual=$(owned_handles "$chain" | wc -l)
+  [ "$actual" -eq "$want" ] || return 1
+ done
+}
+verify_direct() {
+ if [ "$(cat "$state/backend" 2>/dev/null)" = fw4 ]; then nft list tables >/dev/null || return 1; fi
+ ! owned_table || return 1
+ # Only verify restoration of interfaces which are still present; WAN or
+ # client outages must not prevent us from releasing the rules.
+ [ ! -f "$state/interfaces" ] || probe_interfaces direct || return 1
+ [ ! -e "$state/management.json" ] || openweir-net management-check || return 1
+}
+verify() {
+ expected=$(cat "$state/backend" 2>/dev/null) || return 1
+ current=$(firewall_status)
+ [ "$expected" = "${current%% *}" ] || return 1
+ case "$expected" in
+  fw3) legacy_verify || return 1 ;;
+  fw4) owned_table && verify_fw4 || return 1 ;;
+  *) return 1 ;;
+ esac
+ for family in 4 6; do
+  [ -f "$state/route$family" ] || continue
+  ip -N "-$family" rule show | grep -Eq '^21998:.*fwmark 0x4f57/0xffff.*lookup 21998 proto 199([[:space:]]|$)' || return 1
+  ip "-$family" route show table "$table" proto "$proto" | grep -q . || return 1
+ done
+ [ -f "$state/route4" ] && probe_interfaces active
+}
+apply() {
+ # init sets this before taking the network lock for stop, and clears it only
+ # on an explicit service start. A retry queued behind stop cannot retake LAN.
+ stage=service_stopping
+ [ ! -e /var/run/openweir/stopping ] || return 1
+ stage=firewall_backend
+ status=$(firewall_status); backend=${status%% *}
+ case "$backend" in fw3|fw4) ;; *) return 1 ;; esac
+ stage=firewall_conflict
+ for pending in owned fw4 fw3.4 fw3.6 route4 route6 dns; do [ ! -f "$state/$pending" ] || return 1; done
+ if [ "$backend" = fw4 ]; then
+  ! nft list table inet openweir >/dev/null 2>&1 || return 1
+ fi
+ method=$(uci -q get openweir.main.method);case "$method" in tun|tproxy) ;; *) return 1 ;; esac
+ stage=lan_interfaces
+ interfaces=$(devices) && [ -n "$interfaces" ] || return 1
+ # Canonical whitespace makes set comparisons independent of UCI list order.
+ interfaces=$(echo $interfaces)
+ printf '%s\n' "$interfaces" >"$state/interfaces"
+ stage=management_probe
+ openweir-net management-record
+ names="";for dev in $interfaces; do names="$names, \"$dev\""; done
+ names=${names#, }
+ v6=$(uci -q get openweir.main.ipv6 || echo 0)
+ dns=$(uci -q get openweir.main.dns || echo 0)
+ dns_intercept=0
+ if [ "$dns" = 1 ]; then dns_intercept=$(uci -q get openweir.main.dns_intercept || echo 0); fi
+ if [ "$v6" = 1 ]; then touch "$state/ipv6"; families='ipv4, ipv6';else rm -f "$state/ipv6"; families=ipv4;fi
+ if [ "$backend" = fw3 ]; then
+  stage=legacy_capabilities
+  legacy_families=4
+  if [ "$v6" = 1 ] || grep -q '^6 ' /var/run/openweir/telegram-input.xt 2>/dev/null; then legacy_families='4 6'; fi
+  lock_firewall fw3
+  legacy_prepare
+ else
+ batch="$state/transaction.nft"
+ cat >"$batch" <<EOF
+table inet openweir {
+ comment "$note"
+ chain lan {
+  type filter hook prerouting priority mangle - 1; policy accept;
+  iifname != { $names } return
+  meta nfproto != { $families } return
+  fib daddr type { local, broadcast, multicast } return
+EOF
+ if [ "$dns_intercept" = 1 ]; then
+  # Leave port 53 unmarked so the later NAT hook can send it to dnsmasq.
+  echo '  meta l4proto { tcp, udp } th dport 53 return' >>"$batch"
+ fi
+ cat >>"$batch" <<EOF
+  ip daddr { $(echo "$bypass4" | sed 's/ /, /g') } return
+  ip6 daddr { $(echo "$bypass6" | sed 's/ /, /g') } return
+EOF
+ if [ "$method" = tun ]; then
+  echo '  meta l4proto { tcp, udp } meta mark set (meta mark & 0xffff0000) | 0x4f57' >>"$batch"
+ else
+  echo "  meta l4proto { tcp, udp } meta mark set (meta mark & 0xffff0000) | 0x4f57 tproxy to :$port accept" >>"$batch"
+ fi
+ echo ' }' >>"$batch"
+ if [ "$dns_intercept" = 1 ]; then
+  cat >>"$batch" <<EOF
+ chain lan_dns {
+  type nat hook prerouting priority dstnat - 1; policy accept;
+  iifname { $names } meta nfproto { $families } fib daddr type unicast meta l4proto { tcp, udp } th dport 53 redirect to :53
+ }
+EOF
+ fi
+ echo '}' >>"$batch"
+ stage=firewall_prepare
+ nft -j list table inet fw4 >/dev/null
+ nft -c -f "$batch"
+ fi
+ fail_open=$(uci -q get openweir.main.fail_open || echo 1)
+ if [ "$fail_open" = 0 ]; then
+  stage=fault_flow_offload
+  guard_no_offload "$backend" "$interfaces" "$v6"
+  stage=fault_protection
+  guard_prepare
+ fi
+ apply_started=1
+ echo "$backend" >"$state/backend"
+ touch "$state/owned"
+ stage=ipv4_route
+ add_routes 4
+ if [ "$v6" = 1 ]; then stage=ipv6_route; add_routes 6; fi
+ if [ "$dns" = 1 ]; then stage=dns_reload; dns_setup; touch "$state/dns-probed"; fi
+ stage=firewall_apply
+ if [ "$backend" = fw3 ]; then
+  legacy_apply
+ else
+  lock_firewall fw4
+  prepare_fw4
+  nft -f "$batch"
+ fi
+ unlock_firewall
+ stage=managed_lan_probe
+ # dnsmasq is started asynchronously by procd. Do not publish a healthy
+ # transition until all managed listeners answer the synthetic query.
+ for _ in 1 2 3 4; do
+  if verify && openweir-net management-check; then
+   if [ "$fail_open" = 0 ]; then touch "$state/armed"; fi
+   stage=fault_restore
+   guard_remove || return 1
+   return 0
+  fi
+  sleep 1
+ done
+ return 1
+}
+finish_apply() {
+ if [ "$1" = 0 ]; then rm -f "$state/error"; return; fi
+ failed_step=$stage
+ unlock_firewall
+ if [ "$apply_started" = 1 ]; then release_active || :; fi
+ fail_stage "$failed_step"
+}
+case "${1:-}" in
+ apply) trap 'finish_apply "$?"' EXIT; apply ;;
+ verify) verify || { fail_stage managed_lan_probe; exit 1; } ;;
+ release) release ;;
+ fault) fault ;;
+ *) exit 2 ;;
+esac
