@@ -696,6 +696,19 @@ func statusOf(r *record) Status {
 	}
 	return st
 }
+
+// SourceURL returns an external subscription's link for the administrator's edit form. It is
+// kept out of Status so that summaries never carry the credential-bearing URL.
+func (s *Store) SourceURL(id string) (string, error) {
+	r, e := s.read(id)
+	if e != nil {
+		return "", e
+	}
+	if r.Config == nil || r.Config.Kind != "external" || r.Revoked {
+		return "", errors.New("not_external")
+	}
+	return r.Config.URL, nil
+}
 func (s *Store) Status(id string) (Status, error) {
 	r, e := s.read(id)
 	if e != nil {

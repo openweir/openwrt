@@ -27,6 +27,7 @@ type input struct {
 	Scheduled            bool             `json:"scheduled,omitempty"`
 	ReplacementURL       string           `json:"replacement_url,omitempty"`
 	RuleSet              string           `json:"rule_set,omitempty"`
+	Query                string           `json:"query,omitempty"`
 	Source               string           `json:"source"`
 	Config               *sub.Source      `json:"config,omitempty"`
 	Preferences          *sub.Preferences `json:"preferences,omitempty"`
@@ -100,6 +101,11 @@ func run(ctx context.Context, store *sub.Store, method string, in input, f sub.F
 	case "status":
 		v, e := store.Status(in.Source)
 		return v, nil, e
+	case "url":
+		v, e := store.SourceURL(in.Source)
+		return map[string]string{"url": v}, nil, e
+	case "set_match":
+		return setMatch(store, in)
 	case "profile", "nodes", "groups", "rules":
 		p, e := store.Load(in.Source)
 		if e != nil {
@@ -204,7 +210,7 @@ func run(ctx context.Context, store *sub.Store, method string, in input, f sub.F
 		if c.Decision == "ready" && !c.Unchanged() {
 			changes = append(changes, in.Source)
 		}
-		return map[string]any{"changes": c.Changes, "decision": c.Decision, "retains_routing": c.RetainsRouting, "confirmation_id": c.ConfirmationID, "notices": c.Notices, "node_count": len(c.Profile.Nodes), "group_count": len(c.Profile.Groups), "rule_count": len(c.Profile.Rules), "local": c.Profile.Local}, changes, nil
+		return map[string]any{"changes": c.Changes, "decision": c.Decision, "retains_routing": c.RetainsRouting, "confirmation_id": c.ConfirmationID, "notices": nonNil(c.Notices), "node_count": len(c.Profile.Nodes), "group_count": len(c.Profile.Groups), "rule_count": len(c.Profile.Rules), "local": c.Profile.Local}, changes, nil
 	case "rollback":
 		e := store.RollbackChecked(ctx, in.Source, f.BeforeCommit)
 		return nil, []string{in.Source}, e
@@ -343,4 +349,41 @@ func validate(ctx context.Context, p sub.Profile) (func() error, error) {
 		}
 		return nil
 	}, nil
+}
+
+// nonNil keeps an empty list as [] in JSON; the LuCI page reads it as an array.
+func nonNil[T any](items []T) []T {
+	if items == nil {
+		return []T{}
+	}
+	return items
+}
+
+// Packaged rule sets of the built-in local profile.
+const packagedRules = "/usr/share/openweir/rules"
+
+func setMatch(store *sub.Store, in input) (any, []string, error) {
+	p, e := store.Load(in.Source)
+	if e != nil {
+		return nil, nil, e
+	}
+	answer := func(ok bool, e error) (any, []string, error) {
+		if e != nil {
+			return nil, nil, e
+		}
+		return map[string]bool{"matched": ok}, nil, nil
+	}
+	for _, set := range p.BinarySets {
+		if set.Tag == in.RuleSet {
+			return answer(sub.SetMatch(set, in.Query))
+		}
+	}
+	if behavior, ok := map[string]string{"geosite-cn": "domain", "geoip-cn": "ipcidr"}[in.RuleSet]; ok && p.Summary().Local {
+		data, e := os.ReadFile(packagedRules + "/" + in.RuleSet + ".mrs")
+		if e != nil {
+			return nil, nil, e
+		}
+		return answer(sub.SetMatch(sub.BinarySet{Tag: in.RuleSet, Format: "mrs", Behavior: behavior, Data: data}, in.Query))
+	}
+	return answer(sub.InlineSetMatch(p.Rules, in.RuleSet, in.Query))
 }
