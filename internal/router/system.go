@@ -457,7 +457,11 @@ func (s *System) Start(ctx context.Context, i Intent) (err error) {
 	if n.Family6 {
 		family = "ipv6"
 	}
-	go func() { _, ae := command(applyCtx, networkHelper, "apply", family); applied <- ae }()
+	apply := []string{"apply", family}
+	if chinaShortcut(i, n) {
+		apply = append(apply, "china")
+	}
+	go func() { _, ae := command(applyCtx, networkHelper, apply...); applied <- ae }()
 	tick := time.NewTicker(2 * time.Second)
 applyLoop:
 	for {

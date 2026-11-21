@@ -608,7 +608,7 @@ export async function overview(ui) {
 			),
 		),
 		updateRow('大陆 IP 直连', toggle('大陆 IP 直连', !!prefs.bypass_cn, (v) => saveP({ bypass_cn: v })),
-			h('small', { class: 'ow-muted' }, '国内 IP 不经内核，速度更快')),
+			h('small', { class: 'ow-muted' }, '国内 IP 不经内核，更快；全局模式下不生效')),
 		h(
 			'div',
 			{ class: 'ow-row' },

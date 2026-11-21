@@ -187,6 +187,16 @@ func (m *Manager) GroupState(source string) map[string]GroupResult {
 	}
 	return ret
 }
+
+// Select switches a group and closes the connections that went through it, so the new node
+// takes over at once instead of only for new connections.
 func (s *System) Select(ctx context.Context, group, node string) error {
-	return s.Client().Select(ctx, group, node)
+	c := s.Client()
+	if e := c.Select(ctx, group, node); e != nil {
+		return e
+	}
+	if c.CloseThrough(ctx, group) != nil {
+		s.records.Log("core", "warn", "connections_not_reset")
+	}
+	return nil
 }

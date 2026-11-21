@@ -31,6 +31,9 @@ type Network struct {
 	// FakeIP follows DNS protection where the router's own connections to fake addresses are
 	// captured too (fw4); elsewhere the core answers real addresses.
 	FakeIP bool
+	// FailOpen and ChinaDirect are read by the network helper when it applies the takeover.
+	// ChinaDirect needs nftables sets, so it is off on fw3; chinaShortcut adds the mode.
+	FailOpen, ChinaDirect bool
 	// Empty lists mean the built-in upstreams.
 	Domestic, Foreign []string
 }

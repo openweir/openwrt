@@ -412,9 +412,10 @@ apply() {
  if [ "$backend" != fw4 ] || [ -z "$core_gid" ] || [ "$core_gid" = 0 ]; then local_proxy=0; fi
  fake_ip=0
  if [ "$dns" = 1 ] && [ "$local_proxy" = 1 ]; then fake_ip=1; fi
- # The China IP shortcut needs nftables sets; on fw3 the core still routes these itself.
- bypass_cn=$(uci -q get openweir.main.bypass_cn || echo 0)
- if [ "$backend" != fw4 ]; then bypass_cn=0; fi
+ # The China IP shortcut needs nftables sets; on fw3 the core still routes these itself. The
+ # manager asks for it only in smart mode (chinaShortcut in network.go): global proxies everything.
+ bypass_cn=0
+ if [ "$china_arg" = china ] && [ "$backend" = fw4 ]; then bypass_cn=1; fi
  if [ "$backend" = fw3 ]; then
   stage=legacy_capabilities
   legacy_families=4
@@ -574,7 +575,7 @@ finish_apply() {
  fail_stage "$failed_step"
 }
 case "${1:-}" in
- apply) family_arg=${2:-}; trap 'finish_apply "$?"' EXIT; apply ;;
+ apply) family_arg=${2:-}; china_arg=${3:-}; trap 'finish_apply "$?"' EXIT; apply ;;
  verify) verify || { fail_stage managed_lan_probe; exit 1; } ;;
  release) release ;;
  refresh) refresh ;;

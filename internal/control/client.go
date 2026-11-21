@@ -172,15 +172,6 @@ func (c Client) Select(ctx context.Context, group, node string) error {
 	}
 	return nil
 }
-func (c Client) SetMode(ctx context.Context, mode string) error {
-	if !slices.Contains([]string{"rule", "global", "direct"}, mode) {
-		return errors.New("unknown core mode")
-	}
-	return c.call(ctx, "PATCH", "/configs", map[string]string{"mode": mode}, nil)
-}
-func (c Client) Reload(ctx context.Context, configPath string) error {
-	return c.call(ctx, "PUT", "/configs?force=true", map[string]string{"path": configPath}, nil)
-}
 
 // ReloadPayload replaces the running configuration without recreating
 // unchanged listeners.
@@ -205,6 +196,31 @@ func (c Client) Rules(ctx context.Context) ([]Rule, error) {
 	var r struct{ Rules []Rule }
 	e := c.call(ctx, "GET", "/rules", nil, &r)
 	return r.Rules, e
+}
+
+// CloseConnections closes every connection the core relays. Mihomo keeps open connections on
+// the route they started with when its configuration or a selection changes, so clients close
+// them to make the change take effect at once.
+func (c Client) CloseConnections(ctx context.Context) error {
+	return c.call(ctx, "DELETE", "/connections", nil, nil)
+}
+
+// CloseThrough closes the connections that pass through one group, as clients do after its
+// selection changes.
+func (c Client) CloseThrough(ctx context.Context, group string) error {
+	var snapshot struct{ Connections []tracked }
+	if e := c.call(ctx, "GET", "/connections", nil, &snapshot); e != nil {
+		return e
+	}
+	var failed error
+	for _, t := range snapshot.Connections {
+		if t.ID != "" && slices.Contains(t.Chains, group) {
+			if e := c.CloseConnection(ctx, t.ID); e != nil {
+				failed = e
+			}
+		}
+	}
+	return failed
 }
 
 func (c Client) CloseConnection(ctx context.Context, id string) error {

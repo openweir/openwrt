@@ -82,12 +82,6 @@ func TestMihomoController(t *testing.T) {
 	if err != nil || len(rules) != 1 || rules[0].Proxy != "Test/A" {
 		t.Fatal(rules, err)
 	}
-	if err = c.SetMode(ctx, "global"); err != nil {
-		t.Fatal(err)
-	}
-	if err = c.Reload(ctx, path); err != nil {
-		t.Fatal(err)
-	}
 	// A payload reload swaps rules in place without a file the core can read.
 	next := strings.Replace(config, "rules: ['MATCH,Test/A']", "rules: ['DOMAIN,example.com,DIRECT', 'MATCH,Test/A']", 1)
 	if err = c.ReloadPayload(ctx, []byte(next)); err != nil {
@@ -100,6 +94,12 @@ func TestMihomoController(t *testing.T) {
 		t.Fatal("invalid payload accepted")
 	}
 	if err = c.CloseConnection(ctx, "00000000-0000-0000-0000-000000000000"); err != nil {
+		t.Fatal(err)
+	}
+	if err = c.CloseConnections(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = c.CloseThrough(ctx, "Test/A"); err != nil {
 		t.Fatal(err)
 	}
 	trf, err := c.Traffic(ctx)

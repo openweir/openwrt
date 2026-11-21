@@ -3,6 +3,7 @@ package router
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os/user"
@@ -21,11 +22,29 @@ var ErrNeedsRestart = errors.New("change needs a full restart")
 type applied struct {
 	network, guard, telegram string
 	tag                      string
+	routing                  string   // what decides each connection's route; see routingKey
 	config                   [32]byte // digest of the configuration the core is running
 }
 
-func networkKey(n Network) string {
-	return fmt.Sprint(n.Method, n.DNS, n.FakeIP, n.Family6, n.LAN)
+// routingKey covers the choices that decide where a connection goes: the mode, the
+// subscription and the local rules, groups and device routes. A subscription refresh with
+// the same choices keeps it, so open connections survive periodic updates. Group choices
+// are applied by Select, which closes only the connections through that group.
+func routingKey(i Intent) string {
+	b, _ := json.Marshal(struct {
+		Mode, Source  string
+		DefaultDirect bool
+		Groups        []LocalGroup
+		Devices       []DeviceRule
+		Rules         []CustomRule
+		Telegram      *Telegram
+	}{i.Mode, i.Source, i.Policy.DefaultDirect, i.Policy.Groups, i.Policy.Devices, i.Policy.Rules, i.Policy.Telegram})
+	return string(b)
+}
+
+// networkKey covers what the network helper applied: a change needs a new takeover.
+func networkKey(i Intent, n Network) string {
+	return fmt.Sprint(n.Method, n.DNS, n.FakeIP, n.Family6, n.LAN, n.FailOpen, chinaShortcut(i, n))
 }
 
 func takeover(i Intent, n Network) (guard, telegram string, err error) {
@@ -44,7 +63,7 @@ func (s *System) remember(i Intent, n Network, tag string, config []byte) {
 		s.applied = nil
 		return
 	}
-	s.applied = &applied{networkKey(n), guard, telegram, tag, sha256.Sum256(config)}
+	s.applied = &applied{networkKey(i, n), guard, telegram, tag, routingKey(i), sha256.Sum256(config)}
 }
 
 // Reload swaps the core configuration in place when the listeners, firewall
@@ -65,7 +84,7 @@ func (s *System) Reload(ctx context.Context, i Intent) error {
 	if e != nil {
 		return e
 	}
-	if networkKey(n) != last.network || guard != last.guard || telegram != last.telegram {
+	if networkKey(i, n) != last.network || guard != last.guard || telegram != last.telegram {
 		return ErrNeedsRestart
 	}
 	var st kernel.Status
@@ -110,8 +129,8 @@ func (s *System) Reload(ctx context.Context, i Intent) error {
 		return e
 	}
 	// Interface notices (address lifetimes, RA refreshes) usually change nothing; reloading
-	// the core anyway would drop every open connection.
-	digest := sha256.Sum256(config)
+	// the core anyway would pause new connections and reset its DNS clients.
+	digest, routing := sha256.Sum256(config), routingKey(i)
 	if digest == last.config {
 		return nil
 	}
@@ -121,11 +140,19 @@ func (s *System) Reload(ctx context.Context, i Intent) error {
 	if e = s.verifyChoices(ctx, config); e != nil {
 		return e
 	}
+	// Mihomo keeps open connections on the route they started with. After a change of mode,
+	// subscription or rules, close them all as Clash clients do, so browsers reconnect on the
+	// new route: a page opened direct in smart mode would otherwise keep showing the local
+	// address after switching to global.
+	if routing != last.routing && client.CloseConnections(ctx) != nil {
+		s.records.Log("core", "warn", "connections_not_reset")
+	}
 	s.records.CoreStarted(i.Source)
 	s.restartMonitor(i, n, gid, client)
 	s.mu.Lock()
 	if s.applied != nil {
 		s.applied.config = digest
+		s.applied.routing = routing
 	}
 	s.mu.Unlock()
 	return nil
