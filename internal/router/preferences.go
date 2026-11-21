@@ -20,6 +20,7 @@ type Preferences struct {
 	FailOpen     *bool    `json:"fail_open,omitempty"`
 	LocalProxy   *bool    `json:"local_proxy,omitempty"`
 	BlockQUIC    *bool    `json:"block_quic,omitempty"`
+	FakeIP       *bool    `json:"fake_ip,omitempty"`
 	IPv6         bool     `json:"ipv6"`
 	Networks     []string `json:"networks"`
 }
@@ -49,7 +50,7 @@ func (p Preferences) Validate() error {
 // SameNetwork reports whether two preference sets produce the same takeover.
 func (p Preferences) SameNetwork(o Preferences) bool {
 	return p.Method == o.Method && p.DNS == o.DNS && p.DNSIntercept == o.DNSIntercept && p.IPv6 == o.IPv6 && slices.Equal(p.Networks, o.Networks) &&
-		sameBit(p.FailOpen, o.FailOpen) && sameBit(p.LocalProxy, o.LocalProxy) && sameBit(p.BlockQUIC, o.BlockQUIC)
+		sameBit(p.FailOpen, o.FailOpen) && sameBit(p.LocalProxy, o.LocalProxy) && sameBit(p.BlockQUIC, o.BlockQUIC) && sameBit(p.FakeIP, o.FakeIP)
 }
 
 // An omitted switch keeps its saved value.
@@ -64,6 +65,8 @@ func ReadPreferences(ctx context.Context) (Preferences, error) {
 	p.LocalProxy = &local
 	quic := uci(ctx, "block_quic") != "0"
 	p.BlockQUIC = &quic
+	fake := uci(ctx, "fake_ip") == "1"
+	p.FakeIP = &fake
 	return p, p.Validate()
 }
 func SavePreferences(ctx context.Context, p Preferences) error {
@@ -87,6 +90,9 @@ func SavePreferences(ctx context.Context, p Preferences) error {
 	}
 	if p.LocalProxy != nil {
 		b.WriteString("set openweir.main.local_proxy='" + bit(*p.LocalProxy) + "'\n")
+	}
+	if p.FakeIP != nil {
+		b.WriteString("set openweir.main.fake_ip='" + bit(*p.FakeIP) + "'\n")
 	}
 	if p.BlockQUIC != nil {
 		b.WriteString("set openweir.main.block_quic='" + bit(*p.BlockQUIC) + "'\n")

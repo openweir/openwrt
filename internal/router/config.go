@@ -30,6 +30,7 @@ type Network struct {
 	LAN       map[string][]netip.Prefix
 	Interface string
 	BlockQUIC bool
+	FakeIP    bool
 }
 type DeviceRule struct {
 	Address string `json:"address"`
@@ -77,6 +78,10 @@ var digestName = regexp.MustCompile("^[a-f0-9]{64}$")
 
 const dnsDomesticSet = "openweir-dns-cn"
 
+// Names that must keep real addresses: LAN, time sync, connectivity checks and STUN.
+var fakeIPFilter = []string{"*.lan", "*.local", "*.localdomain", "*.home.arpa", "localhost.ptlink", "+.ntp.org", "time.*.com", "time.*.gov", "+.pool.ntp.org",
+	"+.msftconnecttest.com", "+.msftncsi.com", "connectivitycheck.gstatic.com", "captive.apple.com", "+.stun.*.*", "+.stun.*.*.*", "probe.openweir.invalid"}
+
 var (
 	domesticDNS = []string{"https://223.5.5.5/dns-query", "https://120.53.53.53/dns-query"}
 	foreignDNS  = []string{"https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"}
@@ -121,7 +126,15 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 		"skip-domain": []string{"+.push.apple.com", "Mijia Cloud", "+.mi.com", "+.xiaomi.net", "dlg.io.mi.com"},
 		"sniff":       obj{"TLS": obj{"ports": []string{"443", "8443"}}, "HTTP": obj{"ports": []string{"80", "8080"}}, "QUIC": obj{"ports": []string{"443"}}}}
 	if n.DNS {
-		config["dns"].(obj)["listen"] = "127.0.0.1:19764"
+		dns := config["dns"].(obj)
+		dns["listen"] = "127.0.0.1:19764"
+		// Fake-ip needs devices to resolve through the core, so it follows DNS protection.
+		if n.FakeIP {
+			dns["enhanced-mode"] = "fake-ip"
+			dns["fake-ip-range"] = "198.18.0.1/16"
+			dns["fake-ip-filter"] = fakeIPFilter
+			config["profile"].(obj)["store-fake-ip"] = true
+		}
 	}
 	// Built-in listeners share a bind address. Keep the diagnostic SOCKS/HTTP
 	// socket loopback-only, and bind only the dedicated transparent socket to LAN.

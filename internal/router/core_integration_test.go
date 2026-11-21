@@ -196,7 +196,7 @@ func TestMihomoChecksManagedModes(t *testing.T) {
 		t.Fatal(e)
 	}
 	for _, method := range []string{"tproxy", "tun"} {
-		b, e := Compile(i, p, kernel.TargetCapabilities{Control: kernel.Controller, TProxy: true, TUN: true}, Network{DNS: true, Family6: true, Method: method, Resolver: "2001:db8::53"}, strings.Repeat("C", 32))
+		b, e := Compile(i, p, kernel.TargetCapabilities{Control: kernel.Controller, TProxy: true, TUN: true}, Network{DNS: true, Family6: true, FakeIP: method == "tun", BlockQUIC: true, Method: method, Resolver: "2001:db8::53"}, strings.Repeat("C", 32))
 		if e != nil {
 			t.Fatal(e)
 		}

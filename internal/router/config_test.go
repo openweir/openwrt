@@ -326,3 +326,17 @@ func TestDNSSplitsDomesticAndProxiedUpstreams(t *testing.T) {
 		t.Fatal("QUIC switch must restart only when it changes")
 	}
 }
+
+func TestFakeIPFollowsDNSProtection(t *testing.T) {
+	p := baseProfile(t, "p")
+	i := initial()
+	i.Source = p.Source
+	n := Network{Method: "tproxy", FakeIP: true, Resolver: "192.0.2.53", LAN: map[string][]netip.Prefix{"br-lan": {netip.MustParsePrefix("192.168.3.1/24")}}}
+	if c := configForTest(t, i, p, n); c["dns"].(map[string]any)["enhanced-mode"] != "redir-host" {
+		t.Fatal("fake-ip without DNS protection")
+	}
+	n.DNS = true
+	if c := configForTest(t, i, p, n); c["dns"].(map[string]any)["enhanced-mode"] != "fake-ip" {
+		t.Fatal("fake-ip missing")
+	}
+}

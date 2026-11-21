@@ -627,6 +627,8 @@ export async function overview(ui) {
 			h('small', { class: 'ow-muted' }, '本地域名照常解析，其余经内核查询')),
 		prefs.dns ? h('div', { class: 'ow-row' }, '接管设备 DNS（端口 53）',
 			toggle('接管设备 DNS（端口 53）', !!prefs.dns_intercept, (v) => saveP({ dns_intercept: v }))) : null,
+		prefs.dns ? updateRow('Fake-IP 模式', toggle('Fake-IP 模式', !!prefs.fake_ip, (v) => saveP({ fake_ip: v })),
+			h('small', { class: 'ow-muted' }, '返回虚拟地址，连接更快且不受污染')) : null,
 		updateRow('国内域名', h('span', { class: 'ow-muted' }, '阿里 / 腾讯 DoH'),
 			h('small', { class: 'ow-muted' }, '直连解析，就近访问国内 CDN')),
 		updateRow('其他域名', h('span', { class: 'ow-muted' }, 'Cloudflare / Google DoH'),
