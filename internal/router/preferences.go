@@ -3,7 +3,6 @@ package router
 import (
 	"context"
 	"errors"
-	"net/netip"
 	"os"
 	"os/exec"
 	"regexp"
@@ -33,13 +32,7 @@ type Preferences struct {
 	DNSDomestic  []string `json:"dns_domestic,omitempty"`
 	DNSForeign   []string `json:"dns_foreign,omitempty"`
 	IPv6         bool     `json:"ipv6"`
-	// Firewall bypass lists, like OpenClash's access control: destinations, destination ports
-	// and LAN sources that skip the core, and destinations kept on the proxy despite the China IP shortcut.
-	BypassIPs     []string `json:"bypass_ips"`
-	BypassPorts   []string `json:"bypass_ports"`
-	BypassSources []string `json:"bypass_sources"`
-	ProxyIPs      []string `json:"proxy_ips"`
-	Networks      []string `json:"networks"`
+	Networks     []string `json:"networks"`
 }
 
 var networkName = regexp.MustCompile("^[A-Za-z0-9_]{1,32}$")
@@ -64,24 +57,6 @@ func (p Preferences) Validate() error {
 			}
 		}
 	}
-	for _, list := range [][]string{p.BypassIPs, p.BypassSources, p.ProxyIPs} {
-		if len(list) > 256 {
-			return errors.New("too many bypass entries")
-		}
-		for _, v := range list {
-			if !validPrefix(v) {
-				return errors.New("invalid bypass address")
-			}
-		}
-	}
-	if len(p.BypassPorts) > 64 {
-		return errors.New("too many bypass ports")
-	}
-	for _, v := range p.BypassPorts {
-		if !validPorts(v) {
-			return errors.New("invalid bypass port")
-		}
-	}
 	if len(p.Networks) == 0 || len(p.Networks) > 16 {
 		return errors.New("choose at least one LAN network")
 	}
@@ -101,9 +76,7 @@ func (p Preferences) SameNetwork(o Preferences) bool {
 		sameBit(p.FailOpen, o.FailOpen) && sameBit(p.LocalProxy, o.LocalProxy) && sameBit(p.BlockQUIC, o.BlockQUIC) && sameBit(p.FakeIP, o.FakeIP) &&
 		sameBit(p.Sniff, o.Sniff) && sameBit(p.Concurrent, o.Concurrent) && sameBit(p.UnifiedDelay, o.UnifiedDelay) &&
 		sameBit(p.BypassCN, o.BypassCN) && sameBit(p.CommonPorts, o.CommonPorts) &&
-		sameList(p.DNSDomestic, o.DNSDomestic) && sameList(p.DNSForeign, o.DNSForeign) &&
-		slices.Equal(p.BypassIPs, o.BypassIPs) && slices.Equal(p.BypassPorts, o.BypassPorts) &&
-		slices.Equal(p.BypassSources, o.BypassSources) && slices.Equal(p.ProxyIPs, o.ProxyIPs)
+		sameList(p.DNSDomestic, o.DNSDomestic) && sameList(p.DNSForeign, o.DNSForeign)
 }
 
 // An omitted list keeps its saved value.
@@ -135,10 +108,6 @@ func ReadPreferences(ctx context.Context) (Preferences, error) {
 	p.BypassCN = &cn
 	ports := uci(ctx, "common_ports") == "1"
 	p.CommonPorts = &ports
-	p.BypassIPs = strings.Fields(uci(ctx, "bypass_ip"))
-	p.BypassPorts = strings.Fields(uci(ctx, "bypass_port"))
-	p.BypassSources = strings.Fields(uci(ctx, "bypass_source"))
-	p.ProxyIPs = strings.Fields(uci(ctx, "proxy_ip"))
 	p.DNSDomestic = upstreams(uci(ctx, "dns_domestic"), DomesticDNS)
 	p.DNSForeign = upstreams(uci(ctx, "dns_foreign"), ForeignDNS)
 	return p, p.Validate()
@@ -187,11 +156,9 @@ func SavePreferences(ctx context.Context, p Preferences) error {
 	for k, v := range map[string]string{"update_hours": strconv.Itoa(p.UpdateHours), "enabled": bit(p.Enabled), "method": p.Method, "dns": bit(p.DNS), "dns_intercept": bit(p.DNSIntercept), "ipv6": bit(p.IPv6), "dns_mode": dnsMode(p.DNSMode)} {
 		b.WriteString("set openweir.main." + k + "='" + v + "'\n")
 	}
-	for k, list := range map[string][]string{"bypass_ip": p.BypassIPs, "bypass_port": p.BypassPorts, "bypass_source": p.BypassSources, "proxy_ip": p.ProxyIPs} {
+	// Bypass lists from earlier builds are no longer used.
+	for _, k := range []string{"bypass_ip", "bypass_port", "bypass_source", "proxy_ip"} {
 		b.WriteString("delete openweir.main." + k + "\n")
-		for _, v := range list {
-			b.WriteString("add_list openweir.main." + k + "='" + v + "'\n")
-		}
 	}
 	b.WriteString("delete openweir.main.network\n")
 	for _, v := range p.Networks {
@@ -214,27 +181,6 @@ func dnsMode(v string) string {
 		return v
 	}
 	return "dnsmasq"
-}
-
-// validPrefix accepts one IPv4 or IPv6 address or CIDR prefix.
-func validPrefix(v string) bool {
-	if a, e := netip.ParseAddr(v); e == nil {
-		return a.Zone() == ""
-	}
-	_, e := netip.ParsePrefix(v)
-	return e == nil
-}
-
-// validPorts accepts a port or an ascending port range such as 6881-6889.
-func validPorts(v string) bool {
-	lo, hi, ranged := strings.Cut(v, "-")
-	a, e1 := strconv.Atoi(lo)
-	b := a
-	var e2 error
-	if ranged {
-		b, e2 = strconv.Atoi(hi)
-	}
-	return e1 == nil && e2 == nil && a >= 1 && b <= 65535 && a <= b && strconv.Itoa(a) == lo && (!ranged || strconv.Itoa(b) == hi)
 }
 
 var upstreamPattern = regexp.MustCompile(`^((https|tls|quic)://[A-Za-z0-9.:\[\]_-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?|[0-9.]+|[0-9A-Fa-f:]+)$`)

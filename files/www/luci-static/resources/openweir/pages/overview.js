@@ -667,7 +667,6 @@ export async function overview(ui) {
 			compactToggle('大陆 IP 直连', '国内 IP 在防火墙直连，不经内核；Fake-IP 下仅对直接用 IP 的连接生效', !!prefs.bypass_cn, (v) => saveP({ bypass_cn: v })),
 			compactToggle('仅常用端口', '只代理网页、邮件等常用端口，其余直连', !!prefs.common_ports, (v) => saveP({ common_ports: v })),
 		),
-		h('div', { class: 'ow-row' }, '绕过列表', ui.button('管理', () => bypassDialog(ui, prefs, saveP), 'ow-link')),
 	);
 	const failOpen = prefs.fail_open !== false;
 	const failOpenLabel = '代理无响应时回退直连';
@@ -676,7 +675,7 @@ export async function overview(ui) {
 	// Recommended settings; the LAN networks, start at boot and the update period are kept.
 	const restoreDefaults = () => {
 		const d = ui.dialog('恢复默认设置', h('div', { class: 'ow-stack' },
-			h('p', {}, '运行模式、DNS、连接优化、绕过列表和节点自动切换将恢复为推荐的默认值，代理会重启一次。'),
+			h('p', {}, '运行模式、DNS、连接优化和节点自动切换将恢复为推荐的默认值，代理会重启一次。'),
 			h('small', { class: 'ow-muted' }, '订阅、规则、设备设置和管理的局域网不受影响。'),
 			h('div', { class: 'ow-row' },
 				ui.button('取消', () => d.close()),
@@ -687,7 +686,7 @@ export async function overview(ui) {
 						await ui.run('save_network', { args: {
 							...prefs, method: 'tproxy', ipv6: false, dns: true, dns_intercept: false, dns_mode: 'dnsmasq', fake_ip: true,
 							local_proxy: true, fail_open: true, block_quic: true, sniff: true, tcp_concurrent: true, unified_delay: true,
-							bypass_cn: false, common_ports: false, bypass_ips: [], bypass_ports: [], bypass_sources: [], proxy_ips: [],
+							bypass_cn: false, common_ports: false,
 							dns_domestic: builtinDNS.domestic, dns_foreign: builtinDNS.foreign,
 						} });
 						await ui.refresh();
@@ -911,34 +910,6 @@ const builtinDNS = {
 	domestic: ['https://223.5.5.5/dns-query', 'https://120.53.53.53/dns-query'],
 	foreign: ['https://1.1.1.1/dns-query', 'https://8.8.8.8/dns-query'],
 };
-// Firewall bypass lists, one entry per line; the router validates and rejects bad entries.
-function bypassDialog(ui, prefs, saveP) {
-	const fields = [
-		['bypass_ips', '直连的目标 IP / 网段', '例如 1.2.3.4 或 203.0.113.0/24'],
-		['bypass_ports', '直连的目标端口', '例如 22 或 6881-6889'],
-		['bypass_sources', '直连的局域网设备 IP', '例如 10.0.0.50'],
-		['proxy_ips', '始终代理的 IP（大陆 IP 直连的例外）', '例如 1.2.3.4'],
-	];
-	const areas = fields.map(([key, label, hint]) => {
-		const area = h('textarea', { rows: 3, placeholder: hint, 'aria-label': label, spellcheck: 'false' });
-		area.value = (prefs[key] || []).join('\n');
-		return [key, label, area];
-	});
-	const d = ui.dialog('绕过列表', h('div', { class: 'ow-stack' },
-		h('small', { class: 'ow-muted' }, '每行一项，在防火墙直接放行，不经内核'),
-		...areas.flatMap(([, label, area]) => [h('small', { class: 'ow-muted' }, label), area]),
-		h('div', { class: 'ow-row' }, h('span', {}), ui.button('保存', async () => {
-			const changes = {};
-			for (const [key, , area] of areas) changes[key] = area.value.split(/[\s,，]+/).filter(Boolean);
-			try {
-				await saveP(changes);
-				d.close();
-			} catch (e) {
-				ui.notify(e.message);
-			}
-		}, 'ow-primary')),
-	));
-}
 function upstreamRow(ui, title, note, kind, list, save) {
 	const builtin = builtinDNS[kind];
 	const current = list?.length ? list : builtin;

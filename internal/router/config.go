@@ -155,9 +155,7 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 	config["sniffer"] = obj{"enable": !n.NoSniff, "override-destination": !n.DNS, "parse-pure-ip": true, "force-dns-mapping": true,
 		// Push and smart-home services break when their destination is rewritten.
 		"skip-domain": []string{"+.push.apple.com", "Mijia Cloud", "+.mi.com", "+.xiaomi.net", "dlg.io.mi.com", "+.oray.com", "+.sunlogin.net"},
-		// Streaming services often connect by bare IP; sniff them even then, as OpenClash does.
-		"force-domain": []string{"+.netflix.com", "+.nflxvideo.net", "+.amazonaws.com", "+.media.dssott.com"},
-		"sniff":        obj{"TLS": obj{"ports": []string{"443", "8443"}}, "HTTP": obj{"ports": []string{"80", "8080-8880"}}, "QUIC": obj{"ports": []string{"443"}}}}
+		"sniff":       obj{"TLS": obj{"ports": []string{"443", "8443"}}, "HTTP": obj{"ports": []string{"80", "8080-8880"}}, "QUIC": obj{"ports": []string{"443"}}}}
 	if n.DNS {
 		dns := config["dns"].(obj)
 		dns["listen"] = "127.0.0.1:19764"

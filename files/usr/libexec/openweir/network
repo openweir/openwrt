@@ -111,22 +111,6 @@ dns_setup() {
  done <"$state/dns"
  /etc/init.d/dnsmasq restart
 }
-# A UCI list as words; values never reach the batch without pick() below.
-uci_list() { uci -q get "openweir.main.$1" || :; }
-# Print the entries of one kind (4, 6 or port) that are well formed, one per line.
-pick() {
- kind=$1; shift
- for v in "$@"; do
-  case "$kind:$v" in
-   4:*[!0-9./]*|6:*[!0-9a-fA-F:/]*|port:*[!0-9-]*) continue ;;
-   4:*.*.*.*) ;;
-   6:*:*) ;;
-   port:[1-9]*) ;;
-   *) continue ;;
-  esac
-  printf '%s\n' "$v"
- done
-}
 # Append elements to one of our sets in the pending batch, one per line.
 set_elements() {
  [ -n "$2" ] || return 0
@@ -139,14 +123,6 @@ fake_ping() {
 }
 # Unused ports skip the core. With fake-ip every port to the fake range must still reach it.
 port_filter() {
- if [ -n "$user_ports" ]; then
-  if [ "$fake_ip" = 1 ]; then
-   echo "  meta nfproto ipv4 ip daddr != 198.18.0.0/16 meta l4proto { tcp, udp } th dport @userport return" >>"$batch"
-  else
-   echo "  meta nfproto ipv4 meta l4proto { tcp, udp } th dport @userport return" >>"$batch"
-  fi
-  echo "  meta nfproto ipv6 meta l4proto { tcp, udp } th dport @userport return" >>"$batch"
- fi
  [ "$only_common" = 1 ] || return 0
  if [ "$fake_ip" = 1 ]; then
   echo "  meta nfproto ipv4 ip daddr != 198.18.0.0/16 meta l4proto { tcp, udp } th dport != { $common_ports } return" >>"$batch"
@@ -413,8 +389,6 @@ apply() {
  # LAN lookups reach the core through dnsmasq (default) or a firewall redirect to its port.
  dns_mode=$(uci -q get openweir.main.dns_mode || echo dnsmasq)
  if [ "$dns_mode" != firewall ] || [ "$backend" != fw4 ] || [ "$dns" != 1 ]; then dns_mode=dnsmasq; fi
- user_ips=$(uci_list bypass_ip); user_ports=$(uci_list bypass_port)
- user_sources=$(uci_list bypass_source); force_ips=$(uci_list proxy_ip)
  if [ "$backend" = fw3 ]; then
   stage=legacy_capabilities
   legacy_families=4
@@ -430,13 +404,6 @@ table inet openweir {
  set local6 { type ipv6_addr; flags interval; auto-merge; }
  set cn4 { type ipv4_addr; flags interval; auto-merge; }
  set cn6 { type ipv6_addr; flags interval; auto-merge; }
- set user4 { type ipv4_addr; flags interval; auto-merge; }
- set user6 { type ipv6_addr; flags interval; auto-merge; }
- set src4 { type ipv4_addr; flags interval; auto-merge; }
- set src6 { type ipv6_addr; flags interval; auto-merge; }
- set force4 { type ipv4_addr; flags interval; auto-merge; }
- set force6 { type ipv6_addr; flags interval; auto-merge; }
- set userport { type inet_service; flags interval; auto-merge; }
  chain lan {
   type filter hook prerouting priority mangle - 1; policy accept;
 EOF
@@ -451,13 +418,6 @@ EOF
   ct direction reply return
 EOF
  fake_ping
- # A bypassed source still reaches the core for fake addresses its lookups returned.
- if [ "$fake_ip" = 1 ]; then
-  echo '  ip saddr @src4 ip daddr != 198.18.0.0/16 return' >>"$batch"
- else
-  echo '  ip saddr @src4 return' >>"$batch"
- fi
- echo '  ip6 saddr @src6 return' >>"$batch"
  cat >>"$batch" <<EOF
   fib daddr type { local, broadcast, multicast } return
 EOF
@@ -470,10 +430,8 @@ EOF
   ip6 daddr { $(echo "$bypass6" | sed 's/ /, /g') } return
   ip daddr @local4 return
   ip6 daddr @local6 return
-  ip daddr @user4 return
-  ip6 daddr @user6 return
-  ip daddr @cn4 ip daddr != @force4 return
-  ip6 daddr @cn6 ip6 daddr != @force6 return
+  ip daddr @cn4 return
+  ip6 daddr @cn6 return
 EOF
  port_filter
  if [ "$method" = tun ]; then
@@ -525,10 +483,8 @@ EOF
   ip6 daddr { $(echo "$bypass6" | sed 's/ /, /g') } return
   ip daddr @local4 return
   ip6 daddr @local6 return
-  ip daddr @user4 return
-  ip6 daddr @user6 return
-  ip daddr @cn4 ip daddr != @force4 return
-  ip6 daddr @cn6 ip6 daddr != @force6 return
+  ip daddr @cn4 return
+  ip6 daddr @cn6 return
 EOF
   port_filter
   cat >>"$batch" <<EOF
@@ -549,11 +505,6 @@ EOF
  echo '}' >>"$batch"
  set_elements local4 "$(local_prefixes 4)"
  if [ "$v6" = 1 ]; then set_elements local6 "$(local_prefixes 6)"; fi
- set_elements user4 "$(pick 4 $user_ips)"; set_elements src4 "$(pick 4 $user_sources)"; set_elements force4 "$(pick 4 $force_ips)"
- if [ "$v6" = 1 ]; then
-  set_elements user6 "$(pick 6 $user_ips)"; set_elements src6 "$(pick 6 $user_sources)"; set_elements force6 "$(pick 6 $force_ips)"
- fi
- set_elements userport "$(pick port $user_ports)"
  if [ "$bypass_cn" = 1 ]; then
   set_elements cn4 "$(openweir-net cn-ranges 4)"
   if [ "$v6" = 1 ]; then set_elements cn6 "$(openweir-net cn-ranges 6)"; fi
