@@ -176,7 +176,7 @@ export async function records(ui) {
 							{ class: 'ow-muted' },
 							(sources[v.source] || v.source) + ' · ' + datetime(v.time) + ' · ' + v.message,
 						),
-						v.detail ? h('code', { class: 'ow-log-detail' }, v.detail) : null,
+						...(v.detail ? [h('code', { class: 'ow-log-detail' }, v.detail)] : []),
 					);
 					return row;
 				}),
