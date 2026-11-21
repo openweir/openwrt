@@ -229,7 +229,7 @@ func TestPreviewPackagesCarryTheirNumber(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, s := range []string{"Preview of 1.0.0-preview.2, built from aaaaaaa", "1.0.0-preview.2 预览版", "version 1.0.0-r2",
-		"https://github.com/openweir/openwrt/releases/download/v1.0.0-preview.2/luci-app-openweir_1.0.0-2_", "blob/v1.0.0-preview.2/README.md"} {
+		"https://github.com/openweir/openwrt/releases/download/v1.0.0-preview.2/luci-app-openweir_1.0.0-2_", "blob/v1.0.0-preview.2/packaging/openwrt/README.md"} {
 		if !strings.Contains(notes, s) {
 			t.Errorf("preview notes miss %q", s)
 		}

@@ -28,3 +28,19 @@ Day-to-day work goes to `develop`; `main` holds what is to be released. After **
 A maintainer can rerun **Publish OpenWrt release** with the successful CI run ID while its artifacts are available. An interrupted draft resumes with the same files. First releases and version bumps use the same process.
 
 The core is distributed separately by [openweir/mihomo](https://github.com/openweir/mihomo/releases). Plugin CI tests a fixed source revision. Published core assets have independent versions and per-architecture capabilities.
+
+## Manual upgrade from an older Cortex-A53 APK
+
+On routers with the old A53 package, upgrade offline with the commands below. They simulate the upgrade first and keep the old direct dependencies that APK would otherwise remove, including installed `ip-full` and `kmod-tun`, which you can then manage independently. Change the first line to the verified package path.
+
+```sh
+file='./luci-app-openweir-<version>-r<revision>.apk'
+local_apk() { LC_ALL=C apk --no-network --no-cache --repositories-file /dev/null add --allow-untrusted "$@"; }
+plan=$(local_apk --simulate "$file") && (
+  set -- "$file"
+  for p in $(apk query --installed --fields depends --format json luci-app-openweir | jsonfilter -e '@[0].depends[*]') dnsmasq-full; do
+    if printf '%s\n' "$plan" | grep -Fq " Purging $p ("; then set -- "$@" "$p"; fi
+  done
+  local_apk "$@"
+)
+```

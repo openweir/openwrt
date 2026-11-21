@@ -121,7 +121,7 @@ const notesTemplate = "{intro}## Downloads\n\n" +
 	"Checksums are in the `SHA256SUMS` asset. Download it next to your package and run `grep \" <package>$\" SHA256SUMS | sha256sum -c -` (this also works with BusyBox on the router).\n\n" +
 	"### OpenWrt 23.05 / 24.10 · IPK\n\n```sh\nopkg install ./{ipk}\n```\n\n" +
 	"### OpenWrt 25.12 · APK\n\n```sh\napk add --no-network --allow-untrusted ./{apk}\n```\n\n" +
-	"For an offline installation, make sure the firmware's system dependencies are available. If upgrading an older Cortex-A53 APK, follow the [offline upgrade instructions](https://github.com/{repo}/blob/{tag}/README.md#manual-upgrade-from-an-older-cortex-a53-apk) to keep the existing network components.\n\n" +
+	"For an offline installation, make sure the firmware's system dependencies are available. If upgrading an older Cortex-A53 APK, follow the [offline upgrade instructions](https://github.com/{repo}/blob/{tag}/packaging/openwrt/README.md#manual-upgrade-from-an-older-cortex-a53-apk) to keep the existing network components.\n\n" +
 	"After installing, open **Services → OpenWeir** in LuCI. The mihomo core is selected separately; offline, you can import its original archive for the router's architecture.\n\n" +
 	"---\n\n" +
 	"{intro_zh}## 安装包\n\n" +
@@ -129,7 +129,7 @@ const notesTemplate = "{intro}## Downloads\n\n" +
 	"校验值在附件 `SHA256SUMS` 中。把它下载到安装包所在目录，运行 `grep \" <安装包文件名>$\" SHA256SUMS | sha256sum -c -`（路由器上的 BusyBox 也支持）。\n\n" +
 	"### OpenWrt 23.05 / 24.10 · IPK\n\n```sh\nopkg install ./{ipk_zh}\n```\n\n" +
 	"### OpenWrt 25.12 · APK\n\n```sh\napk add --no-network --allow-untrusted ./{apk_zh}\n```\n\n" +
-	"离线安装前，请准备好固件需要的系统依赖。已安装旧版 Cortex-A53 APK 的用户，可按[离线升级步骤](https://github.com/{repo}/blob/{tag}/README.zh-CN.md#从旧版-cortex-a53-apk-手动升级)保留已有网络组件。\n\n" +
+	"离线安装前，请准备好固件需要的系统依赖。已安装旧版 Cortex-A53 APK 的用户，可按[离线升级步骤](https://github.com/{repo}/blob/{tag}/packaging/openwrt/README.md#manual-upgrade-from-an-older-cortex-a53-apk)保留已有网络组件。\n\n" +
 	"安装后进入 LuCI 的「服务 → OpenWeir」。mihomo 内核需单独选择版本，离线时可导入对应架构的原始发行包。\n"
 
 // AssetRevision reads the package revision from the IPK installers in dir.
