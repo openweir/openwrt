@@ -6,7 +6,8 @@
 
 ## 功能
 
-- 支持服务商账户、订阅链接和本地文件；Clash、sing-box 和分享链接由 [subconv](https://github.com/openweir/subconv) 统一转换
+- 支持服务商账户、订阅链接和本地文件，常见格式（Clash、sing-box、Surge、Quantumult X、分享链接等）都由 [subconv](https://github.com/openweir/subconv) 统一转换
+- 订阅没有规则或规则转换不全时，自动使用内置分流规则（来自 dler-io/Rules，每日更新）
 - 智能分流或全局代理，可按设备分流、自定义规则，节点失联自动切换
 - 自动选择 TProxy 或 TUN，支持 fw4、fw3 和 IPv6
 - DNS 保护（Fake-IP），可选大陆 IP 直连，国内列表每周自动更新
@@ -47,6 +48,8 @@ apk add --no-network --allow-untrusted ./luci-app-openweir-*.apk  # 25.12
 **AdGuard Home、SmartDNS 怎么办？** 开启 DNS 保护期间，它们作为 dnsmasq 上游会被暂时摘下，停止后自动恢复。想继续用它们，关闭 DNS 保护即可。
 
 **旁路由能用吗？** 能，会自动识别。设备的网关和 DNS 都要指向旁路由。
+
+**订阅没有规则，或者部分规则用不了？** 每个订阅都有「分流规则」设置，默认用订阅自带的规则；订阅没有规则、缺少最后的 MATCH，或超过一成规则无法使用时，会自动改用内置规则。也可以设为始终使用内置规则。
 
 **出问题了怎么办？** 「记录」页面有连接和日志，「导出诊断」可以生成去除隐私信息的报告，附在 issue 里。
 

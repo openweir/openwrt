@@ -6,7 +6,8 @@ A LuCI app that turns an OpenWrt router into a transparent proxy for the whole n
 
 ## Features
 
-- Provider accounts, subscription URLs and local files; Clash, sing-box and share links are converted by [subconv](https://github.com/openweir/subconv)
+- Provider accounts, subscription URLs and local files in any common format (Clash, sing-box, Surge, Quantumult X, share links and more), converted by [subconv](https://github.com/openweir/subconv)
+- Built-in routing rules (from dler-io/Rules, updated daily) for subscriptions without rules or whose rules don't convert well
 - Smart (rule-based) or global mode, per-device routes, custom rules, automatic node failover
 - TProxy or TUN, chosen automatically, on fw4 or fw3, with IPv6
 - DNS protection with Fake-IP, plus optional mainland China direct (lists updated weekly)
@@ -47,6 +48,8 @@ If the start is refused, **检查运行环境** (Check environment) tells you wh
 **AdGuard Home or SmartDNS?** While DNS protection is on, they are set aside as dnsmasq's upstream and restored afterwards. Turn DNS protection off to keep them in charge.
 
 **Side router (旁路由)?** Detected automatically. Point devices' gateway and DNS at it.
+
+**My subscription has no rules, or some don't work.** Each subscription's **分流规则** (Routing rules) setting defaults to the subscription's own rules and switches to the built-in rules when it has none, has no final MATCH, or more than 10% can't be used. You can also always use the built-in rules.
 
 **Something is wrong.** The **记录** (Records) page has connections and logs, and **导出诊断** (Export diagnostics) saves a redacted report for an issue.
 
