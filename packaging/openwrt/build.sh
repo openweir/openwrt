@@ -24,7 +24,10 @@ stamp="$version-${OPENWEIR_PACKAGE_REVISION:-1}${OPENWEIR_PACKAGE_PRERELEASE:+-p
 luci="$tmp/pkg/www/luci-static/resources"
 find "$luci/openweir" -name '*.js' -exec sed -i -E "s#((from|import\\() *')(\\.\\.?/[^'?]+\\.js)'#\\1\\3?v=$stamp'#g" {} +
 find "$luci/openweir" -name '*.css' -exec sed -i -E "s#url\\('(\\.\\.?/[^'?]+\\.css)'\\)#url('\\1?v=$stamp')#g" {} +
-sed -i -E "s#'openweir/(app\\.js|style\\.css)'#'openweir/\\1?v=$stamp'#g" "$luci/view/openweir/router.js"
+# L.resource() drops any path part with characters outside its whitelist, such as ? and =,
+# so the version goes after the resolved URL.
+sed -i -E "s#L\\.resource\\('openweir/(app\\.js|style\\.css)'\\)#L.resource('openweir/\\1') + '?v=$stamp'#g" "$luci/view/openweir/router.js"
+grep -q "app.js') + '?v=" "$luci/view/openweir/router.js" && grep -q "style.css') + '?v=" "$luci/view/openweir/router.js"
 (cd "$tmp/pkg/usr/share/openweir/rules" && sha256sum -c SHA256SUMS)
 (cd "$root" && go run ./cmd/openweir-release rules --check-package "$tmp/pkg/usr/share/openweir/rules")
 mkdir -p "$tmp/pkg/usr/share/licenses/luci-app-openweir"
