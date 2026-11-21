@@ -655,6 +655,7 @@ export async function overview(ui) {
 			compactToggle('大陆 IP 直连', '国内 IP 在防火墙直连，不经内核；Fake-IP 下仅对直接用 IP 的连接生效', !!prefs.bypass_cn, (v) => saveP({ bypass_cn: v })),
 			compactToggle('仅常用端口', '只代理网页、邮件等常用端口，其余直连', !!prefs.common_ports, (v) => saveP({ common_ports: v })),
 		),
+		h('div', { class: 'ow-row' }, '绕过列表', ui.button('管理', () => bypassDialog(ui, prefs, saveP), 'ow-link')),
 	);
 	const failOpen = prefs.fail_open !== false;
 	const failOpenLabel = '代理无响应时回退直连';
@@ -871,6 +872,34 @@ const builtinDNS = {
 	domestic: ['https://223.5.5.5/dns-query', 'https://120.53.53.53/dns-query'],
 	foreign: ['https://1.1.1.1/dns-query', 'https://8.8.8.8/dns-query'],
 };
+// Firewall bypass lists, one entry per line; the router validates and rejects bad entries.
+function bypassDialog(ui, prefs, saveP) {
+	const fields = [
+		['bypass_ips', '直连的目标 IP / 网段', '例如 1.2.3.4 或 203.0.113.0/24'],
+		['bypass_ports', '直连的目标端口', '例如 22 或 6881-6889'],
+		['bypass_sources', '直连的局域网设备 IP', '例如 10.0.0.50'],
+		['proxy_ips', '始终代理的 IP（大陆 IP 直连的例外）', '例如 1.2.3.4'],
+	];
+	const areas = fields.map(([key, label, hint]) => {
+		const area = h('textarea', { rows: 3, placeholder: hint, 'aria-label': label, spellcheck: 'false' });
+		area.value = (prefs[key] || []).join('\n');
+		return [key, label, area];
+	});
+	const d = ui.dialog('绕过列表', h('div', { class: 'ow-stack' },
+		h('small', { class: 'ow-muted' }, '每行一项，在防火墙直接放行，不经内核'),
+		...areas.flatMap(([, label, area]) => [h('small', { class: 'ow-muted' }, label), area]),
+		h('div', { class: 'ow-row' }, h('span', {}), ui.button('保存', async () => {
+			const changes = {};
+			for (const [key, , area] of areas) changes[key] = area.value.split(/[\s,，]+/).filter(Boolean);
+			try {
+				await saveP(changes);
+				d.close();
+			} catch (e) {
+				ui.notify(e.message);
+			}
+		}, 'ow-primary')),
+	));
+}
 function upstreamRow(ui, title, note, kind, list, save) {
 	const builtin = builtinDNS[kind];
 	const current = list?.length ? list : builtin;

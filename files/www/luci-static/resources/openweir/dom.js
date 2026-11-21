@@ -240,6 +240,7 @@ const errorText = {
     'core offline': '内核未运行',
     'core selection unavailable': '无法读取内核的节点选择',
     'could not save network preferences': '无法保存网络设置',
+    'invalid network preferences': '设置无效，请检查填写的地址或端口',
     'could not verify network prerequisites': '无法确认网络前置条件',
     'default route has no available group': '默认路线没有可用的策略组',
     'disk full': '存储空间已满',
