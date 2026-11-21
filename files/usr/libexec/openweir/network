@@ -332,7 +332,7 @@ apply() {
  # With fake-ip the router's own lookups also return fake addresses, which only
  # the core can serve, so router traffic to that range is always captured.
  fake_ip=0
- if [ "$dns" = 1 ] && [ "$(uci -q get openweir.main.fake_ip)" = 1 ]; then fake_ip=1; fi
+ if [ "$dns" = 1 ] && [ "$(uci -q get openweir.main.fake_ip)" != 0 ]; then fake_ip=1; fi
  if [ "$backend" != fw4 ] || [ -z "$core_gid" ] || [ "$core_gid" = 0 ]; then local_proxy=0; fake_ip=0; fi
  if [ "$backend" = fw3 ]; then
   stage=legacy_capabilities

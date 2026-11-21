@@ -85,7 +85,7 @@ func ReadPreferences(ctx context.Context) (Preferences, error) {
 	p.LocalProxy = &local
 	quic := uci(ctx, "block_quic") != "0"
 	p.BlockQUIC = &quic
-	fake := uci(ctx, "fake_ip") == "1"
+	fake := uci(ctx, "fake_ip") != "0"
 	p.FakeIP = &fake
 	sniff := uci(ctx, "sniff") != "0"
 	p.Sniff = &sniff

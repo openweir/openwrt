@@ -486,7 +486,7 @@ export async function overview(ui) {
 						['real', '真实 IP'],
 						['fake', 'Fake-IP'],
 					],
-					prefs.dns && prefs.fake_ip ? 'fake' : 'real',
+					prefs.dns && prefs.fake_ip !== false ? 'fake' : 'real',
 					// Fake-IP answers come from the core, so it turns DNS protection on.
 					(v) => saveP(v === 'fake' ? { fake_ip: true, dns: true } : { fake_ip: false }),
 				),
