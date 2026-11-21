@@ -1,8 +1,10 @@
 package router
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -48,5 +50,33 @@ func TestChinaListProvidersFollowTheDownload(t *testing.T) {
 	}
 	if got := chinaList(cnlist.Addresses); got != "./builtin/geoip-cn.mrs" {
 		t.Fatal("a newer packaged list wins", got)
+	}
+}
+
+func TestChinaListMoveDuringStartReloadsOnceRunning(t *testing.T) {
+	var starts, reloads atomic.Int32
+	proceed := make(chan struct{})
+	f := reloadService{fakeService{start: func(c context.Context, _ Intent) error {
+		starts.Add(1)
+		select {
+		case <-proceed:
+			return nil
+		case <-c.Done():
+			return c.Err()
+		}
+	}}, func(context.Context, Intent) error { reloads.Add(1); return nil }}
+	i := initial()
+	i.Enabled = true
+	i.Source = "primary"
+	m := New(&fakeStore{i: i}, f, Timing{time.Second, 100 * time.Millisecond, 5 * time.Millisecond, time.Second})
+	ctx, end := context.WithCancel(context.Background())
+	defer end()
+	go m.Run(ctx)
+	eventually(t, func() bool { return starts.Load() == 1 && m.Status().Phase == "starting" })
+	m.Reapply()
+	close(proceed)
+	eventually(t, func() bool { return reloads.Load() == 1 && m.Status().Phase == "running" })
+	if starts.Load() != 1 {
+		t.Fatal("a list move restarted the core")
 	}
 }

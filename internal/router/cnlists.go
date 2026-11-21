@@ -18,11 +18,20 @@ func chinaList(list string) string {
 }
 
 // Reapply reloads a running core in place, so a provider that moved to another file follows
-// it; a reload that changes nothing is a no-op. It never restarts the takeover, and a core
-// that is not running reads the files when it starts.
+// it; a reload that changes nothing is a no-op. It never restarts the takeover. A start in
+// progress may have built its configuration from the old files, so the reload waits until
+// the core runs, as for a network notice; a core that is not running reads the files when
+// it starts.
 func (m *Manager) Reapply() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if _, ok := m.backend.(Reloader); ok && m.state.Phase == "starting" && m.cancel != nil {
+		select {
+		case m.hot <- struct{}{}:
+		default:
+		}
+		return
+	}
 	m.hotLocked(m.state.Intent, m.state.Intent)
 }
 
