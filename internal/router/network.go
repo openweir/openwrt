@@ -148,9 +148,15 @@ func interfacePrefixes(n netifStatus) ([]netip.Prefix, error) {
 func ipv6Uplink(ctx context.Context) bool {
 	return exec.CommandContext(ctx, "ip", "-6", "route", "get", "2400:3200::1").Run() == nil
 }
+
+// fw4Active matches the network helper, which captures the router's own traffic only on fw4.
+func fw4Active(ctx context.Context) bool {
+	return exec.CommandContext(ctx, "nft", "list", "chain", "inet", "fw4", "input").Run() == nil
+}
 func networkOptions(ctx context.Context) (Network, error) {
 	n := Network{Method: uci(ctx, "method"), DNS: uci(ctx, "dns") == "1", Family6: ipv6Uplink(ctx),
 		Domestic: upstreams(uci(ctx, "dns_domestic"), DomesticDNS), Foreign: upstreams(uci(ctx, "dns_foreign"), ForeignDNS), LAN: map[string][]netip.Prefix{}}
+	n.FakeIP = n.DNS && fw4Active(ctx)
 	for _, name := range strings.Fields(uci(ctx, "network")) {
 		if strings.Trim(name, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") != "" {
 			return n, errors.New("invalid managed LAN")

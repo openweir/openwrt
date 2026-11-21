@@ -115,7 +115,7 @@ func TestMirroredOfficialReleaseAndOfflineRecovery(t *testing.T) {
 	if err != nil || caps.Targets[target].Control != Controller || !caps.Targets[target].TUN || caps.Build != Digest(raw) {
 		t.Fatal(caps, err)
 	}
-	l, err := m.Begin(ctx, f.cfg)
+	l, err := m.BeginAuthorized(ctx, f.cfg, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

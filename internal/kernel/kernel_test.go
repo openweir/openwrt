@@ -153,7 +153,7 @@ func TestTransactionsAndRecovery(t *testing.T) {
 			if _, e := mgr.Active(); e == nil {
 				t.Fatal("offline selection became active")
 			}
-			l, e := mgr.Begin(ctx, f.cfg)
+			l, e := mgr.BeginAuthorized(ctx, f.cfg, "", nil)
 			if e != nil || l.Token == "" {
 				t.Fatal(l, e)
 			}
@@ -167,7 +167,7 @@ func TestTransactionsAndRecovery(t *testing.T) {
 			if _, e = os.Stat(active.Path); e != nil {
 				t.Fatal(e)
 			}
-			l, e = mgr.Begin(ctx, f.cfg)
+			l, e = mgr.BeginAuthorized(ctx, f.cfg, "", nil)
 			if e != nil || l.Token != "" {
 				t.Fatal("unchanged config should reuse confirmation", l, e)
 			}
@@ -182,7 +182,7 @@ func TestTransactionsAndRecovery(t *testing.T) {
 			if e = mgr.Install(ctx, "v2.0.0", mode, v2); e != nil {
 				t.Fatal(e)
 			}
-			l, e = mgr.Begin(ctx, f.cfg)
+			l, e = mgr.BeginAuthorized(ctx, f.cfg, "", nil)
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -196,7 +196,7 @@ func TestTransactionsAndRecovery(t *testing.T) {
 			if e = mgr.Install(ctx, "v2.0.0", mode, v2); e != nil {
 				t.Fatal(e)
 			}
-			l, e = mgr.Begin(ctx, f.cfg)
+			l, e = mgr.BeginAuthorized(ctx, f.cfg, "", nil)
 			if e != nil {
 				t.Fatal(e)
 			}
@@ -209,10 +209,10 @@ func TestTransactionsAndRecovery(t *testing.T) {
 				t.Fatal("rollback availability", e)
 			}
 			if mode == "double" {
-				if _, err := mgr.Begin(ctx, "/missing-authorized-config"); err == nil {
+				if _, err := mgr.BeginAuthorized(ctx, "/missing-authorized-config", "", nil); err == nil {
 					t.Fatal("rollback reused archived credentials")
 				}
-				l, e = mgr.Begin(ctx, f.cfg)
+				l, e = mgr.BeginAuthorized(ctx, f.cfg, "", nil)
 				if e != nil || l.Tag != "v1.0.0" {
 					t.Fatal(l, e)
 				}
@@ -250,7 +250,7 @@ func TestSingleSlotPostCommitPowerCut(t *testing.T) {
 	if e := m.Install(ctx, "v1.0.0", "single", one); e != nil {
 		t.Fatal(e)
 	}
-	l, e := m.Begin(ctx, f.cfg)
+	l, e := m.BeginAuthorized(ctx, f.cfg, "", nil)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -262,7 +262,7 @@ func TestSingleSlotPostCommitPowerCut(t *testing.T) {
 	if e = m.Install(ctx, "v2.0.0", "single", two); e != nil {
 		t.Fatal(e)
 	}
-	l, e = m.Begin(ctx, f.cfg)
+	l, e = m.BeginAuthorized(ctx, f.cfg, "", nil)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -307,10 +307,10 @@ func TestStaleIntentSchemaAndSpace(t *testing.T) {
 	if e := m.Install(ctx, "v1.0.0", "double", one); e != nil {
 		t.Fatal(e)
 	}
-	if _, e := m.Begin(ctx, f.cfg, "v2.0.0"); e == nil {
+	if _, e := m.BeginAuthorized(ctx, f.cfg, "v2.0.0", nil); e == nil {
 		t.Fatal("started core with a different compilation target")
 	}
-	l, e := m.Begin(ctx, f.cfg)
+	l, e := m.BeginAuthorized(ctx, f.cfg, "", nil)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -442,7 +442,7 @@ func TestSingleSlotKeepsRunningPayloadUntilClosed(t *testing.T) {
 	if e := f.mgr.Install(ctx, "v1.0.0", "single", src); e != nil {
 		t.Fatal(e)
 	}
-	trial, e := f.mgr.Begin(ctx, f.cfg)
+	trial, e := f.mgr.BeginAuthorized(ctx, f.cfg, "", nil)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -537,7 +537,7 @@ func TestStagedInstallRequiresCurrentSelectionRevision(t *testing.T) {
 	if e := m.Install(ctx, "v1.0.0", "double", one); e != nil {
 		t.Fatal(e)
 	}
-	l, e := m.Begin(ctx, f.cfg)
+	l, e := m.BeginAuthorized(ctx, f.cfg, "", nil)
 	if e != nil {
 		t.Fatal(e)
 	}

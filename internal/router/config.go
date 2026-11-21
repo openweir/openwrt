@@ -23,12 +23,14 @@ const MixedPort = 19763
 const DNSPort = 19764
 
 type Network struct {
-	Family6   bool
-	DNS       bool
-	Method    string
-	Resolver  string
-	LAN       map[string][]netip.Prefix
-	Interface string
+	Family6  bool
+	DNS      bool
+	Method   string
+	Resolver string
+	LAN      map[string][]netip.Prefix
+	// FakeIP follows DNS protection where the router's own connections to fake addresses are
+	// captured too (fw4); elsewhere the core answers real addresses.
+	FakeIP bool
 	// Empty lists mean the built-in upstreams.
 	Domestic, Foreign []string
 }
@@ -58,13 +60,6 @@ func (p Policy) Failover() bool { return p.AutoFailover == nil || *p.AutoFailove
 type obj = map[string]any
 
 func stringOption(m obj, k string) string { s, _ := m[k].(string); return s }
-func choice(m map[string]string, id string, members []string) (string, error) {
-	s := m[id]
-	if s != "" && !slices.Contains(members, s) {
-		return "", fmt.Errorf("saved member unavailable for %s", id)
-	}
-	return s, nil
-}
 
 // Native Mihomo names are the stable per-source IDs, independent of display names.
 func coreTarget(s string) string {
@@ -160,11 +155,12 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 	if n.DNS {
 		dns := config["dns"].(obj)
 		dns["listen"] = "127.0.0.1:19764"
-		// Fake-ip needs devices to resolve through the core, so it follows DNS protection.
-		dns["enhanced-mode"] = "fake-ip"
-		dns["fake-ip-range"] = "198.18.0.1/16"
-		dns["fake-ip-filter"] = fakeIPFilter
-		config["profile"].(obj)["store-fake-ip"] = true
+		if n.FakeIP {
+			dns["enhanced-mode"] = "fake-ip"
+			dns["fake-ip-range"] = "198.18.0.1/16"
+			dns["fake-ip-filter"] = fakeIPFilter
+			config["profile"].(obj)["store-fake-ip"] = true
+		}
 	}
 	// Built-in listeners share a bind address. Keep the diagnostic SOCKS/HTTP
 	// socket loopback-only, and bind only the dedicated transparent socket to LAN.

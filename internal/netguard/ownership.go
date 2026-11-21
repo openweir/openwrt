@@ -56,8 +56,6 @@ func networkOwnership(dir string) ownership {
 	return o
 }
 
-const dnsInjection = "# OpenWeir managed upstream\nno-resolv\nserver=127.0.0.1#19764\nserver=/probe.openweir.invalid/127.0.0.1#19764\nrebind-domain-ok=/probe.openweir.invalid/\n"
-
 // The network script writes this header, then only these lines depending on the DNS and IPv6 settings.
 var dnsLines = map[string]bool{"no-resolv": true, "server=127.0.0.1#19764": true, "server=/probe.openweir.invalid/127.0.0.1#19764": true,
 	"rebind-domain-ok=/probe.openweir.invalid/": true, "filter-AAAA": true}

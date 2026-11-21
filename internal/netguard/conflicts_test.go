@@ -12,6 +12,9 @@ import (
 	"time"
 )
 
+// What the network script writes with DNS protection on.
+const dnsInjection = "# OpenWeir managed upstream\nno-resolv\nserver=127.0.0.1#19764\nserver=/probe.openweir.invalid/127.0.0.1#19764\nrebind-domain-ok=/probe.openweir.invalid/\n"
+
 func TestOwnershipDetection(t *testing.T) {
 	c := collector{seen: map[Resource]bool{}, own: ownership{activeNft: true}}
 	nft := `{"nftables":[{"table":{"family":"inet","name":"openweir","comment":"openweir-owned-v1"}},{"table":{"family":"inet","name":"v2raya"}},{"rule":{"family":"ip6","table":"fw4","expr":[{"jump":{"target":"PSW2_DNS"}}]}}]}`

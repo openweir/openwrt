@@ -12,7 +12,6 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
-	"os/exec"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -132,7 +131,6 @@ type Fetcher struct {
 	ProviderChoices func(string) (map[string]string, error)
 	sourceID        string
 	ruleImportRoot  string
-	providerCommand func(context.Context) *exec.Cmd
 	ReplacementURL  string
 	Client          *http.Client
 	BeforeCommit    Validator

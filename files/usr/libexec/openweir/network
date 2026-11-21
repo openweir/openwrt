@@ -142,6 +142,10 @@ dns_setup() {
  [ -s "$state/dns.new" ] || { echo 'dnsmasq include directories unavailable' >&2; return 1; }
  while IFS= read -r dir; do valid_dir "$dir" && [ ! -e "$dir/$dnsfile" ] || return 1; done <"$state/dns.new"
  mv "$state/dns.new" "$state/dns"
+ # Without IPv6 takeover, AAAA answers would send preferred IPv6 traffic
+ # around the proxy, so hide them while the takeover is active.
+ # The option is case-sensitive and needs dnsmasq 2.87 or newer; an unknown line stops dnsmasq.
+ aaaa=0; if [ "$v6" != 1 ] && dnsmasq_has filter-AAAA; then aaaa=1; fi
  while IFS= read -r dir; do
   tmp=$(mktemp "$dir/.openweir.XXXXXX")
   {
@@ -149,10 +153,7 @@ dns_setup() {
    if [ "$dns" = 1 ]; then
     printf '%s\n' 'no-resolv' 'server=127.0.0.1#19764' 'server=/probe.openweir.invalid/127.0.0.1#19764' 'rebind-domain-ok=/probe.openweir.invalid/'
    fi
-   # Without IPv6 takeover, AAAA answers would send preferred IPv6 traffic
-   # around the proxy, so hide them while the takeover is active.
-   # The option is case-sensitive and needs dnsmasq 2.87 or newer; an unknown line stops dnsmasq.
-   if [ "$v6" != 1 ] && dnsmasq_has filter-AAAA; then echo 'filter-AAAA'; fi
+   if [ "$aaaa" = 1 ]; then echo 'filter-AAAA'; fi
   } >"$tmp"
   chmod 0644 "$tmp"; mv -f "$tmp" "$dir/$dnsfile"
  done <"$state/dns"
@@ -401,18 +402,16 @@ apply() {
   *) v6=0; if ip -6 route get 2400:3200::1 >/dev/null 2>&1; then v6=1; fi ;;
  esac
  dns=$(uci -q get openweir.main.dns || echo 0)
- dns_intercept=0
  # As in OpenClash, DNS protection also takes over lookups devices send to other resolvers.
- if [ "$dns" = 1 ]; then dns_intercept=1; fi
+ dns_intercept=$dns
  if [ "$v6" = 1 ]; then touch "$state/ipv6"; families='ipv4, ipv6';else rm -f "$state/ipv6"; families=ipv4;fi
- # Proxying the router itself needs nftables and the core's group id.
+ # Proxying the router itself needs nftables and the core's group id. Fake-ip is used only
+ # then (FakeIP in network.go), since the router's own lookups also get fake addresses.
  local_proxy=1
  core_gid=$(awk -F: '$1 == "openweir-core" { print $3 }' /etc/group)
- # With fake-ip the router's own lookups also return fake addresses, which only
- # the core can serve, so router traffic to that range is always captured.
+ if [ "$backend" != fw4 ] || [ -z "$core_gid" ] || [ "$core_gid" = 0 ]; then local_proxy=0; fi
  fake_ip=0
- if [ "$dns" = 1 ]; then fake_ip=1; fi
- if [ "$backend" != fw4 ] || [ -z "$core_gid" ] || [ "$core_gid" = 0 ]; then local_proxy=0; fake_ip=0; fi
+ if [ "$dns" = 1 ] && [ "$local_proxy" = 1 ]; then fake_ip=1; fi
  # The China IP shortcut needs nftables sets; on fw3 the core still routes these itself.
  bypass_cn=$(uci -q get openweir.main.bypass_cn || echo 0)
  if [ "$backend" != fw4 ]; then bypass_cn=0; fi
@@ -434,7 +433,7 @@ table inet openweir {
  chain lan {
   type filter hook prerouting priority mangle - 1; policy accept;
 EOF
- if { [ "$local_proxy" = 1 ] || [ "$fake_ip" = 1 ]; } && [ "$method" = tproxy ]; then
+ if [ "$local_proxy" = 1 ] && [ "$method" = tproxy ]; then
   # Router-originated packets marked in the output chain loop back through lo.
   echo "  iifname \"lo\" meta mark & 0xffff == $mark meta l4proto { tcp, udp } tproxy to :$port accept" >>"$batch"
  fi
@@ -480,7 +479,7 @@ EOF
  }
 EOF
  fi
- if [ "$local_proxy" = 1 ] || [ "$fake_ip" = 1 ]; then
+ if [ "$local_proxy" = 1 ]; then
   # The core's own group is excluded so its outbound traffic never loops.
   cat >>"$batch" <<EOF
  chain local {
@@ -494,10 +493,6 @@ EOF
   cat >>"$batch" <<EOF
   fib daddr type { local, broadcast, multicast } return
 EOF
-  if [ "$local_proxy" != 1 ]; then
-   echo '  ip daddr != 198.18.0.0/16 return' >>"$batch"
-   echo '  meta nfproto ipv6 return' >>"$batch"
-  fi
   cat >>"$batch" <<EOF
   meta l4proto { tcp, udp } th dport 53 return
   udp dport 123 return

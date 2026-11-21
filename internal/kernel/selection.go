@@ -125,13 +125,6 @@ func (m *Manager) Check(ctx context.Context, tag, config string) error {
 		return m.Inspect(ctx, m.launch(*p, v), path)
 	})
 }
-func (m *Manager) Begin(ctx context.Context, config string, expectedTag ...string) (Launch, error) {
-	var tag string
-	if len(expectedTag) > 0 {
-		tag = expectedTag[0]
-	}
-	return m.BeginAuthorized(ctx, config, tag, nil)
-}
 func (m *Manager) BeginAuthorized(ctx context.Context, config, expectedTag string, authorities []string) (launch Launch, err error) {
 	authorities = slices.Clone(authorities)
 	slices.Sort(authorities)

@@ -56,7 +56,7 @@ func TestPrivateUmaskInstallPromotionAndRecovery(t *testing.T) {
 				requireMode(t, r, 0711)
 				requireMode(t, filepath.Join(r, "slots"), 0711)
 			}
-			l, err := m.Begin(ctx, f.cfg)
+			l, err := m.BeginAuthorized(ctx, f.cfg, "", nil)
 			if err != nil {
 				t.Fatal(err)
 			}

@@ -571,18 +571,9 @@
 	accent-color: var(--ow-teal);
 	border: 0;
 }
-.ow .ow-add {
-	margin-top: auto;
-	border: 1px dashed var(--ow-line);
-	background: transparent;
-	color: var(--ow-accent);
-}
 /* Devices span two rows beside a 2x2 block: proxy, DNS, recovery, updates. */
 .ow .ow-devices {
 	grid-row: span 2;
-}
-.ow .ow-devices-note {
-	margin-top: auto;
 }
 .ow .ow-device-row {
 	display: flex;
@@ -1185,4 +1176,3 @@
 	.ow .ow-power svg { width: 28px; height: 28px; }
 }
 .ow .ow-source-list > * { flex: none; }
-.ow .ow-tuning { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 20px; }
