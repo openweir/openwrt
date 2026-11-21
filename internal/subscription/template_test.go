@@ -1,0 +1,326 @@
+package subscription
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/openweir/subconv"
+	"github.com/openweir/subconv/rules"
+)
+
+// The suite stays off the network: only the tests that serve a rules branch use one.
+func TestMain(m *testing.M) {
+	TemplateHosts = nil
+	os.Exit(m.Run())
+}
+
+// A routing template as the rules branch serves it: emoji group names and a rule set on the branch.
+const branchTemplate = `proxy-groups:
+  - name: "🚀 Proxy"
+    type: select
+    proxies: [♻️ Auto, DIRECT]
+    include-all: true
+    exclude-filter: (?i)expire|剩余
+  - name: ♻️ Auto
+    type: url-test
+    include-all: true
+    exclude-filter: (?i)expire|剩余
+    url: https://www.gstatic.com/generate_204
+    interval: 300
+  - name: "🎯 Domestic"
+    type: select
+    proxies: [DIRECT, "🚀 Proxy"]
+rule-providers:
+  LAN:
+    type: http
+    behavior: classical
+    format: text
+    url: "{rules}/providers/dler/lan.classical.txt"
+    path: ./rules/openweir/dler/lan.classical.txt
+    interval: 86400
+rules:
+  - RULE-SET,LAN,DIRECT
+  - "GEOIP,CN,🎯 Domestic"
+  - "MATCH,🚀 Proxy"
+`
+
+const branchLAN = "IP-CIDR,192.168.0.0/16,no-resolve\nDOMAIN-SUFFIX,lan\n"
+
+// testBranch serves a rules branch: its manifest, template and one rule set.
+type testBranch struct {
+	srv      *httptest.Server
+	version  int64
+	lan      string // served in place of the manifest's rule set when set
+	down     atomic.Bool
+	requests atomic.Int32
+}
+
+func serveBranch(t *testing.T, version int64) *testBranch {
+	t.Helper()
+	b := &testBranch{version: version}
+	file := func(path, kind, data string) rules.File {
+		sum := sha256.Sum256([]byte(data))
+		return rules.File{Path: path, Size: int64(len(data)), SHA256: hex.EncodeToString(sum[:]), Kind: kind, Updated: "2026-11-21"}
+	}
+	b.srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b.requests.Add(1)
+		if b.down.Load() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		switch r.URL.Path {
+		case "/" + rules.ManifestPath:
+			m, _ := json.Marshal(rules.Manifest{Version: b.version, Files: []rules.File{
+				file(rules.TemplatePath, "template", branchTemplate),
+				file("providers/dler/lan.classical.txt", "rule-set", branchLAN),
+			}})
+			w.Write(m)
+		case "/" + rules.TemplatePath:
+			w.Write([]byte(branchTemplate))
+		case "/providers/dler/lan.classical.txt":
+			w.Write([]byte(first(b.lan, branchLAN)))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(b.srv.Close)
+	hosts, dir := TemplateHosts, TemplateDir
+	TemplateHosts, TemplateDir = []rules.Host{{Base: b.srv.URL, Operator: "test"}}, t.TempDir()
+	t.Cleanup(func() { TemplateHosts, TemplateDir = hosts, dir })
+	return b
+}
+
+func (b *testBranch) fetcher() Fetcher { return Fetcher{embeddedClient: b.srv.Client()} }
+
+const twoLinks = "ss://YWVzLTEyOC1nY206cA@hk.example.com:8388#HK%2001\nss://YWVzLTEyOC1nY206cA@info.example.com:8388#%E5%89%A9%E4%BD%99%E6%B5%81%E9%87%8F\n"
+
+func fileSource(t *testing.T, rules string) (*Store, string) {
+	t.Helper()
+	store := OpenStore(t.TempDir())
+	if err := store.Configure(Source{ID: "s", Name: "test", Kind: "file", Rules: rules}); err != nil {
+		t.Fatal(err)
+	}
+	return store, "s"
+}
+
+func TestTemplateRoutesASubscriptionWithoutRules(t *testing.T) {
+	b := serveBranch(t, 42)
+	store, id := fileSource(t, RoutingOwn)
+	c, err := b.fetcher().Refresh(t.Context(), store, id, []byte(twoLinks), Policy{})
+	if err != nil || c.Decision != "ready" || c.Profile.Local {
+		t.Fatal(err, c.Decision, c.Notices)
+	}
+	p := c.Profile
+	if p.Template == nil || p.Template.Reason != subconv.TemplateNoRules || p.Template.Version != 42 || p.Template.Cached {
+		t.Fatalf("%+v", p.Template)
+	}
+	var names []string
+	for _, g := range p.Groups {
+		names = append(names, g.Name)
+	}
+	if !slices.Equal(names, []string{"🚀 Proxy", "♻️ Auto", "🎯 Domestic"}) || len(p.Groups[1].Members) != 1 {
+		t.Fatal(names, p.Groups)
+	}
+	if len(p.BinarySets) != 1 || p.BinarySets[0].Tag != "LAN" || string(p.BinarySets[0].Data) != branchLAN || p.BinarySets[0].Behavior != "classical" {
+		t.Fatalf("%+v", p.BinarySets)
+	}
+	if len(p.Rules) != 2 || p.Rules[0].RuleSet != "LAN" || p.Final != p.Groups[0].ID {
+		t.Fatal(p.Rules, p.Final)
+	}
+	// The router keeps what it got on flash, under the branch's paths.
+	for _, path := range []string{rules.ManifestPath, rules.TemplatePath, "providers/dler/lan.classical.txt"} {
+		if _, err := os.Stat(filepath.Join(TemplateDir, path)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if st, _ := store.Status(id); st.Template == nil || st.Template.Reason != subconv.TemplateNoRules {
+		t.Fatal("status lacks the template")
+	}
+}
+
+const ownRules = `proxies:
+  - {name: HK 01, type: ss, server: hk.example.com, port: 8388, cipher: aes-128-gcm, password: p}
+proxy-groups:
+  - {name: Mine, type: select, proxies: [HK 01]}
+rules:
+  - DOMAIN-SUFFIX,a.example,Mine
+  - MATCH,Mine
+`
+
+func TestRoutingChoice(t *testing.T) {
+	b := serveBranch(t, 42)
+	store, id := fileSource(t, RoutingOwn)
+	c, err := b.fetcher().Refresh(t.Context(), store, id, []byte(ownRules), Policy{})
+	if err != nil || c.Profile.Template != nil || c.Profile.Groups[0].Name != "Mine" {
+		t.Fatal("usable rules gave way to the template", err, c.Profile.Template)
+	}
+	template := RoutingTemplate
+	if err := store.Preferences(id, Preferences{Rules: &template}); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := store.Status(id); st.Rules != RoutingTemplate {
+		t.Fatal("choice not saved")
+	}
+	c, err = b.fetcher().Refresh(t.Context(), store, id, []byte(ownRules), Policy{AllowLocalFallback: true})
+	if err != nil || c.Decision != "ready" || c.Profile.Template == nil || c.Profile.Template.Reason != subconv.TemplateRequested || c.Profile.Groups[0].Name != "🚀 Proxy" {
+		t.Fatal(err, c.Decision, c.Profile.Template, c.Notices)
+	}
+	// An older client leaves the choice as it was; an unknown one is refused.
+	if err := store.Preferences(id, Preferences{}); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := store.Status(id); st.Rules != RoutingTemplate {
+		t.Fatal("choice lost")
+	}
+	bad := "sometimes"
+	if err := store.Preferences(id, Preferences{Rules: &bad}); err == nil {
+		t.Fatal("unknown routing choice accepted")
+	}
+}
+
+func TestTemplateSurvivesHostsThatDoNotAnswer(t *testing.T) {
+	b := serveBranch(t, 42)
+	store, id := fileSource(t, RoutingOwn)
+	if _, err := b.fetcher().Refresh(t.Context(), store, id, []byte(twoLinks), Policy{}); err != nil {
+		t.Fatal(err)
+	}
+	b.down.Store(true)
+	c, err := b.fetcher().Refresh(t.Context(), store, id, []byte(twoLinks+"ss://YWVzLTEyOC1nY206cA@jp.example.com:8388#JP%2001\n"), Policy{})
+	if err != nil || c.Decision != "ready" || c.Profile.Template == nil || !c.Profile.Template.Cached || len(c.Profile.BinarySets) != 1 {
+		t.Fatal(err, c.Decision, c.Profile.Template, c.Notices)
+	}
+}
+
+func TestTemplateRefusesARollback(t *testing.T) {
+	b := serveBranch(t, 42)
+	store, id := fileSource(t, RoutingOwn)
+	if _, err := b.fetcher().Refresh(t.Context(), store, id, []byte(twoLinks), Policy{}); err != nil {
+		t.Fatal(err)
+	}
+	if v := (templateCache{dir: TemplateDir}).minVersion(); v != 42 {
+		t.Fatal(v)
+	}
+	// A host now serving an older branch is not followed back: the router keeps its copy.
+	b.version = 41
+	c, err := b.fetcher().Refresh(t.Context(), store, id, []byte(twoLinks+"ss://YWVzLTEyOC1nY206cA@jp.example.com:8388#JP%2001\n"), Policy{})
+	if err != nil || c.Profile.Template == nil || c.Profile.Template.Version != 42 || !c.Profile.Template.Cached {
+		t.Fatal(err, c.Profile.Template)
+	}
+}
+
+func TestTemplateRuleSetsMustMatchTheManifest(t *testing.T) {
+	b := serveBranch(t, 42)
+	b.lan = "DOMAIN-SUFFIX,tampered.example\n"
+	store, id := fileSource(t, RoutingOwn)
+	_, err := b.fetcher().Refresh(t.Context(), store, id, []byte(twoLinks), Policy{})
+	if p := FailureProvider(err); p == nil || p.Kind != "rule" {
+		t.Fatal("a rule set unlike the manifest was used", err)
+	}
+	if _, err := os.Stat(filepath.Join(TemplateDir, "providers/dler/lan.classical.txt")); err == nil {
+		t.Fatal("tampered rule set cached")
+	}
+}
+
+func TestWithoutTemplateTheRouterRoutesByDefault(t *testing.T) {
+	b := serveBranch(t, 42)
+	b.down.Store(true)
+	store, id := fileSource(t, RoutingTemplate)
+	c, err := b.fetcher().Refresh(t.Context(), store, id, []byte(ownRules), Policy{})
+	if err != nil || c.Decision != "ready" || !c.Profile.Local || c.Profile.Template != nil || len(c.Profile.Groups) != 0 {
+		t.Fatal(err, c.Decision, c.Notices)
+	}
+	if !slices.ContainsFunc(c.Notices, func(n Notice) bool { return n.Code == "subconv_template_unavailable" && !strings.Contains(n.At, "://") }) {
+		t.Fatal(c.Notices)
+	}
+}
+
+func TestBuildLeavesTheConfigToTheRouter(t *testing.T) {
+	b := serveBranch(t, 42)
+	branch, done := b.fetcher().branch()
+	defer done()
+	c, err := convert(t.Context(), []byte(ownRules), RoutingTemplate, branch)
+	if err != nil || c.template == nil {
+		t.Fatal(err, c.notices)
+	}
+	for key := range c.doc {
+		if !slices.Contains([]string{"proxies", "proxy-groups", "rule-providers", "rules"}, key) {
+			t.Fatal("subconv wrote config the router writes itself:", key)
+		}
+	}
+}
+
+// The rules branch is reached as a provider is: a host on a private address is refused.
+func TestBranchKeepsTheProviderPolicy(t *testing.T) {
+	b := serveBranch(t, 42)
+	store, id := fileSource(t, RoutingOwn)
+	c, err := (Fetcher{}).Refresh(t.Context(), store, id, []byte(twoLinks), Policy{})
+	if err != nil || c.Profile.Template != nil || b.requests.Load() != 0 {
+		t.Fatal("reached a branch on loopback", err, b.requests.Load())
+	}
+}
+
+func TestTemplateCacheWritesOnlyChanges(t *testing.T) {
+	c := templateCache{dir: t.TempDir()}
+	c.Put("providers/a.txt", []byte("one"))
+	path := filepath.Join(c.dir, "providers", "a.txt")
+	old := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatal(err)
+	}
+	c.Put("providers/a.txt", []byte("one"))
+	if st, _ := os.Stat(path); !st.ModTime().Equal(old) {
+		t.Fatal("unchanged value rewritten")
+	}
+	c.Put("providers/a.txt", []byte("two"))
+	if b, ok := c.Get("providers/a.txt"); !ok || string(b) != "two" {
+		t.Fatal("changed value not kept")
+	}
+	c.Put("../escape", []byte("x"))
+	if _, ok := c.Get("../escape"); ok {
+		t.Fatal("cache left its directory")
+	}
+	if entries, _ := os.ReadDir(filepath.Join(c.dir, "providers")); len(entries) != 1 {
+		t.Fatal("temporary file left behind", entries)
+	}
+}
+
+func TestSelectionsOfRemovedGroupsReset(t *testing.T) {
+	prev := mustParse(t, ownRules)
+	next := mustParse(t, strings.ReplaceAll(ownRules, "Mine", "Other"))
+	gone, node := prev.Groups[0].ID, prev.Nodes[0].ID
+	if c := Assess(next, &prev, Policy{Choices: map[string]string{gone: node}}); c.Decision != "ready" {
+		t.Fatal("a selection of a removed group blocked the update", c.Decision)
+	}
+	kept := next.Groups[0].ID
+	if c := Assess(next, &prev, Policy{Choices: map[string]string{kept: "node:" + strings.Repeat("0", 32)}}); c.Decision != "blocked" {
+		t.Fatal("a selection in a kept group lost its member silently", c.Decision)
+	}
+}
+
+// Every notice the router reports has a text in LuCI.
+func TestTemplateNoticesHaveTexts(t *testing.T) {
+	js, err := os.ReadFile("../../files/www/luci-static/resources/openweir/pages/sources.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, code := range []string{"subconv_template_unavailable", "provider_option_ignored", "dialer_proxy_unavailable"} {
+		if !strings.Contains(string(js), "\n    "+code+": ") {
+			t.Error("no text for", code)
+		}
+	}
+	for _, reason := range []string{subconv.TemplateRequested, subconv.TemplateNoRules, subconv.TemplateNoMatch, subconv.TemplateDropped} {
+		if !strings.Contains(string(js), reason+": ") {
+			t.Error("no text for template reason", reason)
+		}
+	}
+}

@@ -3,11 +3,18 @@ package subscriptioncli
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
 	sub "github.com/openweir/openwrt/internal/subscription"
 )
+
+// The tests stay off the network: no subscription fetches subconv's routing template.
+func TestMain(m *testing.M) {
+	sub.TemplateHosts = nil
+	os.Exit(m.Run())
+}
 
 func TestPublicMethodsDoNotExposeRawSubscription(t *testing.T) {
 	st := sub.OpenStore(t.TempDir())

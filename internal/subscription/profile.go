@@ -2,6 +2,7 @@
 package subscription
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -98,6 +99,8 @@ type Profile struct {
 	Notices       []Notice    `json:"notices,omitempty"`
 	Local         bool        `json:"local"`
 	Title         string      `json:"title,omitempty"`
+	// Template is set when the profile routes by subconv's template instead of its own rules.
+	Template *TemplateUse `json:"template,omitempty"`
 }
 
 type Policy struct {
@@ -106,6 +109,9 @@ type Policy struct {
 	AllowLocalFallback   bool
 	Confirm              string
 	ActiveIDs            []string
+	// Choices are the saved selections, group to member. One in a group the update removes
+	// resets; one in a group that stays keeps its member.
+	Choices map[string]string
 }
 type Candidate struct {
 	receipt        *providerReceipt
@@ -203,9 +209,9 @@ func (p *Profile) addProxy(name, kind string, out map[string]any) error {
 	return nil
 }
 
-// Parse converts a subscription body without downloading its providers.
+// Parse converts a subscription body with its own routing, without downloading anything.
 func Parse(sourceID string, body []byte) (Profile, error) {
-	c, err := convert(body)
+	c, err := convert(context.Background(), body, RoutingOwn, nil)
 	if err != nil {
 		p := Profile{SchemaVersion: SchemaVersion, Source: sourceID}
 		p.converted(c)
@@ -219,6 +225,7 @@ func (p *Profile) converted(c conversion, notices ...Notice) {
 	if c.format != "" {
 		p.Format = c.format
 	}
+	p.Template = c.template
 	p.Notices = slices.Concat(c.notices, notices, p.Notices)
 }
 
@@ -272,10 +279,16 @@ func Assess(p Profile, previous *Profile, policy Policy) Candidate {
 	for _, g := range p.Groups {
 		active[g.ID] = true
 	}
-	for _, id := range policy.ActiveIDs {
+	refs := slices.Clone(policy.ActiveIDs)
+	for group, member := range policy.Choices {
+		if (!strings.HasPrefix(group, "group:") || active[group]) && (strings.HasPrefix(member, "node:") || strings.HasPrefix(member, "group:")) {
+			refs = append(refs, member)
+		}
+	}
+	for _, id := range refs {
 		if !active[id] && id != Direct && id != Reject {
 			p.notice("active_target_missing", "", false)
-			return Candidate{Profile: p, Decision: "blocked", Notices: p.Notices, Changes: changes(previous, p, policy.ActiveIDs)}
+			return Candidate{Profile: p, Decision: "blocked", Notices: p.Notices, Changes: changes(previous, p, refs)}
 		}
 	}
 	omittedReference := slices.ContainsFunc(p.Notices, func(n Notice) bool { return n.Code == "rule_provider_reference_unavailable" })
@@ -324,7 +337,7 @@ func Assess(p Profile, previous *Profile, policy Policy) Candidate {
 		p.notice("local_fallback_removes_rejection", "", true)
 		danger = true
 	}
-	c := Candidate{Profile: p, Decision: "ready", Notices: p.Notices, Changes: changes(previous, p, policy.ActiveIDs)}
+	c := Candidate{Profile: p, Decision: "ready", Notices: p.Notices, Changes: changes(previous, p, refs)}
 	// Custom router rules can refer to any existing rule-set tag. A partial
 	// refresh must not silently discard a previously usable set, even when its
 	// subscription rules route through an ordinary (non-reject) outbound.
@@ -359,7 +372,8 @@ func Assess(p Profile, previous *Profile, policy Policy) Candidate {
 		c.Profile.Rules = nil
 		c.Profile.Groups = nil
 		c.Profile.BinarySets = nil
-		c.Changes = changes(previous, c.Profile, policy.ActiveIDs)
+		c.Profile.Template = nil
+		c.Changes = changes(previous, c.Profile, refs)
 	}
 	return c
 }

@@ -28,9 +28,9 @@ func protectReferences(raw json.RawMessage, i router.Intent) (json.RawMessage, e
 			ids[id] = true
 		}
 	}
-	for group, member := range i.Choices[source] {
-		protect(group)
-		protect(member)
+	// Saved selections go apart: one in a group the update removes resets (Assess).
+	if choices := i.Choices[source]; len(choices) > 0 {
+		args["choices"], _ = json.Marshal(choices)
 	}
 	for _, g := range i.Policy.Groups {
 		for _, r := range g.Members {

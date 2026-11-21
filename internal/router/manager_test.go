@@ -457,3 +457,21 @@ func TestFailedReloadFallsBackToRestart(t *testing.T) {
 		t.Fatalf("expected a full restart, got %d starts", starts)
 	}
 }
+
+// A selection of a group the subscription no longer has resets: it neither shows as pending
+// nor keeps a later hot switch from being acknowledged.
+func TestSelectionOfARemovedGroupDoesNotHoldBackOthers(t *testing.T) {
+	i := initial()
+	i.Enabled, i.Source = true, "primary"
+	i.Choices = map[string]map[string]string{"primary": {"group:gone": "node:a"}}
+	m := New(&fakeStore{i: i}, fakeService{selectNode: func(context.Context, string, string) error { return nil }}, Timing{time.Second, 100 * time.Millisecond, 5 * time.Millisecond, time.Second})
+	ctx, end := context.WithCancel(context.Background())
+	defer end()
+	go m.Run(ctx)
+	eventually(t, func() bool { return m.Status().Phase == "running" })
+	rev, err := m.Choose("primary", "group:live", "node:b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, func() bool { return m.Status().Applied == rev })
+}

@@ -142,3 +142,23 @@ func TestRefreshReportsProviderOptionNotices(t *testing.T) {
 		t.Fatal(err, c.Decision, c.Notices)
 	}
 }
+
+// A group's exclude-type leaves out the providers' nodes of those types, in either spelling.
+func TestGroupExcludeTypeFiltersProviderNodes(t *testing.T) {
+	var m map[string]any
+	if err := json.Unmarshal([]byte(`{"proxies":[],"proxy-providers":{"p":{"type":"inline","payload":[
+{"name":"S","type":"ss","server":"s.example","port":80,"cipher":"aes-128-gcm","password":"x"},
+{"name":"T","type":"trojan","server":"t.example","port":443,"password":"x"},
+{"name":"H","type":"http","server":"h.example","port":80}]}},
+"proxy-groups":[{"name":"A","type":"select","use":["p"],"exclude-type":"Shadowsocks|http"}],"rules":["MATCH,A"]}`), &m); err != nil {
+		t.Fatal(err)
+	}
+	s := providers{ctx: t.Context(), cache: map[string][]byte{}}
+	if err := s.clash(m); err != nil {
+		t.Fatal(err)
+	}
+	g := object(list(m["proxy-groups"])[0])
+	if members := list(g["proxies"]); len(members) != 1 || members[0] != "T" || g["exclude-type"] != nil {
+		t.Fatal(g)
+	}
+}

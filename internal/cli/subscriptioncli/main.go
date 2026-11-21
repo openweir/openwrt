@@ -23,22 +23,23 @@ import (
 const storeDir = "/etc/openweir/sources"
 
 type input struct {
-	ClockRetryGeneration uint64           `json:"clock_retry_generation,omitempty"`
-	Scheduled            bool             `json:"scheduled,omitempty"`
-	ReplacementURL       string           `json:"replacement_url,omitempty"`
-	RuleSet              string           `json:"rule_set,omitempty"`
-	Query                string           `json:"query,omitempty"`
-	Source               string           `json:"source"`
-	Config               *sub.Source      `json:"config,omitempty"`
-	Preferences          *sub.Preferences `json:"preferences,omitempty"`
-	Content              string           `json:"content,omitempty"`
-	Confirm              string           `json:"confirm,omitempty"`
-	ActiveIDs            []string         `json:"active_ids,omitempty"`
-	Origin               string           `json:"origin,omitempty"`
-	Email                string           `json:"email,omitempty"`
-	Password             string           `json:"password,omitempty"`
-	Offset               int              `json:"offset"`
-	Limit                int              `json:"limit"`
+	ClockRetryGeneration uint64            `json:"clock_retry_generation,omitempty"`
+	Scheduled            bool              `json:"scheduled,omitempty"`
+	ReplacementURL       string            `json:"replacement_url,omitempty"`
+	RuleSet              string            `json:"rule_set,omitempty"`
+	Query                string            `json:"query,omitempty"`
+	Source               string            `json:"source"`
+	Config               *sub.Source       `json:"config,omitempty"`
+	Preferences          *sub.Preferences  `json:"preferences,omitempty"`
+	Content              string            `json:"content,omitempty"`
+	Confirm              string            `json:"confirm,omitempty"`
+	ActiveIDs            []string          `json:"active_ids,omitempty"`
+	Choices              map[string]string `json:"choices,omitempty"`
+	Origin               string            `json:"origin,omitempty"`
+	Email                string            `json:"email,omitempty"`
+	Password             string            `json:"password,omitempty"`
+	Offset               int               `json:"offset"`
+	Limit                int               `json:"limit"`
 }
 type result struct {
 	TLS            *tlsdiag.Diagnostic     `json:"tls,omitempty"`
@@ -194,7 +195,7 @@ func run(ctx context.Context, store *sub.Store, method string, in input, f sub.F
 		return nil, []string{in.Source}, e
 	case "refresh":
 		f.ReplacementURL = in.ReplacementURL
-		c, e := f.Refresh(ctx, store, in.Source, []byte(in.Content), sub.Policy{ClockRetryGeneration: in.ClockRetryGeneration, Scheduled: in.Scheduled, ActiveIDs: in.ActiveIDs, Confirm: in.Confirm})
+		c, e := f.Refresh(ctx, store, in.Source, []byte(in.Content), sub.Policy{ClockRetryGeneration: in.ClockRetryGeneration, Scheduled: in.Scheduled, ActiveIDs: in.ActiveIDs, Choices: in.Choices, Confirm: in.Confirm})
 		if e != nil {
 			var withdrawn *sub.AccountWithdrawal
 			if errors.As(e, &withdrawn) {

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
@@ -322,8 +323,13 @@ func (m *Manager) publish(i Intent, actual map[string]string) {
 		m.groups = map[string]GroupResult{}
 		for group, node := range i.Choices[i.Source] {
 			if (group == Global && i.Mode == "global") || (group != Global && i.Mode == "smart") {
+				seen, ok := actual[group]
+				if !ok && strings.HasPrefix(group, "group:") {
+					// A group the subscription no longer has: its selection reset.
+					continue
+				}
 				r := GroupResult{Saved: node, State: "saved", Revision: i.Revision}
-				if seen, ok := actual[group]; ok {
+				if ok {
 					r.Applied = seen
 					if seen == node {
 						r.State = "applied"

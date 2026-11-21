@@ -3,6 +3,7 @@ package router
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 )
 
@@ -192,7 +193,11 @@ func (m *Manager) acknowledgeChoices(source string) {
 		if (i.Mode == "global") != (group == Global) {
 			continue
 		}
-		r := m.groups[source+"\x00"+group]
+		r, tracked := m.groups[source+"\x00"+group]
+		if !tracked && strings.HasPrefix(group, "group:") {
+			// The subscription no longer has the group (publish): its selection reset.
+			continue
+		}
 		if r.State != "applied" || r.Applied != wanted {
 			return
 		}

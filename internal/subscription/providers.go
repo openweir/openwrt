@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -72,6 +73,8 @@ type providers struct {
 	ctx           context.Context
 	cache         map[string][]byte
 	notices       []Notice
+	// template fetches the rule sets of subconv's routing template, when the document uses it.
+	template *templateSets
 }
 
 type providerInput struct {
@@ -174,13 +177,13 @@ func (s *providers) prefetchInputs(inputs []providerInput, budget int) error {
 }
 
 // expandSourceProviders downloads a converted document's providers into it. It returns the rule
-// sets the document gained and notices about provider content and options.
-func (f Fetcher) expandSourceProviders(ctx context.Context, m map[string]any, origin string) ([]BinarySet, []Notice, error) {
-	s := &providers{trustedOrigin: strings.TrimSuffix(providerAddress(origin), "/"), trusted: f, ctx: ctx, cache: map[string][]byte{}}
-	tr := publicProviderTransport()
-	defer tr.CloseIdleConnections()
-	s.f.Client = &http.Client{Transport: tr, Timeout: 15 * time.Second}
-	s.f.Fallback, s.f.egress, s.f.embedded = f.Fallback, f.egress, true
+// sets the document gained and notices about provider content and options. The rule sets of
+// subconv's routing template come from the rules branch (template), checked against its manifest.
+func (f Fetcher) expandSourceProviders(ctx context.Context, m map[string]any, origin string, template *templateSets) ([]BinarySet, []Notice, error) {
+	s := &providers{trustedOrigin: strings.TrimSuffix(providerAddress(origin), "/"), trusted: f, ctx: ctx, cache: map[string][]byte{}, template: template}
+	var done func()
+	s.f, done = f.embeddedFetcher()
+	defer done()
 	normalizeProviderAddresses(m)
 	if r := f.providerReceipt; r != nil && r.Key != "" {
 		if ttl := providerLifetime(m); ttl > 0 {
@@ -226,11 +229,11 @@ func (s *providers) clash(m map[string]any) error {
 			}
 		}
 	}
-	rules := map[string]providerInput{}
+	ruleInputs := map[string]providerInput{}
 	for _, k := range sortedKeys(rp) {
-		if v := object(rp[k]); field(v, "type") == "http" && field(v, "url") != "" {
-			rules[k] = s.httpInput(k, v, "rule", MaxBody)
-			inputs = append(inputs, rules[k])
+		if v := object(rp[k]); field(v, "type") == "http" && field(v, "url") != "" && s.template == nil {
+			ruleInputs[k] = s.httpInput(k, v, "rule", MaxBody)
+			inputs = append(inputs, ruleInputs[k])
 		}
 	}
 	if err := s.prefetchInputs(inputs, maxSetMaterialization); err != nil {
@@ -238,8 +241,11 @@ func (s *providers) clash(m map[string]any) error {
 	}
 	names := map[string][]any{}
 	var standalone []any
+	// The type of each node, by provider ("" for the document's own) and name, for exclude-type.
+	kinds := map[string]string{}
 	for _, n := range list(m["proxies"]) {
 		standalone = append(standalone, object(n)["name"])
+		kinds["\x00"+field(object(n), "name")] = field(object(n), "type")
 	}
 	allProviderNames := sortedKeys(pp)
 
@@ -275,6 +281,7 @@ func (s *providers) clash(m map[string]any) error {
 		for _, n := range proxies {
 			members = append(members, n["name"])
 			nodes = append(nodes, n)
+			kinds[k+"\x00"+field(n, "name")] = field(n, "type")
 		}
 		names[k] = members
 		delete(pp, k)
@@ -306,10 +313,11 @@ func (s *providers) clash(m map[string]any) error {
 		if !ok {
 			continue
 		}
+		excluded := excludedTypes(g)
 		members := list(g["proxies"])
 		if g["include-all-proxies"] == true {
 			for _, x := range standalone {
-				if name, ok := x.(string); ok && matches(name) {
+				if name, ok := x.(string); ok && matches(name) && !excluded(kinds["\x00"+name]) {
 					members = append(members, name)
 				}
 			}
@@ -326,7 +334,7 @@ func (s *providers) clash(m map[string]any) error {
 				return errors.New("node_limit")
 			}
 			for _, x := range n {
-				if name, ok := x.(string); ok && matches(name) {
+				if name, ok := x.(string); ok && matches(name) && !excluded(kinds[k+"\x00"+name]) {
 					members = append(members, name)
 				}
 			}
@@ -335,6 +343,7 @@ func (s *providers) clash(m map[string]any) error {
 			delete(g, "use")
 			delete(g, "filter")
 			delete(g, "exclude-filter")
+			delete(g, "exclude-type")
 			if len(members) == 0 {
 				if fallback := field(g, "empty-fallback"); fallback != "" {
 					members = append(members, fallback)
@@ -352,7 +361,11 @@ func (s *providers) clash(m map[string]any) error {
 		var err error
 		switch field(v, "type") {
 		case "http":
-			raw = s.cache[rules[name].key()]
+			if s.template == nil {
+				raw = s.cache[ruleInputs[name].key()]
+			} else if raw, err = s.template.fetch(s.ctx, field(v, "url")); err != nil {
+				return providerFailure("rule", field(v, "url"), err)
+			}
 		case "file":
 			if raw, err = s.trusted.localClashSet(field(v, "path")); err != nil {
 				continue
@@ -397,6 +410,18 @@ func (s *providers) providerProxies(b []byte) ([]any, error) {
 	}
 	return list(doc["proxies"]), nil
 }
+
+// excludedTypes reports the node types a group's exclude-type leaves out. mihomo compares it,
+// in any case, with its own names of the types, which differ from the config's only for ss
+// (Shadowsocks) and ssr (ShadowsocksR).
+func excludedTypes(g map[string]any) func(string) bool {
+	types := strings.Split(strings.ToLower(field(g, "exclude-type")), "|")
+	return func(kind string) bool {
+		name := map[string]string{"ss": "shadowsocks", "ssr": "shadowsocksr"}[kind]
+		return kind != "" && (slices.Contains(types, kind) || name != "" && slices.Contains(types, name))
+	}
+}
+
 func groupFilter(g map[string]any) (func(string) bool, bool) {
 	compile := func(k string) ([]*regexp.Regexp, bool) {
 		v, ok := g[k]

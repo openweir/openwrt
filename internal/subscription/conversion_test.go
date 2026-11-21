@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/openweir/subconv"
+	"gopkg.in/yaml.v3"
 )
 
 func TestImportedRuleFilesStillLoad(t *testing.T) {
@@ -34,13 +35,28 @@ func TestImportedRuleFilesStillLoad(t *testing.T) {
 	}
 }
 
+const identityVLESS = `{name: VLESS, type: vless, server: v.example, port: 443, uuid: 01234567-89ab-cdef-0123-456789abcdef, flow: xtls-rprx-vision, tls: true, servername: www.example.com, client-fingerprint: chrome, reality-opts: {public-key: jUuJmNLSY1o2H_l4FaS66HB3XVAXqNJhoFrlQ1JyBTw, short-id: abcd}, udp: true}`
+const identitySS = `{name: SS, type: ss, server: s.example, port: 8388, cipher: 2022-blake3-aes-128-gcm, password: MDEyMzQ1Njc4OWFiY2RlZg==, udp: true, plugin: obfs, plugin-opts: {mode: tls, host: cdn.example}}`
+
+// rawID is the ID the router gave a valid Clash proxy before subconv converted Clash too: it
+// digests the proxy as written, without its name.
+func rawID(t *testing.T, source, proxy string) string {
+	t.Helper()
+	var m map[string]any
+	if err := yaml.Unmarshal([]byte(proxy), &m); err != nil {
+		t.Fatal(err)
+	}
+	delete(m, "name")
+	return ref("node", []any{source, proxyProtocol(m), m})
+}
+
 // IDs the router gave these nodes and groups before subconv converted Clash subscriptions too:
 // saved choices, local groups and device rules refer to them.
 func TestClashIdentitiesSurviveTheConverter(t *testing.T) {
 	p, err := Parse("golden", []byte(`proxies:
-  - {name: VLESS, type: vless, server: v.example, port: 443, uuid: 01234567-89ab-cdef-0123-456789abcdef, flow: xtls-rprx-vision, tls: true, servername: www.example.com, client-fingerprint: chrome, reality-opts: {public-key: PUBKEY, short-id: abcd}, udp: true}
+  - `+identityVLESS+`
   - {name: VMess, type: vmess, server: m.example, port: 443, uuid: 01234567-89ab-cdef-0123-456789abcdef, alterId: 0, cipher: auto, tls: true, network: ws, ws-opts: {path: /ws, headers: {Host: m.example}}}
-  - {name: SS, type: ss, server: s.example, port: 8388, cipher: 2022-blake3-aes-128-gcm, password: c2VjcmV0c2VjcmV0c2VjcmV0, udp: true, plugin: obfs, plugin-opts: {mode: tls, host: cdn.example}}
+  - `+identitySS+`
   - {name: Trojan, type: trojan, server: t.example, port: 443, password: secret, sni: t.example, network: grpc, grpc-opts: {grpc-service-name: svc}}
   - {name: HY2, type: hysteria2, server: h.example, port: 443, password: secret, ports: 20000-30000, obfs: salamander, obfs-password: mask, sni: h.example}
   - {name: TUIC, type: tuic, server: q.example, port: 443, uuid: 01234567-89ab-cdef-0123-456789abcdef, password: secret, congestion-controller: bbr, alpn: [h3]}
@@ -58,8 +74,8 @@ rules:
 		t.Fatal(err)
 	}
 	want := map[string]string{
-		"VLESS": "node:75c1ba1e5eb2f053578353a79dde3ce2", "VMess": "node:7c8d1a9c3b5d5d8d4fe1decb975c0d1e",
-		"SS": "node:16eff6d2d9f0e06edcd9115838d8e843", "Trojan": "node:8088edc6bf47abbe49733855ec9908d7",
+		"VLESS": rawID(t, "golden", identityVLESS), "VMess": "node:7c8d1a9c3b5d5d8d4fe1decb975c0d1e",
+		"SS": rawID(t, "golden", identitySS), "Trojan": "node:8088edc6bf47abbe49733855ec9908d7",
 		"HY2": "node:7a4dd61daf21c9f00119aedf2d0baeb5", "TUIC": "node:077e98fa271fb6059e54f6a270e88f27",
 		"Snell": "node:2966cb2690cfc6623aef711488cb986e", "AnyTLS": "node:669236bdbd0a655440e76eb3957f0004",
 		"Proxy": "group:d55ad108424a1644112b0c64457491eb", "Auto": "group:3df319d51d8e726a0f8baaaddc33cab2",
@@ -223,7 +239,7 @@ rules:
   - RULE-SET,empty,REJECT
   - MATCH,DIRECT
 `, srv.URL, prefix))
-	sets, notices, err := (Fetcher{Client: srv.Client()}).expandSourceProviders(t.Context(), c.doc, srv.URL)
+	sets, notices, err := (Fetcher{Client: srv.Client()}).expandSourceProviders(t.Context(), c.doc, srv.URL, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -244,12 +260,5 @@ rules:
 	// An empty set goes like one the router lacks: its rule is skipped, and confirmed as it rejects.
 	if _, ok := byTag["empty"]; ok || len(p.Rules) != 2 || !slices.Contains(p.Notices, Notice{Code: "rule_provider_reference_unavailable", At: "rule 3 · empty", Dangerous: true}) {
 		t.Fatal(p.Rules, p.Notices)
-	}
-}
-
-func TestRuleStatsReachTheRouter(t *testing.T) {
-	c := mustConvert(t, "[Proxy]\nA = http, edge.example, 8080\n[Rule]\nDOMAIN,a.example,A\nUSER-AGENT,x*,A\nFINAL,A")
-	if c.stats.Total != 3 || c.stats.Dropped != 1 || !c.stats.Match {
-		t.Fatalf("%+v", c.stats)
 	}
 }

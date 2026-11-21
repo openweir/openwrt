@@ -36,6 +36,8 @@ type Source struct {
 	PlanID             int               `json:"plan_id,omitempty"`
 	Filters            map[string]string `json:"filters,omitempty"`
 	AllowLocalFallback bool              `json:"allow_local_fallback,omitempty"`
+	// Rules is the source's routing choice: RoutingOwn or RoutingTemplate.
+	Rules string `json:"rules,omitempty"`
 }
 
 const defaultSubscriptionUserAgent = "clash"
@@ -90,7 +92,7 @@ func validTarget(k string) bool {
 	return true
 }
 func (s Source) validate() error {
-	if !sourceIDValid(s.ID) || (strings.HasPrefix(s.ID, "plan:") && s.Kind != "platform") || !safeLabel(s.ID) || !safeLabel(s.Name) || len(s.UserAgent) > 256 || strings.ContainsAny(s.UserAgent, "\r\n\x00") {
+	if !sourceIDValid(s.ID) || (strings.HasPrefix(s.ID, "plan:") && s.Kind != "platform") || !safeLabel(s.ID) || !safeLabel(s.Name) || len(s.UserAgent) > 256 || strings.ContainsAny(s.UserAgent, "\r\n\x00") || s.Rules != RoutingOwn && s.Rules != RoutingTemplate {
 		return errors.New("invalid_source")
 	}
 	switch s.Kind {
@@ -133,6 +135,8 @@ type Fetcher struct {
 	header         http.Header
 	sourceID       string
 	ruleImportRoot string
+	// Tests reach the URLs documents and the rules branch choose on loopback.
+	embeddedClient *http.Client
 	ReplacementURL string
 	Client         *http.Client
 	BeforeCommit   Validator
@@ -612,7 +616,9 @@ func (f Fetcher) readProfile(ctx context.Context, s Source, file []byte, usage *
 		}
 		*f.providerReceipt = providerReceipt{Key: key, Checked: now}
 	}
-	c, err := convert(body)
+	branch, done := f.branch()
+	defer done()
+	c, err := convert(ctx, body, s.Rules, branch)
 	if err != nil {
 		// The notices tell a subscription of Snell nodes without a psk apart (credentialIssue).
 		p := Profile{SchemaVersion: SchemaVersion, Source: s.ID}
@@ -620,7 +626,11 @@ func (f Fetcher) readProfile(ctx context.Context, s Source, file []byte, usage *
 		return p, err
 	}
 	f.sourceID = s.ID
-	sets, expansion, err := f.expandSourceProviders(ctx, c.doc, origin)
+	var template *templateSets
+	if c.template != nil {
+		template = &templateSets{client: branch, version: c.template.Version}
+	}
+	sets, expansion, err := f.expandSourceProviders(ctx, c.doc, origin, template)
 	if err != nil {
 		if provider := FailureProvider(err); provider != nil {
 			provider.Warnings = templateWarningSummary(headers)

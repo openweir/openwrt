@@ -19,7 +19,7 @@ func (r *providerReceipt) fresh(key string, now time.Time) bool {
 }
 
 func providerSnapshotKey(src Source, body []byte) string {
-	return digest([]string{"provider-import-v1", src.ID, src.URL, src.subscriptionAgent(), fmt.Sprintf("%x", sha256.Sum256(body))})
+	return digest([]string{"provider-import-v1", src.ID, src.URL, src.subscriptionAgent(), src.Rules, fmt.Sprintf("%x", sha256.Sum256(body))})
 }
 
 func providerLifetime(m map[string]any) time.Duration {

@@ -601,6 +601,7 @@ func (s *Store) saveAccount(a Account, loginIntent string, changed *[]string) er
 			old := current.Config
 			src.Filters = old.Filters
 			src.AllowLocalFallback = old.AllowLocalFallback
+			src.Rules = old.Rules
 		}
 		if e = s.configure(src, true); e != nil {
 			return e
@@ -618,6 +619,8 @@ type Preferences struct {
 	UserAgent          string            `json:"user_agent"`
 	Filters            map[string]string `json:"filters"`
 	AllowLocalFallback bool              `json:"allow_local_fallback"`
+	// Rules is the routing choice (Source.Rules); an older client leaves it out.
+	Rules *string `json:"rules,omitempty"`
 }
 
 func (s *Store) Preferences(id string, p Preferences) error {
@@ -647,6 +650,9 @@ func (s *Store) Preferences(id string, p Preferences) error {
 			v.Name, v.AutoName = p.Name, false
 		}
 		v.AllowLocalFallback = p.AllowLocalFallback
+		if p.Rules != nil {
+			v.Rules = *p.Rules
+		}
 		if v.Kind == "platform" {
 			if p.Filters != nil {
 				v.Filters = p.Filters
@@ -680,6 +686,8 @@ type Status struct {
 	Agent            string              `json:"agent,omitempty"`
 	CustomAgent      bool                `json:"custom_agent,omitempty"`
 	LocalFallback    bool                `json:"local_fallback,omitempty"`
+	Rules            string              `json:"rules,omitempty"`
+	Template         *TemplateUse        `json:"template,omitempty"`
 	HasHistory       bool                `json:"has_history,omitempty"`
 	UpdatedAt        string              `json:"updated_at,omitempty"`
 	Source           string              `json:"source"`
@@ -710,6 +718,7 @@ func statusOf(r *record) Status {
 		}
 		st.HasHistory = r.Previous != nil && !r.Suspended && !r.Revoked
 		st.LocalFallback = r.Config.AllowLocalFallback
+		st.Rules = r.Config.Rules
 		if r.Config.Kind == "platform" {
 			st.Plan = r.Config.Plan
 		}
@@ -728,6 +737,7 @@ func statusOf(r *record) Status {
 		p := r.Current
 		st.Format = p.Format
 		st.Local = p.Local
+		st.Template = p.Template
 		st.NodeCount = len(p.Nodes)
 		st.GroupCount = len(p.Groups)
 		st.RuleCount = len(p.Rules)

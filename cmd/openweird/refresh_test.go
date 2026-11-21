@@ -2,12 +2,39 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"os"
 	"testing"
 	"time"
 
+	"github.com/openweir/openwrt/internal/router"
 	"github.com/openweir/openwrt/internal/subscription"
 	"github.com/openweir/openwrt/internal/tlsdiag"
 )
+
+// The tests stay off the network: no subscription fetches subconv's routing template.
+func TestMain(m *testing.M) {
+	subscription.TemplateHosts = nil
+	os.Exit(m.Run())
+}
+
+// Saved selections reach the refresh apart from the references it must keep, so that a
+// selection of a group the update removes resets instead of blocking it.
+func TestRefreshKeepsReferencesAndPassesSelections(t *testing.T) {
+	i := router.Intent{Source: "s", Choices: map[string]map[string]string{"s": {"group:old": "node:a", router.Global: "node:b"}}}
+	i.Policy.Devices = []router.DeviceRule{{Address: "192.168.1.2/32", Target: "group:dev"}}
+	raw, err := protectReferences(json.RawMessage(`{"source":"s"}`), i)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var args struct {
+		ActiveIDs []string          `json:"active_ids"`
+		Choices   map[string]string `json:"choices"`
+	}
+	if json.Unmarshal(raw, &args) != nil || len(args.ActiveIDs) != 1 || args.ActiveIDs[0] != "group:dev" || args.Choices["group:old"] != "node:a" || args.Choices[router.Global] != "node:b" {
+		t.Fatal(string(raw))
+	}
+}
 
 func TestScheduledRefreshWaitsForFirstManualImport(t *testing.T) {
 	now := time.Now().UTC()

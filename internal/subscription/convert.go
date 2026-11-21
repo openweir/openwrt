@@ -3,25 +3,22 @@ package subscription
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"errors"
 	"strings"
 
 	"github.com/openweir/subconv"
+	"github.com/openweir/subconv/rules"
 	"gopkg.in/yaml.v3"
 )
 
 // conversion is a subscription in the OpenWeir format: the Clash document subconv makes of a
 // body in any format. The router checks and compiles nothing else.
 type conversion struct {
-	doc     map[string]any
-	format  string
-	notices []Notice
-	// stats count the subscription's own rules (subconv.Result.RuleStats): what a built-in
-	// routing template (subconv.Build) will judge them by, when the router offers one instead.
-	stats struct {
-		Total, Dropped int
-		Match          bool
-	}
+	doc      map[string]any
+	format   string
+	notices  []Notice
+	template *TemplateUse
 }
 
 var (
@@ -32,13 +29,25 @@ var (
 )
 
 // convert runs a subscription body through subconv. Rule sets whose content only the router
-// can convert stay, since it downloads them itself (ruleSet).
-func convert(body []byte) (conversion, error) {
+// can convert stay, since it downloads them itself (ruleSet). With the rules branch (branch),
+// subconv puts its routing template in place of the subscription's groups and rules when the
+// source asks for it (routing) or the subscription's own routing is missing or too lossy.
+// The router writes the rest of the config itself.
+func convert(ctx context.Context, body []byte, routing string, branch *rules.Client) (conversion, error) {
 	if len(body) > MaxBody {
 		return conversion{}, errors.New("subscription_size_limit")
 	}
-	result, err := subconv.ConvertWith(body, subconv.Options{ConvertsRuleSets: true})
+	options := subconv.Options{ConvertsRuleSets: true, Rules: subconv.RulesAuto, Client: branch}
 	switch {
+	case branch == nil:
+		options.Rules = subconv.RulesSubscription
+	case routing == RoutingTemplate:
+		options.Rules = subconv.RulesTemplate
+	}
+	result, err := subconv.Build(ctx, body, options)
+	switch {
+	case ctx.Err() != nil:
+		return conversion{}, ctx.Err()
 	case errors.Is(err, subconv.ErrEmpty):
 		return conversion{}, errEmptySubscription
 	case errors.Is(err, subconv.ErrWebPage):
@@ -51,15 +60,36 @@ func convert(body []byte) (conversion, error) {
 		return conversion{}, errors.New("invalid_subscription")
 	}
 	c := conversion{format: formatName(result.Format)}
-	c.stats.Total, c.stats.Dropped, c.stats.Match = result.RuleStats.Total, result.RuleStats.Dropped, result.RuleStats.Match
+	unavailable := false
 	for _, w := range result.Warnings {
+		switch w.Code {
+		case subconv.WarnTemplateApplied:
+			// The profile records it (Profile.Template).
+			continue
+		case subconv.WarnTemplateUnavailable:
+			unavailable = true
+		}
 		c.notices = append(c.notices, warningNotice(w))
+	}
+	if t := result.Template; t != nil {
+		c.template = &TemplateUse{Version: t.Version, Reason: t.Reason, Cached: t.Cached}
+		if t.Reason == subconv.TemplateDropped {
+			c.template.Dropped, c.template.Total = result.RuleStats.Dropped, result.RuleStats.Total
+		}
 	}
 	if len(result.Proxies) == 0 && len(result.ProxyProviders) == 0 {
 		return c, errNoUsableNodes
 	}
 	if c.doc, err = document(result); err != nil {
 		return c, err
+	}
+	if unavailable {
+		// Routing the subscription's own rules could not be trusted with, or that the source
+		// declined, gives way to the router's default: mainland direct, the rest proxied. A
+		// later refresh tries the template again.
+		for _, k := range []string{"proxy-groups", "rule-providers", "rules"} {
+			delete(c.doc, k)
+		}
 	}
 	if result.Format == subconv.FormatClash || result.Format == subconv.FormatStash {
 		c.notices = append(c.notices, clashFields(body, c.doc)...)

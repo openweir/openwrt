@@ -22,7 +22,7 @@ const primary = `{"outbounds":[{"type":"http","tag":"Edge","server":"edge.exampl
 
 func mustConvert(t *testing.T, body string) conversion {
 	t.Helper()
-	c, err := convert([]byte(body))
+	c, err := convert(t.Context(), []byte(body), RoutingOwn, nil)
 	if err != nil {
 		t.Fatal(err, c.notices)
 	}
@@ -43,7 +43,7 @@ func TestAllProtocolsImport(t *testing.T) {
 	vm := `{"v":"2","add":"host.example","port":"443","id":"7e52ffc3-393c-432f-9afc-598762919983","net":"ws","path":"/p","tls":"tls"}`
 	ssr := "host.example:443:auth_sha1_v4:aes-256-cfb:plain:" + b64([]byte("key")) + "/?remarks=" + b64([]byte("ssr"))
 	cases := []struct{ protocol, raw, key string }{
-		{"vless", "vless://7e52ffc3-393c-432f-9afc-598762919983@host.example:443?security=reality&pbk=publickey&flow=xtls-rprx-vision&sid=1234&fp=chrome", "flow"},
+		{"vless", "vless://7e52ffc3-393c-432f-9afc-598762919983@host.example:443?security=reality&pbk=jUuJmNLSY1o2H_l4FaS66HB3XVAXqNJhoFrlQ1JyBTw&flow=xtls-rprx-vision&sid=1234&fp=chrome", "flow"},
 		{"vmess", "vmess://" + b64([]byte(vm)), "network"},
 		{"trojan", "trojan://key@host.example:443?sni=server.example", "sni"},
 		{"shadowsocks", "ss://" + b64([]byte("aes-256-gcm:key")) + "@host.example:443", "cipher"},
@@ -374,7 +374,7 @@ func TestProviderExpansionAndIndependentCredentials(t *testing.T) {
 		t.Fatal(p)
 	}
 	f := Fetcher{}
-	if _, _, e := f.expandSourceProviders(context.Background(), map[string]any{"proxy-providers": map[string]any{"id": map[string]any{"type": "http", "url": srv.URL}}}, ""); e == nil {
+	if _, _, e := f.expandSourceProviders(context.Background(), map[string]any{"proxy-providers": map[string]any{"id": map[string]any{"type": "http", "url": srv.URL}}}, "", nil); e == nil {
 		t.Fatal("untrusted nested provider reached router loopback")
 	}
 }
