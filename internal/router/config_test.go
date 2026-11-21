@@ -320,6 +320,9 @@ func TestDNSSplitsDomesticAndProxiedUpstreams(t *testing.T) {
 	if c["sniffer"].(map[string]any)["override-destination"] != true || !slices.Contains(c["rules"].([]any), any(quicBlock)) {
 		t.Fatal("sniffer override or QUIC block missing")
 	}
+	if c["experimental"].(map[string]any)["quic-go-disable-gso"] != true {
+		t.Fatal("quic-go GSO left on")
+	}
 	off, on := false, true
 	a, b := Preferences{BypassCN: &on}, Preferences{BypassCN: &off}
 	if a.SameNetwork(b) || !a.SameNetwork(Preferences{}) {

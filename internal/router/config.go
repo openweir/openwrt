@@ -157,6 +157,9 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 		// Push and smart-home services break when their destination is rewritten.
 		"skip-domain": []string{"+.push.apple.com", "Mijia Cloud", "+.mi.com", "+.xiaomi.net", "dlg.io.mi.com", "+.oray.com", "+.sunlogin.net"},
 		"sniff":       obj{"TLS": obj{"ports": []string{"443", "8443"}}, "HTTP": obj{"ports": []string{"80", "8080-8880"}}, "QUIC": obj{"ports": []string{"443"}}}}
+	// quic-go's UDP segmentation offload breaks Hysteria2 and TUIC nodes on OpenWrt 24.10
+	// kernels (apernet/hysteria#1233); OpenClash turns it off as well.
+	config["experimental"] = obj{"quic-go-disable-gso": true}
 	if n.DNS {
 		dns := config["dns"].(obj)
 		dns["listen"] = "127.0.0.1:19764"
