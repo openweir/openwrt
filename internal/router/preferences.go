@@ -43,6 +43,7 @@ func (p Preferences) Validate() error {
 	}
 	return nil
 }
+
 // SameNetwork reports whether two preference sets produce the same takeover.
 func (p Preferences) SameNetwork(o Preferences) bool {
 	return p.Method == o.Method && p.DNS == o.DNS && p.DNSIntercept == o.DNSIntercept && p.IPv6 == o.IPv6 && slices.Equal(p.Networks, o.Networks)

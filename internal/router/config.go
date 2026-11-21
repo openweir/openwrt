@@ -101,10 +101,10 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 		"log-level": "warning", "profile": obj{"store-selected": false, "store-fake-ip": false}, "geodata-mode": true, "geo-auto-update": false,
 		"hosts": obj{"probe.openweir.invalid": "192.0.2.1"}, "dns": obj{"enable": true, "listen": "", "enhanced-mode": "redir-host", "use-hosts": true,
 			"use-system-hosts": false, "ipv6": n.Family6, "default-nameserver": []string{resolver.String()}, "nameserver": []string{resolver.String()}, "fake-ip-range": "172.30.254.1/30"}}
-	if i.Mode == "smart" {
-		config["sniffer"] = obj{"enable": true, "override-destination": false, "parse-pure-ip": true, "force-dns-mapping": true,
-			"sniff": obj{"TLS": obj{"ports": []string{"443", "8443"}}, "HTTP": obj{"ports": []string{"80", "8080"}}, "QUIC": obj{"ports": []string{"443"}}}}
-	}
+	// The WAN resolver may return poisoned answers for proxied sites. Dial the
+	// sniffed domain so the node resolves it, in every proxy mode.
+	config["sniffer"] = obj{"enable": true, "override-destination": true, "parse-pure-ip": true, "force-dns-mapping": true,
+		"sniff": obj{"TLS": obj{"ports": []string{"443", "8443"}}, "HTTP": obj{"ports": []string{"80", "8080"}}, "QUIC": obj{"ports": []string{"443"}}}}
 	if n.DNS {
 		config["dns"].(obj)["listen"] = "127.0.0.1:19764"
 	}
