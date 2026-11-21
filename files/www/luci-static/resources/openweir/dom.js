@@ -174,7 +174,6 @@ const diagnosticText = {
     kernel_integrity_check_failed: '已安装内核的文件大小或 SHA-256 校验失败',
     kernel_config_unreadable: '无法读取生成的配置文件',
     kernel_file_missing: '缺少启动所需的内核或配置文件',
-    missing_core_jail: '启动代理需要固件提供 /sbin/ujail。缺少该命令时，请安装 procd-ujail',
     kernel_not_installed: '请先在内核管理中安装并选择一个版本',
     kernel_restore_unavailable: '无法从下载源恢复临时内核',
     kernel_preparation_failed: '内核准备失败，未取得更具体的错误分类',
