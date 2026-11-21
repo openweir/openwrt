@@ -673,8 +673,35 @@ export async function overview(ui) {
 	const failOpenLabel = '代理无响应时回退直连';
 	const fallback = toggle(failOpenLabel, failOpen, (v) => saveP({ fail_open: v }));
 	fallback.setAttribute('aria-describedby', 'ow-fail-open-help');
+	// Recommended settings; the LAN networks, start at boot and the update period are kept.
+	const restoreDefaults = () => {
+		const d = ui.dialog('恢复默认设置', h('div', { class: 'ow-stack' },
+			h('p', {}, '运行模式、DNS、连接优化、绕过列表和节点自动切换将恢复为推荐的默认值，代理会重启一次。'),
+			h('small', { class: 'ow-muted' }, '订阅、规则、设备设置和管理的局域网不受影响。'),
+			h('div', { class: 'ow-row' },
+				ui.button('取消', () => d.close()),
+				ui.button('恢复默认', async () => {
+					try {
+						await ui.run('policy', { revision: intent.revision, policy: { ...policy, auto_failover: undefined } });
+						await ui.refresh();
+						await ui.run('save_network', { args: {
+							...prefs, method: 'tproxy', ipv6: false, dns: true, dns_intercept: false, dns_mode: 'dnsmasq', fake_ip: true,
+							local_proxy: true, fail_open: true, block_quic: true, sniff: true, tcp_concurrent: true, unified_delay: true,
+							bypass_cn: false, common_ports: false, bypass_ips: [], bypass_ports: [], bypass_sources: [], proxy_ips: [],
+							dns_domestic: builtinDNS.domestic, dns_foreign: builtinDNS.foreign,
+						} });
+						await ui.refresh();
+						d.close();
+						ui.notify('已恢复默认设置');
+					} catch (e) {
+						ui.notify(e.message);
+					}
+				}, 'ow-danger')),
+		));
+	};
 	const repair = card(
-		'故障与恢复',
+		'',
+		h('div', { class: 'ow-row' }, h('h2', {}, '故障与恢复'), ui.button('恢复默认', restoreDefaults, 'ow-link')),
 		h('div', { class: 'ow-row' }, '防火墙', ui.button('检查运行环境', async () => {
 			const env = await ui.rpc('environment');
 			if (!ui.signal.aborted) ui.dialog('防火墙运行环境', environmentRows(firewallDetails(env)));
