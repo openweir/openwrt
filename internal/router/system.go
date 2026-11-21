@@ -467,7 +467,8 @@ applyLoop:
 	}
 	window := time.Duration(0)
 	if launch.Token != "" {
-		window = time.Minute
+		// Three healthy checks in a row (checked every 5 s) confirm the new core.
+		window = 10 * time.Second
 		s.mu.Lock()
 		s.confirmUntil = time.Now().Add(window)
 		s.mu.Unlock()
