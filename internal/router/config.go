@@ -80,8 +80,11 @@ func coreTarget(s string) string {
 var digestName = regexp.MustCompile("^[a-f0-9]{64}$")
 
 const dnsDomesticSet = "openweir-dns-cn"
+const domesticIPSet = "openweir-ip-cn"
 
-var quicBlock = "AND,((NETWORK,UDP),(DST-PORT,443),(NOT,((RULE-SET," + dnsDomesticSet + ")))),REJECT"
+// Mainland names and addresses keep QUIC. The address check uses no-resolve: a connection
+// that only names its host matches by name, without a lookup for the rule.
+var quicBlock = "AND,((NETWORK,UDP),(DST-PORT,443),(NOT,((RULE-SET," + dnsDomesticSet + "))),(NOT,((RULE-SET," + domesticIPSet + ",no-resolve)))),REJECT"
 
 // Names that must keep real addresses, following OpenClash's filter: local and reserved
 // names, time sync, connectivity checks, STUN and consoles, carrier one-tap login,
@@ -362,8 +365,10 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 		rules = append(rules, logical("AND", conditions)+",DIRECT")
 	}
 	// As in OpenClash, QUIC that may be proxied is refused so browsers fall back to TCP, where
-	// sniffing and routing are reliable. Direct devices and mainland names keep QUIC.
+	// sniffing and routing are reliable. Direct devices and mainland destinations keep QUIC,
+	// and so does other UDP on port 443 to the mainland (WireGuard, DTLS).
 	rules = append(rules, quicBlock)
+	providers[domesticIPSet] = obj{"type": "file", "format": "mrs", "behavior": "ipcidr", "path": "./builtin/geoip-cn.mrs"}
 	if i.Mode == "smart" {
 		for _, set := range p.BinarySets {
 			if !digestName.MatchString(set.SHA256) || filepath.Base(set.Filename()) != set.Filename() {

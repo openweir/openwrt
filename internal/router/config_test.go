@@ -233,6 +233,7 @@ func TestDeclaredDomesticRuleSetDoesNotDuplicateBundledDefinition(t *testing.T) 
 	}
 	def := cfg.Providers[subscription.DomesticIPSet]
 	delete(cfg.Providers, dnsDomesticSet)
+	delete(cfg.Providers, domesticIPSet)
 	if len(cfg.Providers) != 1 || def.Path != "./rulesets/"+p.BinarySets[0].Filename() || def.Format != "mrs" || def.Behavior != "ipcidr" {
 		t.Fatal(cfg.Providers)
 	}
@@ -319,6 +320,12 @@ func TestDNSSplitsDomesticAndProxiedUpstreams(t *testing.T) {
 	}
 	if c["sniffer"].(map[string]any)["override-destination"] != true || !slices.Contains(c["rules"].([]any), any(quicBlock)) {
 		t.Fatal("sniffer override or QUIC block missing")
+	}
+	// UDP 443 to mainland addresses is not refused, and the address check never resolves a name.
+	cnIP := c["rule-providers"].(map[string]any)[domesticIPSet].(map[string]any)
+	if quicBlock != "AND,((NETWORK,UDP),(DST-PORT,443),(NOT,((RULE-SET,openweir-dns-cn))),(NOT,((RULE-SET,openweir-ip-cn,no-resolve)))),REJECT" ||
+		cnIP["behavior"] != "ipcidr" || cnIP["path"] != "./builtin/geoip-cn.mrs" {
+		t.Fatal("QUIC block refuses mainland addresses", quicBlock, cnIP)
 	}
 	if c["experimental"].(map[string]any)["quic-go-disable-gso"] != true {
 		t.Fatal("quic-go GSO left on")
