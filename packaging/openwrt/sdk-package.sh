@@ -113,6 +113,17 @@ if [ -z "$root" ] && [ -e /tmp/openweir-recovery/pending ]; then
  echo 'Previous OpenWeir removal is still restoring direct networking' >&2
  exit 1
 fi
+# An earlier OpenWeir build sampled device traffic from cron into its own nft table.
+# This package does neither, and the leftover job runs every minute.
+if [ -z "$root" ]; then
+ if [ -f /etc/crontabs/root ] && grep -q '/etc/openweir/scripts/' /etc/crontabs/root; then
+  grep -v '/etc/openweir/scripts/' /etc/crontabs/root > /etc/crontabs/root.openweir || true
+  cat /etc/crontabs/root.openweir > /etc/crontabs/root && rm -f /etc/crontabs/root.openweir
+  /etc/init.d/cron restart >/dev/null 2>&1 || true
+ fi
+ rm -rf /etc/openweir/scripts
+ nft delete table inet openweir_traffic 2>/dev/null || true
+fi
 exec sh "$root/usr/libexec/openweir/activate-runtime"
 HOOK
 cat > "$input/prerm" <<'HOOK'
