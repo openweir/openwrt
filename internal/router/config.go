@@ -81,9 +81,27 @@ var digestName = regexp.MustCompile("^[a-f0-9]{64}$")
 
 const dnsDomesticSet = "openweir-dns-cn"
 
-// Names that must keep real addresses: LAN, time sync, connectivity checks and STUN.
-var fakeIPFilter = []string{"*.lan", "*.local", "*.localdomain", "*.home.arpa", "localhost.ptlink", "+.ntp.org", "time.*.com", "time.*.gov", "+.pool.ntp.org",
-	"+.msftconnecttest.com", "+.msftncsi.com", "connectivitycheck.gstatic.com", "captive.apple.com", "+.stun.*.*", "+.stun.*.*.*", "probe.openweir.invalid"}
+// Names that must keep real addresses, following OpenClash's filter: local and reserved
+// names, time sync, connectivity checks, STUN and consoles, carrier one-tap login,
+// VoWiFi, router setup pages, Windows domain controllers and Apple software update.
+var fakeIPFilter = []string{
+	"*.lan", "*.local", "*.localdomain", "*.localhost", "*.home.arpa", "*.example", "*.invalid", "*.test", "localhost.ptlink",
+	"localhost.ptlogin2.qq.com", "localhost.sec.qq.com", "localhost.*.weixin.qq.com",
+	"+.ntp.org", "+.pool.ntp.org", "*.ntp.org.cn", "*.time.edu.cn", "time.*.com", "time.*.gov", "time.*.edu.cn", "time.*.apple.com", "time-ios.apple.com",
+	"time1.*.com", "time2.*.com", "time3.*.com", "time4.*.com", "time5.*.com", "time6.*.com", "time7.*.com",
+	"ntp.*.com", "ntp1.*.com", "ntp2.*.com", "ntp3.*.com", "ntp4.*.com", "ntp5.*.com", "ntp6.*.com", "ntp7.*.com", "time1.cloud.tencent.com",
+	"+.msftconnecttest.com", "+.msftncsi.com", "connectivitycheck.gstatic.com", "captive.apple.com", "detectportal.firefox.com", "network-test.debian.org",
+	"stun.*.*", "stun.*.*.*", "+.stun.*.*", "+.stun.*.*.*", "+.stun.*.*.*.*", "stun.l.google.com", "global.stun.twilio.com", "global.turn.twilio.com",
+	"+.srv.nintendo.net", "+.cdn.nintendo.net", "+.stun.playstation.net", "xbox.*.microsoft.com", "xbox.*.*.microsoft.com", "*.*.xboxlive.com", "xnotify.xboxlive.com",
+	"+.battle.net", "+.battlenet.com.cn", "+.uu.163.com",
+	"*.cmpassport.com", "id6.me", "open.e.189.cn", "opencloud.wostore.cn", "id.mail.wo.cn", "mdn.open.wo.cn", "hmrz.wo.cn", "nishub1.10010.com", "enrichgw.10010.com", "*.wosms.cn",
+	"+.pub.3gppnetwork.org",
+	"*.router.asus.com", "*.linksys.com", "*.linksyssmartwifi.com", "heartbeat.belkin.com",
+	"PDC._msDCS.*.*", "DC._msDCS.*.*", "GC._msDCS.*.*",
+	"mesu.apple.com", "swscan.apple.com", "swquery.apple.com", "swdownload.apple.com", "swcdn.apple.com", "swdist.apple.com",
+	"local.adguard.org", "injections.adguard.org", "resolver1.opendns.com",
+	"probe.openweir.invalid",
+}
 
 func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Network, secret string) ([]byte, error) {
 	if p.SchemaVersion != subscription.SchemaVersion || i.Source == "" || i.Source != p.Source {
