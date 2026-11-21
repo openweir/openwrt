@@ -139,7 +139,9 @@ func interfacePrefixes(n netifStatus) ([]netip.Prefix, error) {
 	return res, nil
 }
 func networkOptions(ctx context.Context) (Network, error) {
-	n := Network{Method: uci(ctx, "method"), DNS: uci(ctx, "dns") == "1", Family6: uci(ctx, "ipv6") == "1", BlockQUIC: uci(ctx, "block_quic") != "0", FakeIP: uci(ctx, "fake_ip") == "1", LAN: map[string][]netip.Prefix{}}
+	n := Network{Method: uci(ctx, "method"), DNS: uci(ctx, "dns") == "1", Family6: uci(ctx, "ipv6") == "1", BlockQUIC: uci(ctx, "block_quic") != "0", FakeIP: uci(ctx, "fake_ip") == "1",
+		NoSniff: uci(ctx, "sniff") == "0", NoConcurrent: uci(ctx, "tcp_concurrent") == "0", NoUnifiedDelay: uci(ctx, "unified_delay") == "0",
+		Domestic: upstreams(uci(ctx, "dns_domestic"), DomesticDNS), Foreign: upstreams(uci(ctx, "dns_foreign"), ForeignDNS), LAN: map[string][]netip.Prefix{}}
 	for _, name := range strings.Fields(uci(ctx, "network")) {
 		if strings.Trim(name, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") != "" {
 			return n, errors.New("invalid managed LAN")

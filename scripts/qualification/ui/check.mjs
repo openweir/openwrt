@@ -234,7 +234,7 @@ try {
 		await fallback.click();
 		await page.getByRole('switch', {name: fallbackLabel, checked: false}).waitFor();
 		assert.equal((await page.evaluate(() => window.model.rpc('network_preferences'))).fail_open, false);
-		await page.getByText('内核故障时保持保护，需代理的流量将中断。主动断开可恢复直连。').waitFor();
+		await page.getByText('内核故障时代理流量中断').waitFor();
 		await page.getByRole('link', {name: '代理', exact: true}).click();
 		await page.getByRole('heading', {name: '代理', exact: true}).waitFor();
 		await page.getByRole('link', {name: '概览', exact: true}).click();

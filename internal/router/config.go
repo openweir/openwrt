@@ -31,6 +31,9 @@ type Network struct {
 	Interface string
 	BlockQUIC bool
 	FakeIP    bool
+	// Zero values mean the defaults: sniffing and tuning on, built-in upstreams.
+	NoSniff, NoConcurrent, NoUnifiedDelay bool
+	Domestic, Foreign                     []string
 }
 type DeviceRule struct {
 	Address string `json:"address"`
@@ -82,11 +85,6 @@ const dnsDomesticSet = "openweir-dns-cn"
 var fakeIPFilter = []string{"*.lan", "*.local", "*.localdomain", "*.home.arpa", "localhost.ptlink", "+.ntp.org", "time.*.com", "time.*.gov", "+.pool.ntp.org",
 	"+.msftconnecttest.com", "+.msftncsi.com", "connectivitycheck.gstatic.com", "captive.apple.com", "+.stun.*.*", "+.stun.*.*.*", "probe.openweir.invalid"}
 
-var (
-	domesticDNS = []string{"https://223.5.5.5/dns-query", "https://120.53.53.53/dns-query"}
-	foreignDNS  = []string{"https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"}
-)
-
 func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Network, secret string) ([]byte, error) {
 	if p.SchemaVersion != subscription.SchemaVersion || i.Source == "" || i.Source != p.Source {
 		return nil, errors.New("no authorized primary source")
@@ -106,6 +104,13 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 	if n.Method == "tun" && !c.TUN || n.Method == "tproxy" && !c.TProxy {
 		return nil, errors.New("selected release lacks the configured interception method")
 	}
+	domesticDNS, foreignDNS := n.Domestic, n.Foreign
+	if len(domesticDNS) == 0 {
+		domesticDNS = DomesticDNS
+	}
+	if len(foreignDNS) == 0 {
+		foreignDNS = ForeignDNS
+	}
 	resolver, err := netip.ParseAddr(n.Resolver)
 	if err != nil || resolver.IsLoopback() || resolver.IsUnspecified() {
 		return nil, errors.New("missing WAN DNS resolver")
@@ -118,10 +123,10 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 			// names and node hostnames use domestic resolvers so CDNs stay local.
 			"nameserver": foreignDNS, "proxy-server-nameserver": domesticDNS, "direct-nameserver": domesticDNS, "respect-rules": true,
 			"nameserver-policy": obj{"rule-set:" + dnsDomesticSet: domesticDNS}, "fake-ip-range": "172.30.254.1/30"},
-		"find-process-mode": "off", "tcp-concurrent": true, "unified-delay": true, "keep-alive-interval": 30}
+		"find-process-mode": "off", "tcp-concurrent": !n.NoConcurrent, "unified-delay": !n.NoUnifiedDelay, "keep-alive-interval": 30}
 	// The WAN resolver may return poisoned answers for proxied sites. Dial the
 	// sniffed domain so the node resolves it, in every proxy mode.
-	config["sniffer"] = obj{"enable": true, "override-destination": true, "parse-pure-ip": true, "force-dns-mapping": true,
+	config["sniffer"] = obj{"enable": !n.NoSniff, "override-destination": true, "parse-pure-ip": true, "force-dns-mapping": true,
 		// Push and smart-home services break when their destination is rewritten.
 		"skip-domain": []string{"+.push.apple.com", "Mijia Cloud", "+.mi.com", "+.xiaomi.net", "dlg.io.mi.com"},
 		"sniff":       obj{"TLS": obj{"ports": []string{"443", "8443"}}, "HTTP": obj{"ports": []string{"80", "8080"}}, "QUIC": obj{"ports": []string{"443"}}}}

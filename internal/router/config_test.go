@@ -340,3 +340,19 @@ func TestFakeIPFollowsDNSProtection(t *testing.T) {
 		t.Fatal("fake-ip missing")
 	}
 }
+
+func TestDNSUpstreamValidation(t *testing.T) {
+	for _, v := range []string{"https://dns.google/dns-query", "tls://1.1.1.1", "223.5.5.5", "2001:db8::1"} {
+		if !validUpstream(v) {
+			t.Fatal(v)
+		}
+	}
+	for _, v := range []string{"", "https://x/'y", "a b", "ftp://x"} {
+		if validUpstream(v) {
+			t.Fatal(v)
+		}
+	}
+	if got := upstreams("bad'x tls://9.9.9.9", DomesticDNS); !slices.Equal(got, []string{"tls://9.9.9.9"}) {
+		t.Fatal(got)
+	}
+}

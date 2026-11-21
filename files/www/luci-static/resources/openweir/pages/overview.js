@@ -609,11 +609,11 @@ export async function overview(ui) {
 			),
 		),
 		updateRow('IPv6 代理', toggle('IPv6 代理', prefs.ipv6, (v) => saveP({ ipv6: v })),
-			h('small', { class: 'ow-muted' }, prefs.ipv6 ? 'IPv6 流量同样经过代理' : '关闭时隐藏 IPv6 地址，设备改走 IPv4')),
+			h('small', { class: 'ow-muted' }, prefs.ipv6 ? 'IPv6 也走代理' : '关闭时设备改走 IPv4')),
 		updateRow('代理路由器自身', toggle('代理路由器自身', !!prefs.local_proxy, (v) => saveP({ local_proxy: v })),
-			h('small', { class: 'ow-muted' }, '路由器发起的连接也按规则分流，需 fw4')),
+			h('small', { class: 'ow-muted' }, '路由器本机流量也分流')),
 		updateRow('屏蔽 QUIC', toggle('屏蔽 QUIC', prefs.block_quic !== false, (v) => saveP({ block_quic: v })),
-			h('small', { class: 'ow-muted' }, '浏览器改用 TCP，分流更准确')),
+			h('small', { class: 'ow-muted' }, '改用 TCP，分流更准')),
 		h(
 			'div',
 			{ class: 'ow-row' },
@@ -624,16 +624,23 @@ export async function overview(ui) {
 	const dnsPrefs = card(
 		'DNS',
 		updateRow('DNS 保护', toggle('DNS 保护', prefs.dns, (v) => saveP({ dns: v })),
-			h('small', { class: 'ow-muted' }, '本地域名照常解析，其余经内核查询')),
+			h('small', { class: 'ow-muted' }, '由内核解析，防污染')),
 		prefs.dns ? h('div', { class: 'ow-row' }, '接管设备 DNS（端口 53）',
 			toggle('接管设备 DNS（端口 53）', !!prefs.dns_intercept, (v) => saveP({ dns_intercept: v }))) : null,
 		prefs.dns ? updateRow('Fake-IP 模式', toggle('Fake-IP 模式', !!prefs.fake_ip, (v) => saveP({ fake_ip: v })),
-			h('small', { class: 'ow-muted' }, '返回虚拟地址，连接更快且不受污染')) : null,
-		updateRow('国内域名', h('span', { class: 'ow-muted' }, '阿里 / 腾讯 DoH'),
-			h('small', { class: 'ow-muted' }, '直连解析，就近访问国内 CDN')),
-		updateRow('其他域名', h('span', { class: 'ow-muted' }, 'Cloudflare / Google DoH'),
-			h('small', { class: 'ow-muted' }, '加密并经代理解析，避免污染')),
+			h('small', { class: 'ow-muted' }, '虚拟地址，连接更快')) : null,
+		upstreamRow(ui, '国内域名', '直连解析', '223.5.5.5 · 120.53.53.53 DoH', prefs.dns_domestic, (v) => saveP({ dns_domestic: v })),
+		upstreamRow(ui, '其他域名', '经代理加密解析', '1.1.1.1 · 8.8.8.8 DoH', prefs.dns_foreign, (v) => saveP({ dns_foreign: v })),
+		updateRow('域名嗅探', toggle('域名嗅探', prefs.sniff !== false, (v) => saveP({ sniff: v })),
+			h('small', { class: 'ow-muted' }, '按真实域名连接')),
 	);
+	const tuning = [
+		updateRow('并发连接', toggle('并发连接', prefs.tcp_concurrent !== false, (v) => saveP({ tcp_concurrent: v })),
+			h('small', { class: 'ow-muted' }, '多地址同时连接')),
+		updateRow('统一延迟', toggle('统一延迟', prefs.unified_delay !== false, (v) => saveP({ unified_delay: v })),
+			h('small', { class: 'ow-muted' }, '测速不计握手')),
+	];
+	proxyPrefs.append(...tuning);
 	const failOpen = prefs.fail_open !== false;
 	const failOpenLabel = '代理无响应时回退直连';
 	const fallback = toggle(failOpenLabel, failOpen, (v) => saveP({ fail_open: v }));
@@ -645,11 +652,11 @@ export async function overview(ui) {
 			if (!ui.signal.aborted) ui.dialog('防火墙运行环境', environmentRows(firewallDetails(env)));
 		}, 'ow-link')),
 		updateRow(failOpenLabel, fallback, h('small', { id: 'ow-fail-open-help', class: 'ow-muted' }, failOpen
-			? '连续 3 次本地检查失败后恢复直连。关闭后，代理流量将暂停至内核恢复。'
-			: '内核故障时保持保护，需代理的流量将中断。主动断开可恢复直连。')),
+			? '连续 3 次检查失败后恢复直连'
+			: '内核故障时代理流量中断')),
 		updateRow('节点失联时自动切换',
 			toggle('节点失联时自动切换', !!policy.auto_failover, (v) => savePolicy({ auto_failover: v })),
-			h('small', { class: 'ow-muted' }, '切换到同组可用节点')),
+			h('small', { class: 'ow-muted' }, '切到同组可用节点')),
 		h(
 			'div',
 			{ class: 'ow-row' },
@@ -829,4 +836,21 @@ function updateInterval(ui, hours, saveP) {
 		}
 	});
 	return h('div', { class: 'ow-row' }, '更新间隔', h('span', { class: 'ow-actions' }, '每', input, '小时'));
+}
+
+// Upstreams are edited as a space-separated list; the router validates each entry.
+function upstreamRow(ui, title, note, hint, list, save) {
+	const value = (list || []).join(' ');
+	const input = h('input', { type: 'text', value, 'aria-label': title + ' DNS', class: 'ow-upstream', spellcheck: 'false', placeholder: '默认 ' + hint });
+	input.addEventListener('change', async () => {
+		const next = input.value.trim().split(/\s+/).filter(Boolean);
+		if (next.join(' ') === value) return;
+		try {
+			await save(next);
+		} catch (e) {
+			ui.notify(e.message);
+			input.value = value;
+		}
+	});
+	return h('div', { class: 'ow-upstream-row' }, h('span', { class: 'ow-label' }, title, h('small', { class: 'ow-muted' }, note)), input);
 }

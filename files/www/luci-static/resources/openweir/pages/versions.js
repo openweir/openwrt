@@ -64,8 +64,8 @@ export function kernelStorage(ui, status, updates, segment) {
 	const note = h('small', { class: 'ow-muted', role: 'status' });
 	const describe = (mode) => {
 		note.textContent = mode === 'tmp'
-			? '存放在 /tmp（内存），不占闪存，重启后自动重新下载'
-			: '存放在闪存，重启后无需下载，保留上一版本可回退';
+			? '不占闪存，重启后重新下载'
+			: '重启保留，可回退上一版';
 	};
 	describe(storageOf(status));
 	const control = segment(ui, '内核存储位置', storageModes, storageOf(status), async (mode) => {

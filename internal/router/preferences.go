@@ -21,6 +21,11 @@ type Preferences struct {
 	LocalProxy   *bool    `json:"local_proxy,omitempty"`
 	BlockQUIC    *bool    `json:"block_quic,omitempty"`
 	FakeIP       *bool    `json:"fake_ip,omitempty"`
+	Sniff        *bool    `json:"sniff,omitempty"`
+	Concurrent   *bool    `json:"tcp_concurrent,omitempty"`
+	UnifiedDelay *bool    `json:"unified_delay,omitempty"`
+	DNSDomestic  []string `json:"dns_domestic,omitempty"`
+	DNSForeign   []string `json:"dns_foreign,omitempty"`
 	IPv6         bool     `json:"ipv6"`
 	Networks     []string `json:"networks"`
 }
@@ -33,6 +38,16 @@ func (p Preferences) Validate() error {
 	}
 	if p.Method != "tproxy" && p.Method != "tun" {
 		return errors.New("unsupported network method")
+	}
+	for _, list := range [][]string{p.DNSDomestic, p.DNSForeign} {
+		if list != nil && (len(list) == 0 || len(list) > 4) {
+			return errors.New("choose one to four DNS upstreams")
+		}
+		for _, v := range list {
+			if !validUpstream(v) {
+				return errors.New("invalid DNS upstream")
+			}
+		}
 	}
 	if len(p.Networks) == 0 || len(p.Networks) > 16 {
 		return errors.New("choose at least one LAN network")
@@ -50,8 +65,13 @@ func (p Preferences) Validate() error {
 // SameNetwork reports whether two preference sets produce the same takeover.
 func (p Preferences) SameNetwork(o Preferences) bool {
 	return p.Method == o.Method && p.DNS == o.DNS && p.DNSIntercept == o.DNSIntercept && p.IPv6 == o.IPv6 && slices.Equal(p.Networks, o.Networks) &&
-		sameBit(p.FailOpen, o.FailOpen) && sameBit(p.LocalProxy, o.LocalProxy) && sameBit(p.BlockQUIC, o.BlockQUIC) && sameBit(p.FakeIP, o.FakeIP)
+		sameBit(p.FailOpen, o.FailOpen) && sameBit(p.LocalProxy, o.LocalProxy) && sameBit(p.BlockQUIC, o.BlockQUIC) && sameBit(p.FakeIP, o.FakeIP) &&
+		sameBit(p.Sniff, o.Sniff) && sameBit(p.Concurrent, o.Concurrent) && sameBit(p.UnifiedDelay, o.UnifiedDelay) &&
+		sameList(p.DNSDomestic, o.DNSDomestic) && sameList(p.DNSForeign, o.DNSForeign)
 }
+
+// An omitted list keeps its saved value.
+func sameList(a, b []string) bool { return a == nil || b == nil || slices.Equal(a, b) }
 
 // An omitted switch keeps its saved value.
 func sameBit(a, b *bool) bool { return a == nil || b == nil || *a == *b }
@@ -67,6 +87,14 @@ func ReadPreferences(ctx context.Context) (Preferences, error) {
 	p.BlockQUIC = &quic
 	fake := uci(ctx, "fake_ip") == "1"
 	p.FakeIP = &fake
+	sniff := uci(ctx, "sniff") != "0"
+	p.Sniff = &sniff
+	concurrent := uci(ctx, "tcp_concurrent") != "0"
+	p.Concurrent = &concurrent
+	unified := uci(ctx, "unified_delay") != "0"
+	p.UnifiedDelay = &unified
+	p.DNSDomestic = upstreams(uci(ctx, "dns_domestic"), DomesticDNS)
+	p.DNSForeign = upstreams(uci(ctx, "dns_foreign"), ForeignDNS)
 	return p, p.Validate()
 }
 func SavePreferences(ctx context.Context, p Preferences) error {
@@ -91,6 +119,19 @@ func SavePreferences(ctx context.Context, p Preferences) error {
 	if p.LocalProxy != nil {
 		b.WriteString("set openweir.main.local_proxy='" + bit(*p.LocalProxy) + "'\n")
 	}
+	for k, v := range map[string]*bool{"sniff": p.Sniff, "tcp_concurrent": p.Concurrent, "unified_delay": p.UnifiedDelay} {
+		if v != nil {
+			b.WriteString("set openweir.main." + k + "='" + bit(*v) + "'\n")
+		}
+	}
+	for k, list := range map[string][]string{"dns_domestic": p.DNSDomestic, "dns_foreign": p.DNSForeign} {
+		if list != nil {
+			b.WriteString("delete openweir.main." + k + "\n")
+			for _, v := range list {
+				b.WriteString("add_list openweir.main." + k + "='" + v + "'\n")
+			}
+		}
+	}
 	if p.FakeIP != nil {
 		b.WriteString("set openweir.main.fake_ip='" + bit(*p.FakeIP) + "'\n")
 	}
@@ -113,4 +154,28 @@ func SavePreferences(ctx context.Context, p Preferences) error {
 		return errors.New("could not save network preferences")
 	}
 	return nil
+}
+
+var upstreamPattern = regexp.MustCompile(`^((https|tls|quic)://[A-Za-z0-9.:\[\]_-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?|[0-9.]+|[0-9A-Fa-f:]+)$`)
+
+// validUpstream accepts DoH, DoT, DoQ or a plain resolver address; quotes and
+// spaces are excluded so the value is safe in UCI and YAML.
+func validUpstream(v string) bool { return len(v) <= 200 && upstreamPattern.MatchString(v) }
+
+var (
+	DomesticDNS = []string{"https://223.5.5.5/dns-query", "https://120.53.53.53/dns-query"}
+	ForeignDNS  = []string{"https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"}
+)
+
+func upstreams(saved string, fallback []string) []string {
+	var r []string
+	for _, v := range strings.Fields(saved) {
+		if validUpstream(v) && len(r) < 4 {
+			r = append(r, v)
+		}
+	}
+	if len(r) == 0 {
+		return slices.Clone(fallback)
+	}
+	return r
 }

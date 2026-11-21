@@ -1160,3 +1160,6 @@
 @container (max-width: 840px) {
 	.ow .ow-source-list { flex: none; max-height: 320px; }
 }
+
+.ow .ow-upstream-row { display: flex; flex-direction: column; gap: 6px; }
+.ow input.ow-upstream { width: 100%; font-family: ui-monospace, monospace; font-size: 12px; }
