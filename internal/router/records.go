@@ -125,6 +125,9 @@ func corePermissionReason(line string) string {
 		return "core_work_file_permission"
 	case strings.Contains(line, "ping_group_range"), strings.Contains(line, "listen ip4:icmp"), strings.Contains(line, "listen ip6:ipv6-icmp"), strings.Contains(line, "icmp socket"):
 		return "core_icmp_socket_permission"
+	case strings.Contains(line, "listenlocalconn"):
+		// TProxy answers UDP from a socket bound to the original destination, often a port below 1024.
+		return "core_tproxy_udp_reply_permission"
 	case strings.Contains(line, "ip_transparent"), strings.Contains(line, "transparent socket"), strings.Contains(line, "set transparent"), strings.Contains(line, "ipv6_transparent"):
 		return "core_tproxy_socket_permission"
 	case strings.Contains(line, "so_mark"), strings.Contains(line, "set routing mark"):

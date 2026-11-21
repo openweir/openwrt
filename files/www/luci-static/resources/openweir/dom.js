@@ -142,6 +142,7 @@ const diagnosticText = {
     core_work_file_permission: '内核没有权限访问工作目录中的文件',
     core_tun_device_permission: '内核没有权限打开 /dev/net/tun',
     core_tproxy_socket_permission: '内核没有权限设置透明代理套接字',
+    core_tproxy_udp_reply_permission: '内核没有权限绑定低端口发送 UDP 回包，QUIC 等流量会丢包',
     core_icmp_socket_permission: '内核没有权限使用 ICMP 套接字',
     core_listener_permission: '内核没有权限绑定监听端口',
     core_route_mark_permission: '内核没有权限设置套接字路由标记',
