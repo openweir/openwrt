@@ -45,6 +45,9 @@ const platformUserAgent = "OpenWeir"
 // The OpenWeir platform matches its first-party client by the product/version prefix.
 var packageVersion = "dev"
 
+// PackageVersion is the plugin version this build was packaged as.
+func PackageVersion() string { return packageVersion }
+
 func subscriptionHeader(agent string) string {
 	if agent == platformUserAgent {
 		return platformUserAgent + "/" + packageVersion + " (OpenWrt)"

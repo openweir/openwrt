@@ -91,6 +91,7 @@ export function kernelSummary(ui, status, updates, setup = false) {
 	async function act(text, work) {
 		busy = text;
 		note.textContent = '';
+		delete note.dataset.version;
 		update(status);
 		try {
 			await work();
@@ -122,11 +123,21 @@ export function kernelSummary(ui, status, updates, setup = false) {
 	function update(next) {
 		status = next;
 		const state = bootstrapState(status);
-		const text = (setup ? '' : '内核 · ') + (status.selected || state || '未安装');
+		// Outside setup the row reads like the plugin row: a title, the version underneath.
+		const current = status.selected || state || '未安装';
+		const text = setup ? current : '内核';
 		if (label.textContent !== text) label.textContent = text;
+		if (note.dataset.version && (status.pending || state === '下载失败')) {
+			note.textContent = '';
+			delete note.dataset.version;
+		}
 		if (status.pending && !note.textContent) note.textContent = '新内核正在确认运行正常';
 		const failure = state === '下载失败' && (status.bootstrap.result?.error || status.bootstrap.error);
 		if (failure && !busy && !note.textContent) note.textContent = kernelMessage(failure);
+		if (!setup && (!note.textContent || note.dataset.version)) {
+			note.textContent = status.selected ? '当前 ' + status.selected : current;
+			note.dataset.version = '1';
+		}
 		let name = busy;
 		if (!name) {
 			if (status.staged && status.staged !== status.selected) name = '使用 ' + status.staged;

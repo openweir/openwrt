@@ -30,6 +30,18 @@ const socket = router.RunDir + "/manager.sock"
 
 var errRejected = errors.New("manager rejected request")
 
+// updaterReasons are the fixed failure messages of /usr/libexec/openweir/package-update.
+var updaterReasons = map[string]bool{
+	"A package update is already in progress": true, "APK identity does not match release": true,
+	"Cannot compare package versions": true, "Cannot download a package matching the release digest": true,
+	"Cannot plan the offline APK upgrade": true, "Cannot read the router architecture": true,
+	"Cannot verify the official release metadata": true, "Checking plugin updates requires the ucode command": true,
+	"Checking plugin updates requires an HTTPS downloader (uclient-fetch, curl or GNU Wget)": true,
+	"Installed APK providers changed during preflight":                                       true, "Insufficient temporary storage for update": true,
+	"Invalid installed package version": true, "IPK identity does not match release": true,
+	"Package manager did not apply the requested version": true, "Refusing package downgrade": true,
+}
+
 type request struct {
 	ID        string `json:"id,omitempty"`
 	Method    string `json:"method,omitempty"`
@@ -203,6 +215,7 @@ func (s *app) handle(ctx context.Context, method string, r request) (any, error)
 	case "latencies":
 		return s.tests.snapshot(status.Intent.Source, r.Method)
 	case "status":
+		status.Version = subscription.PackageVersion()
 		if status.Phase == "starting" && s.sys != nil {
 			status.ConfirmationSeconds = s.sys.ConfirmationSeconds()
 		}
@@ -433,10 +446,11 @@ func (s *app) handle(ctx context.Context, method string, r request) (any, error)
 			if e != nil {
 				var exit *exec.ExitError
 				if errors.As(e, &exit) {
-					for _, msg := range []string{"Checking plugin updates requires the ucode command", "Checking plugin updates requires an HTTPS downloader (uclient-fetch, curl or GNU Wget)"} {
-						if strings.TrimSpace(string(exit.Stderr)) == msg {
-							return nil, errors.New(msg)
-						}
+					// The updater ends with one of its own fixed reasons; package-manager output
+					// before it stays private.
+					lines := strings.Split(strings.TrimSpace(string(exit.Stderr)), "\n")
+					if last := strings.TrimSpace(lines[len(lines)-1]); updaterReasons[last] {
+						return nil, errors.New(last)
 					}
 				}
 				return nil, errors.New("verified plugin update failed")

@@ -27,6 +27,7 @@ type Backend interface {
 }
 type Status struct {
 	ConfirmationSeconds int    `json:"confirmation_seconds,omitempty"`
+	Version             string `json:"version,omitempty"` // installed plugin version
 	Intent              Intent `json:"saved"`
 	Applied             uint64 `json:"applied_revision"`
 	Phase               string `json:"phase"`

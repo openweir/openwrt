@@ -836,6 +836,8 @@ function pluginUpdate(ui) {
 	const action = ui.button('检查更新', () => {}, 'ow-link'),
 		note = h('small', { class: 'ow-muted', role: 'status' });
 	let candidate = '', latest = false;
+	const installed = ui.status.version && ui.status.version !== 'dev' ? ui.status.version : '';
+	note.textContent = installed ? '当前 v' + installed : '';
 	function show(text) {
 		action.textContent = text || (candidate ? '更新到 ' + candidate : latest ? '已是最新' : '检查更新');
 		action.disabled = !!text || (latest && !candidate);
@@ -857,7 +859,7 @@ function pluginUpdate(ui) {
 			const info = await ui.run('plugin_check', {});
 			candidate = info.available ? info.candidate : '';
 			latest = !candidate;
-			note.textContent = '当前 ' + info.installed;
+			note.textContent = '当前 v' + info.installed.replace(/^v/, '');
 		} catch (error) {
 			if (error.name !== 'AbortError') note.textContent = error.message;
 		} finally {
