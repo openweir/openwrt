@@ -39,4 +39,8 @@ func TestChainsKeepTheirDialerName(t *testing.T) {
 	if !Unsafe("interface-name", "wan") || !Unsafe("routing-mark", 1) || Unsafe("dialer-proxy", "Front") || Unsafe("udp", true) {
 		t.Fatal("router-safety policy changed")
 	}
+	// Safety alone: completeness is the converter's concern.
+	if Safe(map[string]any{"type": "vless", "server": "v.example"}) != nil || !errors.Is(Safe(map[string]any{"type": "direct"}), ErrProtocol) {
+		t.Fatal("policy mixes safety with completeness")
+	}
 }

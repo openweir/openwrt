@@ -30,16 +30,26 @@ func fields(v map[string]any, aliases map[string]string, out map[string]any) err
 	return nil
 }
 
-// Native returns a copy of a proxy the router runs: a known protocol whose options all pass
-// the router-safety policy (Unsafe). A dialer-proxy stays a name; the document resolves it.
-func Native(v map[string]any) (map[string]any, error) {
+// Safe applies the router-safety policy to a whole mihomo proxy, whatever format it came
+// from: a protocol the router knows to run only its own connections, with no option that
+// reaches into the router (Unsafe).
+func Safe(v map[string]any) error {
 	switch str(v, "type") {
 	case "http", "ss", "ssr", "socks5", "vless", "vmess", "trojan", "snell", "hysteria", "hysteria2", "tuic", "anytls", "naive", "nowhere", "mieru", "ssh", "wireguard", "juicity":
 	default:
-		return nil, ErrProtocol
+		return ErrProtocol
 	}
 	if unsafe(v, 0) {
-		return nil, ErrOption
+		return ErrOption
+	}
+	return nil
+}
+
+// Native returns a copy of a proxy that passes Safe and has the credentials and endpoint the
+// core needs. A dialer-proxy stays a name; the document resolves it.
+func Native(v map[string]any) (map[string]any, error) {
+	if err := Safe(v); err != nil {
+		return nil, err
 	}
 	kind := str(v, "type")
 	for _, key := range requiredCredentials[kind] {

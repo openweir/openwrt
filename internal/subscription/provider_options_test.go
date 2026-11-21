@@ -82,6 +82,26 @@ func TestProxyProviderOptionsApplyWithinRouterSafety(t *testing.T) {
 	}
 }
 
+func TestProviderNodesPassTheSameSafetyPolicy(t *testing.T) {
+	var m map[string]any
+	if err := json.Unmarshal([]byte(`{"proxies":[],"proxy-providers":{"p":{"type":"inline","payload":[
+{"name":"Marked","type":"http","server":"m.example","port":80,"routing-mark":7},
+{"name":"Plugin","type":"ss","server":"s.example","port":80,"cipher":"aes-128-gcm","password":"x","plugin-opts":{"key-path":"/etc/shadow"}},
+{"name":"Fine","type":"http","server":"f.example","port":80}]}},
+"proxy-groups":[{"name":"P","type":"select","use":["p"]}],"rules":["MATCH,P"]}`), &m); err != nil {
+		t.Fatal(err)
+	}
+	s := providers{ctx: t.Context(), cache: map[string][]byte{}}
+	if err := s.clash(m); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := json.Marshal(m)
+	p, err := parseVerified("source", b, nil)
+	if err != nil || len(p.Nodes) != 1 || p.Nodes[0].Name != "Fine" || !slices.Contains(p.Notices, Notice{Code: "unsupported_node", At: "Marked"}) || !slices.Contains(p.Notices, Notice{Code: "unsupported_node", At: "Plugin"}) {
+		t.Fatal(err, p.Nodes, p.Notices)
+	}
+}
+
 func TestProvidersTheRouterCannotExpandStayUnexpanded(t *testing.T) {
 	s := providers{}
 	for _, v := range []map[string]any{
