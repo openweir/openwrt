@@ -43,6 +43,10 @@ const browser = await chromium.launch({
 	executablePath: process.env.OPENWEIR_CHROME || undefined,
 	headless: true,
 });
+// The overview's kernel row: the title 内核, with the installed version or state underneath.
+function kernelRow(page) {
+	return page.locator('.ow-row').filter({ has: page.locator('.ow-label > span', { hasText: /^内核$/ }) });
+}
 async function centered(dialog, viewport) {
 	const box = await dialog.boundingBox();
 	assert.ok(box, 'visible modal');
@@ -108,14 +112,14 @@ async function checkKernelPreparation(browser, base, viewport) {
 		assert.deepEqual(await page.evaluate(() => window.model.installs), [{tag:'v0.1.4', mode:'double'}]);
 		assert.equal(await link.inputValue(), 'https://fixture.invalid/unfinished');
 		await page.keyboard.press('Escape');
-		await page.getByText('内核 · v0.1.4', {exact:true}).waitFor();
+		await kernelRow(page).getByText('当前 v0.1.4', {exact:true}).waitFor();
 		const reads = () => page.evaluate(() => window.model.trace.filter(op => op === 'kernel_read').length);
 		await page.clock.runFor(4000); // let the overview finish re-rendering after the setup closes
 		const count = await reads();
 		await page.clock.runFor(12000);
 		assert.equal(await reads(), count, 'installed kernels do not poll the release status');
 		await page.goto(base + '/?bootstrap');
-		await page.getByText('内核 · 正在下载').waitFor();
+		await kernelRow(page).getByText('正在下载', {exact:true}).waitFor();
 		await page.evaluate(() => {
 			const kernel = window.model.kernel;
 			kernel.staged = 'v0.1.5';
@@ -124,7 +128,7 @@ async function checkKernelPreparation(browser, base, viewport) {
 		});
 		await page.clock.runFor(4000);
 		await page.getByRole('button', {name:'使用 v0.1.5'}).click();
-		await page.getByText('内核 · v0.1.5', {exact:true}).waitFor();
+		await kernelRow(page).getByText('当前 v0.1.5', {exact:true}).waitFor();
 	} finally { await page.close(); }
 }
 // Advance the browser clock through ten minutes of normal overview polling.
@@ -252,13 +256,14 @@ try {
 		await page.screenshot({ path: path.join(output, 'dns-dialog-' + width + '.png') });
 		await dnsDialog.getByRole('button', { name: '关闭' }).click();
 		// 检查更新 offers 更新到 vX only when a newer stable kernel exists.
-		const kernelRow = page.locator('.ow-row').filter({ hasText: '内核 ·' });
-		await kernelRow.getByRole('button', { name: '检查更新' }).click();
-		const upgrade = kernelRow.getByRole('button', { name: '更新到 v0.1.4' });
+		const kernel = kernelRow(page);
+		await kernel.getByText('当前 v0.1.3', { exact: true }).waitFor();
+		await kernel.getByRole('button', { name: '检查更新' }).click();
+		const upgrade = kernel.getByRole('button', { name: '更新到 v0.1.4' });
 		await upgrade.waitFor();
 		await page.screenshot({ path: path.join(output, 'kernel-' + width + '.png') });
 		await upgrade.click();
-		await kernelRow.getByRole('button', { name: '已是最新' }).waitFor();
+		await kernel.getByRole('button', { name: '已是最新' }).waitFor();
 		assert.deepEqual(await page.evaluate(() => window.model.installs), [{ tag: 'v0.1.4', mode: 'double' }]);
 		const storage = page.getByRole('group', { name: '内核存储位置' });
 		await storage.getByRole('button', { name: '内存' }).click();
@@ -267,9 +272,11 @@ try {
 		await storage.getByRole('button', { name: '闪存' }).click();
 		await page.waitForFunction(() => window.model.installs.length === 3);
 		await page.evaluate(() => window.model.installs.splice(1));
-		await page.getByText('内核 · v0.1.4', { exact: false }).first().waitFor();
+		await kernel.getByText('当前 v0.1.4', { exact: true }).waitFor();
 		await page.getByRole('button', { name: '检测', exact: true }).click();
-		await page.getByText('百度 32 ms').waitFor();
+		for (const probe of ['百度 32 ms', '网易云 41 ms', 'Google 138 ms', 'YouTube 152 ms', 'GitHub 超时']) {
+			await page.locator('.ow-checks').getByText(probe, { exact: true }).waitFor();
+		}
 		// Automatic subscription refresh: a switch, then the hours the user types.
 		const hours = page.getByRole('spinbutton', { name: '更新间隔（小时）' });
 		await hours.fill('8');

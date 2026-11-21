@@ -263,7 +263,10 @@ export function fixture(empty = false, preparing = false) {
 					core: { ok: true, delay_ms: 1 },
 					dns: { ok: true, delay_ms: 4 },
 					baidu: { ok: true, delay_ms: 32 },
+					netease: { ok: true, delay_ms: 41 },
 					google: { ok: true, delay_ms: 138 },
+					youtube: { ok: true, delay_ms: 152 },
+					github: { ok: false, delay_ms: 5000 },
 				});
 			case 'groups':
 				return choices;
