@@ -214,27 +214,18 @@ func fw4Active(ctx context.Context) bool {
 }
 func networkOptions(ctx context.Context) (Network, error) {
 	n := Network{Method: uci(ctx, "method"), DNS: uci(ctx, "dns") == "1", Family6: ipv6Uplink(ctx),
-		Domestic: upstreams(uci(ctx, "dns_domestic"), DomesticDNS), Foreign: upstreams(uci(ctx, "dns_foreign"), ForeignDNS), LAN: map[string][]netip.Prefix{}}
+		Domestic: upstreams(uci(ctx, "dns_domestic"), DomesticDNS), Foreign: upstreams(uci(ctx, "dns_foreign"), ForeignDNS)}
 	fw4 := fw4Active(ctx)
 	n.FakeIP = n.DNS && fw4
 	n.FailOpen = uci(ctx, "fail_open") != "0"
 	n.ChinaDirect = uci(ctx, "bypass_cn") == "1" && fw4
-	for _, name := range strings.Fields(uci(ctx, "network")) {
-		if strings.Trim(name, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") != "" {
-			return n, errors.New("invalid managed LAN")
-		}
+	var e error
+	n.LAN, e = managedLAN(strings.Fields(uci(ctx, "network")), n.Family6, func(name string) (netifStatus, error) {
 		var status netifStatus
-		if err := jsonCmd(ctx, &status, "ubus", "call", "network.interface."+name, "status"); err != nil {
-			return n, err
-		}
-		ps, err := interfacePrefixes(status)
-		if err != nil {
-			return n, err
-		}
-		n.LAN[status.Device] = append(n.LAN[status.Device], ps...)
-	}
-	if len(n.LAN) == 0 {
-		return n, errors.New("no managed LAN")
+		return status, jsonCmd(ctx, &status, "ubus", "call", "network.interface."+name, "status")
+	})
+	if e != nil {
+		return n, e
 	}
 	b, err := os.ReadFile("/tmp/resolv.conf.d/resolv.conf.auto")
 	if err != nil {
@@ -252,4 +243,37 @@ func networkOptions(ctx context.Context) (Network, error) {
 		}
 	}
 	return n, errors.New("WAN DNS resolver unavailable")
+}
+
+// managedLAN maps the usable managed interfaces to their addresses. One that is down, has no
+// device or no address of a taken-over family (a guest Wi-Fi switched off) is left out, as
+// devices() in the network helper does, so the rest are still taken over; its hotplug notice
+// changes networkKey once it comes up. Only an invalid name or no usable interface fails.
+func managedLAN(names []string, family6 bool, status func(string) (netifStatus, error)) (map[string][]netip.Prefix, error) {
+	lan := map[string][]netip.Prefix{}
+	skipped := errors.New("no managed LAN")
+	for _, name := range names {
+		if strings.Trim(name, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") != "" {
+			return nil, errors.New("invalid managed LAN")
+		}
+		s, err := status(name)
+		if err != nil {
+			skipped = errors.New("managed LAN interface unavailable")
+			continue
+		}
+		ps, err := interfacePrefixes(s)
+		// The helper probes only the families it takes over.
+		if err == nil && !family6 && !slices.ContainsFunc(ps, func(p netip.Prefix) bool { return p.Addr().Is4() }) {
+			err = errors.New("managed LAN has no usable address")
+		}
+		if err != nil {
+			skipped = err
+			continue
+		}
+		lan[s.Device] = append(lan[s.Device], ps...)
+	}
+	if len(lan) == 0 {
+		return nil, skipped
+	}
+	return lan, nil
 }

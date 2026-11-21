@@ -4,12 +4,21 @@
 set -eu
 umask 077
 . "${0%/*}/firewall-backend"
+# Like managedLAN in network.go, skip a managed interface that is down, has no device (a guest
+# Wi-Fi switched off) or no address probe_interfaces could check in a taken-over family, so the
+# others are still taken over; its hotplug notice restarts the takeover once it comes up.
 devices() {
+ seen=' '
  for net in $(uci -q get openweir.main.network); do
   case "$net" in ''|*[!a-zA-Z0-9_]*) return 1 ;; esac
-  dev=$(ubus call "network.interface.$net" status | jsonfilter -e '@.l3_device')
-  case "$dev" in ''|*[!a-zA-Z0-9_.-]*) return 1 ;; esac
-  [ "$dev" != lo ] && [ -e "/sys/class/net/$dev" ] || return 1
+  # netifd publishes l3_device only while the interface is up.
+  dev=$(ubus call "network.interface.$net" status 2>/dev/null | jsonfilter -e '@.l3_device' 2>/dev/null) || continue
+  case "$dev" in ''|lo|*[!a-zA-Z0-9_.-]*) continue ;; esac
+  case "$seen" in *" $dev "*) continue ;; esac
+  [ -e "/sys/class/net/$dev" ] || continue
+  [ -n "$(ip -4 -o address show dev "$dev" scope global)" ] ||
+   { [ "$v6" = 1 ] && [ -n "$(ip -6 -o address show dev "$dev" scope global)" ]; } || continue
+  seen="$seen$dev "
   echo "$dev"
  done
 }
@@ -415,6 +424,13 @@ apply() {
   ! nft list table inet openweir >/dev/null 2>&1 || return 1
  fi
  method=$(uci -q get openweir.main.method);case "$method" in tun|tproxy) ;; *) return 1 ;; esac
+ # IPv6 is taken over when the core can reach the IPv6 internet. The manager decides once
+ # (ipv6Uplink in network.go) and passes the result, so the core's listeners and the firewall
+ # agree; a manual run checks the route the same way.
+ case "$family_arg" in
+  ipv6) v6=1 ;; ipv4) v6=0 ;;
+  *) v6=0; if ip -6 route get 2400:3200::1 >/dev/null 2>&1; then v6=1; fi ;;
+ esac
  stage=lan_interfaces
  interfaces=$(devices) && [ -n "$interfaces" ] || return 1
  # Canonical whitespace makes set comparisons independent of UCI list order.
@@ -424,13 +440,6 @@ apply() {
  openweir-net management-record
  names="";for dev in $interfaces; do names="$names, \"$dev\""; done
  names=${names#, }
- # IPv6 is taken over when the core can reach the IPv6 internet. The manager decides once
- # (ipv6Uplink in network.go) and passes the result, so the core's listeners and the firewall
- # agree; a manual run checks the route the same way.
- case "$family_arg" in
-  ipv6) v6=1 ;; ipv4) v6=0 ;;
-  *) v6=0; if ip -6 route get 2400:3200::1 >/dev/null 2>&1; then v6=1; fi ;;
- esac
  dns=$(uci -q get openweir.main.dns || echo 0)
  # As in OpenClash, DNS protection also takes over lookups devices send to other resolvers.
  dns_intercept=$dns
