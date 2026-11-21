@@ -369,7 +369,7 @@ func TestProviderExpansionAndIndependentCredentials(t *testing.T) {
 		t.Fatal(p)
 	}
 	f := Fetcher{}
-	if _, e = f.expandSourceProviders(context.Background(), []byte(fmt.Sprintf(`{"proxies":[],"proxy-providers":{"id":{"type":"http","url":%q}}}`, srv.URL)), ""); e == nil {
+	if _, _, _, e = f.expandSourceProviders(context.Background(), []byte(fmt.Sprintf(`{"proxies":[],"proxy-providers":{"id":{"type":"http","url":%q}}}`, srv.URL)), ""); e == nil {
 		t.Fatal("untrusted nested provider reached router loopback")
 	}
 }

@@ -72,11 +72,21 @@ type providers struct {
 	f             Fetcher
 	ctx           context.Context
 	cache         map[string][]byte
+	notices       []Notice
 }
 
 type providerInput struct {
 	raw, kind string
 	limit     int64
+	header    http.Header
+}
+
+// key identifies a download: the same URL with other headers may serve other content.
+func (i providerInput) key() string {
+	if len(i.header) == 0 {
+		return i.raw
+	}
+	return i.raw + "\x00" + digest(i.header)
 }
 
 func (s *providers) download(ctx context.Context, input providerInput) ([]byte, error) {
@@ -96,7 +106,9 @@ func (s *providers) download(ctx context.Context, input providerInput) ([]byte, 
 		}
 	}
 	// Even for the configured platform, an embedded provider receives no bearer
-	// or cookies. The same-origin allowlist also forbids redirects.
+	// or cookies, only the headers its document gave it. The same-origin
+	// allowlist also forbids redirects.
+	client.header = input.header
 	r, e := client.request(ctx, "GET", raw, nil, "", "OpenWeir", trusted, input.limit)
 	if e != nil {
 		return nil, providerRequestCause(e)
@@ -117,8 +129,8 @@ func (s *providers) prefetchInputs(inputs []providerInput, budget int) error {
 		if _, err := webURL(input.raw, true); err != nil {
 			return providerFailure(input.kind, input.raw, errors.New("invalid_provider_url"))
 		}
-		if prev, ok := seen[input.raw]; !ok || input.limit < prev.limit {
-			seen[input.raw] = input
+		if prev, ok := seen[input.key()]; !ok || input.limit < prev.limit {
+			seen[input.key()] = input
 		}
 	}
 	jobs := make(chan providerInput, len(seen))
@@ -148,7 +160,7 @@ func (s *providers) prefetchInputs(inputs []providerInput, budget int) error {
 					stop()
 				}
 				if failure == nil {
-					s.cache[input.raw] = b
+					s.cache[input.key()] = b
 					total += len(b)
 				}
 				mu.Unlock()
@@ -162,10 +174,6 @@ func (s *providers) prefetchInputs(inputs []providerInput, budget int) error {
 	return s.ctx.Err()
 }
 
-func clashProxyHTTP(v map[string]any) bool {
-	return field(v, "type") == "http" && providerKeys(v, "type url path interval health-check")
-}
-
 func clashRuleHTTP(v map[string]any) bool {
 	format, behavior := field(v, "format"), field(v, "behavior")
 	return field(v, "type") == "http" && providerKeys(v, "type url path interval format behavior") &&
@@ -173,12 +181,14 @@ func clashRuleHTTP(v map[string]any) bool {
 		(behavior == "classical" || behavior == "domain" || behavior == "ipcidr")
 }
 
-func (f Fetcher) expandSourceProviders(ctx context.Context, b []byte, origin string, output ...*[]BinarySet) ([]byte, error) {
+// expandSourceProviders downloads a document's providers into it. It also returns the rule
+// sets the document gained and notices about provider options the router did not follow.
+func (f Fetcher) expandSourceProviders(ctx context.Context, b []byte, origin string) ([]byte, []BinarySet, []Notice, error) {
 	if len(b) > MaxBody {
-		return nil, errors.New("subscription_size_limit")
+		return nil, nil, nil, errors.New("subscription_size_limit")
 	}
 	if !bytes.Contains(b, []byte("proxy-providers")) && !bytes.Contains(b, []byte("rule-providers")) && !bytes.Contains(b, []byte("rule_set")) && !hasYAMLRoot(string(b)) && !bytes.Contains(b, []byte(`"proxies"`)) {
-		return b, nil
+		return b, nil, nil, nil
 	}
 	var m map[string]any
 	s := &providers{trustedOrigin: strings.TrimSuffix(providerAddress(origin), "/"), trusted: f, ctx: ctx, cache: map[string][]byte{}}
@@ -191,15 +201,15 @@ func (f Fetcher) expandSourceProviders(ctx context.Context, b []byte, origin str
 		d := json.NewDecoder(bytes.NewReader(b))
 		d.UseNumber()
 		if d.Decode(&m) != nil || d.Decode(new(any)) != io.EOF {
-			return nil, errors.New("invalid_json")
+			return nil, nil, nil, errors.New("invalid_json")
 		}
 	} else if hasYAMLRoot(string(trimmed)) {
 		d := yaml.NewDecoder(bytes.NewReader(b))
 		if d.Decode(&m) != nil || d.Decode(new(any)) != io.EOF {
-			return nil, errors.New("invalid_yaml")
+			return nil, nil, nil, errors.New("invalid_yaml")
 		}
 	} else {
-		return b, nil
+		return b, nil, nil, nil
 	}
 	normalizeProviderAddresses(m)
 	if r := f.providerReceipt; r != nil && r.Key != "" {
@@ -208,23 +218,20 @@ func (f Fetcher) expandSourceProviders(ctx context.Context, b []byte, origin str
 		}
 	}
 	if e := s.clash(m); e != nil {
-		return nil, e
+		return nil, nil, nil, e
 	}
 	total := 0
 	for _, rs := range s.binary {
 		total += len(rs.Data)
 		if total > MaxBody {
-			return nil, errors.New("provider_size_limit")
+			return nil, nil, nil, errors.New("provider_size_limit")
 		}
-	}
-	if len(output) > 0 {
-		*output[0] = s.binary
 	}
 	out, e := json.Marshal(m)
 	if e != nil || len(out) > MaxBody {
-		return nil, errors.New("expanded_subscription_limit")
+		return nil, nil, nil, errors.New("expanded_subscription_limit")
 	}
-	return out, nil
+	return out, s.binary, s.notices, nil
 }
 func sortedKeys(m map[string]any) []string {
 	ks := make([]string, 0, len(m))
@@ -241,14 +248,18 @@ func (s *providers) clash(m map[string]any) error {
 		return errors.New("provider_limit")
 	}
 	var inputs []providerInput
-	for _, entry := range pp {
-		if v := object(entry); clashProxyHTTP(v) {
-			inputs = append(inputs, providerInput{field(v, "url"), "node", maxProviderBody})
+	expandable := map[string]proxyProvider{}
+	for _, k := range sortedKeys(pp) {
+		if p, ok := s.proxyProvider(k, object(pp[k])); ok {
+			expandable[k] = p
+			if p.input.raw != "" {
+				inputs = append(inputs, p.input)
+			}
 		}
 	}
 	for _, entry := range rp {
 		if v := object(entry); clashRuleHTTP(v) {
-			inputs = append(inputs, providerInput{field(v, "url"), "rule", MaxBody})
+			inputs = append(inputs, providerInput{raw: field(v, "url"), kind: "rule", limit: MaxBody})
 		}
 	}
 	if err := s.prefetchInputs(inputs, maxSetMaterialization); err != nil {
@@ -266,27 +277,25 @@ func (s *providers) clash(m map[string]any) error {
 		nodes = []any{}
 	}
 	for _, k := range sortedKeys(pp) {
-		v := object(pp[k])
+		p, ok := expandable[k]
+		if !ok {
+			continue
+		}
 		var doc struct {
 			Proxies []map[string]any `yaml:"proxies"`
 		}
-		switch {
-		case field(v, "type") == "inline" && providerKeys(v, "type payload"):
-			for _, elem := range list(v["payload"]) {
+		if p.input.raw == "" {
+			for _, elem := range list(object(pp[k])["payload"]) {
 				n := object(elem)
 				if n == nil {
 					return errors.New("invalid_proxy_provider")
 				}
 				doc.Proxies = append(doc.Proxies, n)
 			}
-		case clashProxyHTTP(v):
-			b := s.cache[field(v, "url")]
-			if yaml.Unmarshal(b, &doc) != nil || doc.Proxies == nil {
-				return providerFailure("node", field(v, "url"), errors.New("invalid_proxy_provider"))
-			}
-		default:
-			continue
+		} else if yaml.Unmarshal(s.cache[p.input.key()], &doc) != nil || doc.Proxies == nil {
+			return providerFailure("node", p.input.raw, errors.New("invalid_proxy_provider"))
 		}
+		doc.Proxies = p.shape(doc.Proxies)
 		if len(nodes)+len(doc.Proxies) > maxNodes {
 			return errors.New("node_limit")
 		}

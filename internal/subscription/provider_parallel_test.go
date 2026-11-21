@@ -54,8 +54,7 @@ func TestParallelRuleDownloadsRetainOrder(t *testing.T) {
 		fmt.Fprintf(w, "payload:\n  - %s.example.test\n", name)
 	}))
 	defer server.Close()
-	var sets []BinarySet
-	body, err := (Fetcher{Client: server.Client()}).expandSourceProviders(t.Context(), ruleFixture(server.URL, 8), server.URL, &sets)
+	body, sets, _, err := (Fetcher{Client: server.Client()}).expandSourceProviders(t.Context(), ruleFixture(server.URL, 8), server.URL)
 	if err != nil || peak.Load() != providerWorkers || count.Load() != 8 {
 		t.Fatalf("peak %d, count %d: %v", peak.Load(), count.Load(), err)
 	}

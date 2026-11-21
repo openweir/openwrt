@@ -127,8 +127,10 @@ type Fetcher struct {
 	providerReceipt *providerReceipt
 	egress          *egress
 	reuseProviders  bool
-	// embedded marks URLs a document chose (providers): every path checks their addresses.
+	// embedded marks URLs a document chose (providers): every path checks their addresses,
+	// and header is what the document asked to send with them (providerHeader).
 	embedded       bool
+	header         http.Header
 	sourceID       string
 	ruleImportRoot string
 	ReplacementURL string
@@ -199,6 +201,7 @@ func (f Fetcher) request(ctx context.Context, method, raw string, payload []byte
 			r.Header.Set("Authorization", "Bearer "+token)
 		}
 		r.Header.Set("User-Agent", ua)
+		maps.Copy(r.Header, f.header)
 		if payload != nil {
 			r.Header.Set("Content-Type", "application/json")
 		}
@@ -612,9 +615,8 @@ func (f Fetcher) readProfile(ctx context.Context, s Source, file []byte, usage *
 	if err != nil {
 		return Profile{}, err
 	}
-	var sets []BinarySet
 	f.sourceID = s.ID
-	body, err = f.expandSourceProviders(ctx, body, origin, &sets)
+	body, sets, expansion, err := f.expandSourceProviders(ctx, body, origin)
 	if err != nil {
 		if provider := FailureProvider(err); provider != nil {
 			provider.Warnings = templateWarningSummary(headers)
@@ -625,7 +627,7 @@ func (f Fetcher) readProfile(ctx context.Context, s Source, file []byte, usage *
 		return Profile{}, err
 	}
 	p, err := parseVerified(s.ID, body, sets)
-	p.converted(format, converted)
+	p.converted(format, append(converted, expansion...))
 	p.Title = subscriptionTitle(headers)
 	if s.Kind == "platform" {
 		_, params, _ := mime.ParseMediaType(headers.Get("Content-Disposition"))

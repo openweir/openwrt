@@ -216,7 +216,7 @@ func TestGeodataPinnedOfflineAndInterruptedDownload(t *testing.T) {
 func TestMihomoDropsUnsupportedSRSAndPreservesNeighborRules(t *testing.T) {
 	body := []byte(`{"outbounds":[{"type":"http","tag":"n","server":"n.example","server_port":80}],"route":{"rule_set":[{"tag":"unavailable","type":"remote","format":"binary","url":"https://127.0.0.1/private.srs"}],"rules":[{"domain":"kept.example","outbound":"n"},{"rule_set":"unavailable","action":"reject"}],"final":"n"}}`)
 	f := Fetcher{}
-	expanded, e := f.expandSourceProviders(t.Context(), body, "")
+	expanded, _, _, e := f.expandSourceProviders(t.Context(), body, "")
 	if e != nil {
 		t.Fatal(e)
 	}
