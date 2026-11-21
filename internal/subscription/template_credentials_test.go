@@ -75,10 +75,10 @@ func TestBadCredentialUpdateRetainsSnapshot(t *testing.T) {
 		t.Fatal(original.Decision, err)
 	}
 	for _, suffix := range []string{"", "\nSecond = http, new.example, 8080"} {
-		// Surge lines name the psk by position, so a password is no psk at all.
+		// A Snell line with a password but no psk is the nonstandard credential, as in Clash.
 		malformed := strings.ReplaceAll(raw, "psk=", "password=") + suffix
 		c, err := fetch.Refresh(t.Context(), store, "test", []byte(malformed), Policy{AllowLocalFallback: true})
-		if err != nil || c.Decision != "blocked" || len(c.Notices) == 0 || c.Notices[0].Code != "invalid_credential" || c.Notices[0].At != "First" {
+		if err != nil || c.Decision != "blocked" || len(c.Notices) == 0 || c.Notices[0].Code != "nonstandard_snell_credential" || c.Notices[0].At != "First" {
 			t.Fatal("missing field-specific warning", c.Decision, c.Notices, err)
 		}
 		current, err := store.Load("test")
@@ -86,7 +86,7 @@ func TestBadCredentialUpdateRetainsSnapshot(t *testing.T) {
 			t.Fatal("previous snapshot changed")
 		}
 		st, err := store.Status("test")
-		if err != nil || st.LastFailure != "invalid_credential" || !st.Ready {
+		if err != nil || st.LastFailure != "nonstandard_snell_credential" || !st.Ready {
 			t.Fatal("saved source lost its usable state or last update diagnostic")
 		}
 	}
