@@ -567,9 +567,9 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 	// With the China shortcut the firewall sends mainland addresses straight out. As with
 	// OpenClash's China route, mainland names then get real addresses from the domestic
 	// resolvers, so their traffic also leaves in the kernel instead of through the core.
-	// Names the proxy must carry, and names that rules send anywhere but DIRECT (a group may
-	// switch between direct and a proxy at any time), keep fake addresses so the core still
-	// routes them. Device routes cannot be kept this way: the filter sees only the name, not
+	// Names the proxy must carry, and names that rules other than the mainland lists send
+	// anywhere but DIRECT (a group may switch between direct and a proxy at any time), keep fake
+	// addresses so the core still routes them. Device routes cannot be kept this way: the filter sees only the name, not
 	// which device asks, so a device sent to a proxy still reaches mainland names directly.
 	shortcut := n.DNS && n.FakeIP && chinaShortcut(i, n)
 	var routedNames, routedRules []string
@@ -598,7 +598,9 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 			if !targets[r.Target] {
 				return fmt.Errorf("unavailable rule target %s", r.Target)
 			}
-			if shortcut && r.Target != subscription.Direct {
+			// The mainland lists themselves are what the shortcut switch takes over, even when a
+			// profile sends them to a group (ACL4SSR-style "全球直连"); other rules keep their names.
+			if shortcut && r.Target != subscription.Direct && !mainlandRule(r) {
 				names, filters := routedByName(r, behavior)
 				routedNames, routedRules = append(routedNames, names...), append(routedRules, filters...)
 			}

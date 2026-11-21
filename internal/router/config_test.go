@@ -456,6 +456,8 @@ func TestChinaShortcutKeepsRuledNamesFake(t *testing.T) {
 		rule("DOMAIN-SUFFIX,bilibili.com", hk), rule("DOMAIN,a.example.cn", hk), rule("DOMAIN-KEYWORD,bili", hk), rule("DOMAIN-SUFFIX,direct.cn", subscription.Direct),
 		rule("RULE-SET,media", hk), rule("RULE-SET,ips", hk), rule("RULE-SET,openweir-mix", subscription.Reject), rule("GEOSITE,bilibili", hk),
 		rule("AND,((DOMAIN,x.cn),(NETWORK,TCP))", hk), rule("DOMAIN-SUFFIX,bilibili.com", subscription.Reject),
+		// The mainland lists sent to a group (ACL4SSR's 全球直连) are what the shortcut takes over.
+		rule("GEOSITE,CN", hk), rule("GEOSITE,geolocation-cn", hk),
 	}
 	i := initial()
 	i.Source = p.Source
