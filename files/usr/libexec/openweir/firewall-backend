@@ -199,8 +199,13 @@ legacy_verify() {
  done
 }
 legacy_remove() {
+ [ -e "$state/fw3.$1" ] || return 0
+ legacy_clear "$1" || return 1
+ rm -f "$state/fw3.$1" "$state/legacy.$1.active" "$state/legacy.$1.plan"
+}
+# Delete whatever owned rules of one family are left, keeping the applied plan.
+legacy_clear() {
  family=$1
- [ -e "$state/fw3.$family" ] || return 0
  xt=$(legacy_tool "$family") || return 1
  snapshot=$(legacy_current "$xt" "$family") || return 1
  # An empty, replaced, or externally referenced chain has no exclusive owner.
@@ -227,7 +232,7 @@ legacy_remove() {
  "$xt-restore" --noflush <"$state/legacy.$family.delete" || return 1
  remaining=$(legacy_current "$xt" "$family") || return 1
  if printf '%s\n' "$remaining" | grep -q '^-A '; then return 1; fi
- rm -f "$state/fw3.$family" "$state/legacy.$family.active" "$state/legacy.$family.plan" "$state/legacy.$family.delete"
+ rm -f "$state/legacy.$family.delete"
 }
 
 # Only issue identifiers listed by the manager cross the diagnostics boundary.

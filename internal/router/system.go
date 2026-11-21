@@ -39,6 +39,7 @@ type System struct {
 	client        control.Client
 	cancelMonitor context.CancelFunc
 	audit         *routingAudit
+	repairs       repairLimit
 	txn           string
 	cancelTrial   bool
 	dns           bool
@@ -120,6 +121,7 @@ func secret() (string, error) {
 	return k, Atomic(path, []byte(k), 0600)
 }
 func (s *System) Direct(ctx context.Context) error {
+	s.endMonitor()
 	_, e := command(ctx, networkHelper, "release")
 	if e != nil {
 		return e
@@ -128,6 +130,7 @@ func (s *System) Direct(ctx context.Context) error {
 }
 
 func (s *System) Fault(ctx context.Context) (bool, error) {
+	s.endMonitor()
 	result, err := command(ctx, networkHelper, "fault")
 	if err != nil {
 		return false, err
@@ -137,6 +140,17 @@ func (s *System) Fault(ctx context.Context) (bool, error) {
 		return false, errors.New("unverified network fault disposition")
 	}
 	return disposition == "protected", s.stopCore(ctx)
+}
+
+// endMonitor stops the routing audit before a release, even one that fails and is retried,
+// so it never puts back rules the release is taking away.
+func (s *System) endMonitor() {
+	s.mu.Lock()
+	stop := s.cancelMonitor
+	s.mu.Unlock()
+	if stop != nil {
+		stop()
+	}
 }
 
 func (s *System) stopCore(ctx context.Context) error {
@@ -521,7 +535,7 @@ applyLoop:
 
 func (s *System) startMonitor(i Intent, n Network, gid int, key string) {
 	stream, end := context.WithCancel(context.Background())
-	audit := &routingAudit{}
+	audit := s.newAudit()
 	s.mu.Lock()
 	s.cancelMonitor = end
 	s.audit = audit

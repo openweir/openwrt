@@ -172,7 +172,8 @@ func command(name string, args ...string) error {
 func stageNetworkSources(overlay string) error {
 	for _, f := range []string{"usr/libexec/openweir/network", "usr/libexec/openweir/firewall-backend",
 		"usr/libexec/openweir/fault-policy", "etc/config/openweir",
-		"usr/share/nftables.d/chain-pre/input/90-openweir.nft", "usr/share/nftables.d/chain-pre/forward/90-openweir.nft"} {
+		"usr/share/nftables.d/chain-pre/input/90-openweir.nft", "usr/share/nftables.d/chain-pre/forward/90-openweir.nft",
+		"usr/share/nftables.d/ruleset-post/90-openweir.nft"} {
 		if err := copyFile(filepath.Join("files", f), filepath.Join(overlay, f), 0); err != nil {
 			return err
 		}

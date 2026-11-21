@@ -105,6 +105,7 @@ const diagnosticText = {
     save_rules: '保存分流规则',
     uninstall: '准备卸载',
     node_failover_requested: '当前节点不可用，已请求切换节点',
+    firewall_rules_restored: '防火墙重启或其他程序清除了代理规则，已自动恢复',
     connections_not_reset: '未能断开旧连接，已打开的页面可能仍走原线路，刷新或重开即可',
     dns_intercept: 'DNS 劫持未生效',
     dns_issue: 'DNS 配置存在问题',

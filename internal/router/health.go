@@ -10,8 +10,10 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -127,26 +129,121 @@ func (s *System) Healthy(ctx context.Context) error {
 // Verify firewall, RPDB, managed LAN DNS and management access out of band.
 // A slow but healthy low-power router must still renew its local heartbeat
 // while nft/ubus or a LAN DNS query is in progress.
-type routingAudit struct{ err atomic.Pointer[error] }
+type routingAudit struct {
+	err atomic.Pointer[error]
+	// Fixed when the audit starts.
+	helper func(context.Context, string) ([]byte, error) // the network helper
+	alarm  func() bool                                   // a cheap sign that rules may be gone
+	ready  func(context.Context) error                   // the core answers
+	limit  *repairLimit
+	log    func(message string)
+}
 
+func (s *System) newAudit() *routingAudit {
+	return &routingAudit{
+		helper: func(ctx context.Context, verb string) ([]byte, error) { return command(ctx, networkHelper, verb) },
+		alarm:  firewallAlarm(),
+		ready:  s.ready,
+		limit:  &s.repairs,
+		log:    func(message string) { s.records.Log("firewall", "info", message) },
+	}
+}
+
+// The full check runs every 30 s, and at once when the alarm goes off.
 func (a *routingAudit) run(ctx context.Context) {
-	delay := 30 * time.Second
+	tick := time.NewTicker(2 * time.Second)
+	defer tick.Stop()
+	due := time.Now().Add(30 * time.Second)
 	misses := 0
-	for ctxWait(ctx, delay) == nil {
-		probe, end := context.WithTimeout(ctx, 10*time.Second)
-		_, e := command(probe, networkHelper, "verify")
-		end()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+		if !a.alarm() && time.Now().Before(due) {
+			continue
+		}
+		e := a.check(ctx)
 		if e == nil {
 			a.err.Store(nil)
 			misses = 0
-			delay = 30 * time.Second
+			due = time.Now().Add(30 * time.Second)
 			continue
 		}
 		misses++
-		delay = 2 * time.Second
+		due = time.Time{}
 		if misses >= 3 {
 			a.err.Store(&e)
 		}
+	}
+}
+
+// check verifies the takeover. A firewall stop or restart (fw4 flush, fw3 restart) or another
+// tool can remove its rules while the core, routes and DNS stay: put them back at once while
+// the core is healthy, instead of releasing the takeover and starting over 30 s later.
+func (a *routingAudit) check(ctx context.Context) error {
+	probe, end := context.WithTimeout(ctx, 10*time.Second)
+	_, e := a.helper(probe, "verify")
+	end()
+	if e == nil {
+		return nil
+	}
+	probe, end = context.WithTimeout(ctx, 20*time.Second)
+	defer end()
+	now := time.Now()
+	if a.ready(probe) != nil || !a.limit.allow(now) {
+		return e
+	}
+	out, e := a.helper(probe, "repair")
+	if e == nil && strings.TrimSpace(string(out)) == "repaired" {
+		a.limit.note(now)
+		a.log("firewall_rules_restored")
+	}
+	return e
+}
+
+// repairLimit allows ten repairs in five minutes, like OpenClash's firewall reloads, so
+// OpenWeir never fights another tool over the rules. It outlives each core run.
+type repairLimit struct {
+	mu   sync.Mutex
+	done []time.Time
+}
+
+func (l *repairLimit) allow(now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.done = slices.DeleteFunc(l.done, func(t time.Time) bool { return now.Sub(t) >= 5*time.Minute })
+	return len(l.done) < 10
+}
+func (l *repairLimit) note(now time.Time) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.done = append(l.done, now)
+}
+
+// firewallAlarm watches for the cheap signs that the takeover's rules may be gone. fw4 replays
+// its table with each load of its own ruleset, but a flush (firewall stop) or another tool
+// removes it. fw3 rewrites its state file with each start, restart and reload.
+func firewallAlarm() func() bool {
+	backend, _ := os.ReadFile(RunDir + "/network/backend")
+	switch strings.TrimSpace(string(backend)) {
+	case "fw4":
+		return func() bool { return nftTableGone("openweir") }
+	case "fw3":
+		return fileChanged("/var/run/fw3.state")
+	}
+	return func() bool { return false }
+}
+
+func fileChanged(path string) func() bool {
+	last, _ := os.Stat(path)
+	return func() bool {
+		now, _ := os.Stat(path)
+		changed := (last == nil) != (now == nil) || last != nil && now != nil &&
+			(!os.SameFile(last, now) || !last.ModTime().Equal(now.ModTime()) || last.Size() != now.Size())
+		last = now
+		return changed
 	}
 }
 

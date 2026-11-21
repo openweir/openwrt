@@ -246,7 +246,11 @@ refresh() {
  { echo 'flush set inet openweir local4'; echo 'flush set inet openweir local6'; } >"$batch"
  set_elements local4 "$(local_prefixes 4)"
  if [ "$v6" = 1 ]; then set_elements local6 "$(local_prefixes 6)"; fi
+ # The copy fw4 replays (see apply) follows the live sets; its lock keeps a reload out between.
+ lock_firewall fw4
  nft -f "$batch"
+ if [ -d "$state/replay" ]; then mv -f "$batch" "$state/replay/2-local.nft"; fi
+ unlock_firewall
 }
 # An updated China address list replaces the shortcut sets in one transaction. They only
 # hold elements while the shortcut is on, so an empty cn4 leaves both alone.
@@ -284,6 +288,8 @@ release_active() {
  failure=0
  if [ -e "$state/fw4" ] || [ "$(cat "$state/backend" 2>/dev/null)" = fw4 ] || { command -v nft >/dev/null && owned_table; }; then
   if lock_firewall fw4; then
+   # fw4 must stop replaying the table (see apply) before it goes.
+   rm -rf "$state/replay" "$state/table.nft"
    if [ -e "$state/fw4" ]; then remove_fw4 || { failure=1; fail_stage fw4_restore; }; fi
    if ! tables=$(nft list tables); then failure=1; fail_stage firewall_inspection
    elif printf '%s\n' "$tables" | grep -Fqx 'table inet openweir'; then
@@ -441,10 +447,12 @@ verify_direct() {
 verify() {
  expected=$(cat "$state/backend" 2>/dev/null) || return 1
  current=$(firewall_status)
- [ "$expected" = "${current%% *}" ] || return 1
- case "$expected" in
-  fw3) legacy_verify || return 1 ;;
-  fw4) owned_table && verify_fw4 || return 1 ;;
+ case "$expected:${current%% *}" in
+  fw3:fw3) legacy_verify || return 1 ;;
+  fw4:fw4) owned_table && verify_fw4 || return 1 ;;
+  # A stopped fw4 (fw4 flush) has no chains to allow through: repair puts the table back on
+  # its own, and starting fw4 replays it together with the allowances.
+  fw4:unavailable) owned_table || return 1 ;;
   *) return 1 ;;
  esac
  for family in 4 6; do
@@ -645,6 +653,9 @@ EOF
  stage=firewall_prepare
  nft -j list table inet fw4 >/dev/null
  nft -c -f "$batch"
+ # The copy fw4 replays each time it loads its ruleset (ruleset-post include): a fw4 restart,
+ # reload or stop and start then keeps or brings back the takeover in the same transaction.
+ { echo 'table inet openweir'; echo 'delete table inet openweir'; cat "$batch"; } >"$state/table.nft"
  fi
  fail_open=$(uci -q get openweir.main.fail_open || echo 1)
  if [ "$fail_open" = 0 ]; then
@@ -669,6 +680,9 @@ EOF
   lock_firewall fw4
   prepare_fw4
   nft -f "$batch"
+  rm -rf "$state/replay" "$batch"
+  mkdir "$state/replay"
+  mv "$state/table.nft" "$state/replay/1-table.nft"
  fi
  unlock_firewall
  stage=managed_lan_probe
@@ -685,6 +699,55 @@ EOF
  done
  return 1
 }
+# A firewall stop or restart (fw4 flush, fw3 restart) or another tool can remove the takeover's
+# rules while the core, routes and DNS stay. Put the same rules back. The manager asks only
+# while the core is healthy and limits how often. Prints "repaired" when rules changed.
+repair() {
+ [ ! -e /var/run/openweir/stopping ] || { fail_stage service_stopping; return 1; }
+ expected=$(cat "$state/backend" 2>/dev/null) && [ -f "$state/owned" ] || { fail_stage firewall_backend; return 1; }
+ current=$(firewall_status); current=${current%% *}
+ changed=0
+ case "$expected:$current" in
+  fw4:fw4|fw4:unavailable) lock_firewall fw4 && repair_fw4 ;;
+  fw3:fw3) lock_firewall fw3 && repair_fw3 ;;
+  *) fail_stage firewall_backend; return 1 ;;
+ esac || { unlock_firewall; fail_stage firewall_apply; return 1; }
+ unlock_firewall
+ verify || { fail_stage managed_lan_probe; return 1; }
+ [ "$changed" = 0 ] || echo repaired
+}
+repair_fw4() {
+ batch="$state/repair.nft"
+ : >"$batch"
+ if ! owned_table; then
+  # A table of that name we do not own is not ours to replace.
+  ! nft list table inet openweir >/dev/null 2>&1 && [ -s "$state/replay/1-table.nft" ] || return 1
+  cat "$state/replay/"*.nft >>"$batch" || return 1
+ fi
+ # fw4 replays the allowances itself; this covers rules deleted by hand.
+ if [ "$current" = fw4 ] && ! verify_fw4; then
+  for chain in input forward; do
+   for handle in $(owned_handles "$chain"); do echo "delete rule inet fw4 $chain handle $handle"; done
+   file="$state/allow/$chain/rules.nft"
+   [ ! -s "$file" ] || while IFS= read -r rule; do printf 'insert rule inet fw4 %s %s\n' "$chain" "$rule"; done <"$file"
+  done >>"$batch"
+ fi
+ if [ -s "$batch" ]; then nft -f "$batch" || return 1; changed=1; fi
+ rm -f "$batch"
+}
+repair_fw3() {
+ for fam in 4 6; do
+  [ -f "$state/fw3.$fam" ] || continue
+  xt=$(legacy_tool "$fam") || return 1
+  actual=$(legacy_current "$xt" "$fam") || return 1
+  [ "$actual" != "$(cat "$state/legacy.$fam.active")" ] || continue
+  # Leftovers go first. The plan inserts at the top: a fault guard position it may record is gone.
+  legacy_clear "$fam" || return 1
+  sed 's/^-I PREROUTING [0-9][0-9]* /-I PREROUTING /' "$state/legacy.$fam.plan" | "$xt-restore" --noflush || return 1
+  legacy_current "$xt" "$fam" >"$state/legacy.$fam.active" || return 1
+  changed=1
+ done
+}
 finish_apply() {
  if [ "$1" = 0 ]; then rm -f "$state/error"; return; fi
  failed_step=$stage
@@ -695,6 +758,7 @@ finish_apply() {
 case "${1:-}" in
  apply) family_arg=${2:-}; china_arg=${3:-}; trap 'finish_apply "$?"' EXIT; apply ;;
  verify) verify || { fail_stage managed_lan_probe; exit 1; } ;;
+ repair) repair ;;
  release) release ;;
  refresh) refresh ;;
  refresh-cn) refresh_cn ;;
