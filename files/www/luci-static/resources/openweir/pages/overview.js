@@ -185,16 +185,7 @@ function sourceCard(ui) {
 		));
 	}
 	if (!sources.length) box.append(empty('尚未添加订阅'));
-	box.append(...sources.slice(0, 3).map(item));
-	if (sources.length > 3)
-		box.append(
-			h(
-				'details',
-				{},
-				h('summary', {}, '更多订阅（' + (sources.length - 3) + '）'),
-				sources.slice(3).map(item),
-			),
-		);
+	if (sources.length) box.append(h('div', { class: 'ow-source-list' }, ...sources.map(item)));
 	box.append(ui.button('＋ 添加订阅', () => ui.go('subscriptions', 'add'), 'ow-add'));
 	return box;
 }

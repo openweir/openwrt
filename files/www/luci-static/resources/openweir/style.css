@@ -1135,8 +1135,12 @@
 }
 .ow input.ow-hours {
 	width: 5em;
-	text-align: right;
+	text-align: center;
+	appearance: textfield;
+	-moz-appearance: textfield;
 }
+.ow input.ow-hours::-webkit-inner-spin-button,
+.ow input.ow-hours::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 
 .ow .ow-label { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 0; }
 .ow .ow-row:has(> .ow-label) { flex-wrap: nowrap; }
@@ -1147,3 +1151,12 @@
 .ow .ow-source-card .ow-actions > .ow-danger:last-child { margin-left: auto; }
 .ow .ow-label > small:empty { display: none; }
 .ow .ow-log-detail { display: block; margin-top: 4px; font-size: 12px; overflow-wrap: anywhere; }
+
+/* Every subscription is listed; the list scrolls inside a card sized by the hero row. */
+.ow .ow-source-list { display: flex; flex-direction: column; gap: 10px; flex: 1 1 0; min-height: 0; overflow-y: auto; }
+@container (min-width: 841px) {
+	.ow .ow-dashboard > .ow-sources { height: 0; min-height: 100%; display: flex; flex-direction: column; }
+}
+@container (max-width: 840px) {
+	.ow .ow-source-list { flex: none; max-height: 320px; }
+}
