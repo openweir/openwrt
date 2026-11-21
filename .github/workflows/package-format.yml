@@ -15,30 +15,37 @@ jobs:
       matrix: ${{ steps.targets.outputs.matrix }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+      - name: Version from tags and conventional commits
+        run: go run ./cmd/openweir-release next-version > VERSION && cat VERSION
       - uses: actions/download-artifact@v8
         with:
           pattern: runtime-*
           merge-multiple: true
           path: dist/runtime
-      # A push to develop becomes the next preview of this version; its packages carry the
-      # number (1.0.0_pre3) next to the stable-numbered ones that the install tests use.
-      - name: Number the preview
+      # Package revisions count up within a version: a push to develop builds preview N as
+      # version-rN, and main builds the release as the next revision after the last preview,
+      # so every build upgrades the one before it.
+      - name: Number the preview and the release revision
         id: preview
-        if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
         env:
           GH_TOKEN: ${{ github.token }}
+          DEVELOP: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' }}
         run: |
           set -euo pipefail
           version=$(cat VERSION)
           last=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName \
             --jq "[.[].tagName | select(startswith(\"v$version-preview.\")) | ltrimstr(\"v$version-preview.\") | select(test(\"^[0-9]+\$\")) | tonumber] | max // 0")
-          echo "number=$((last + 1))" >> "$GITHUB_OUTPUT"
+          if [ "$DEVELOP" = true ]; then echo "number=$((last + 1))" >> "$GITHUB_OUTPUT"; fi
+          echo "revision=$((last + 1))" >> "$GITHUB_OUTPUT"
       - name: Package one installer per OpenWrt architecture
         env:
           OPENWEIR_PACKAGE_PRERELEASE: ${{ steps.preview.outputs.number }}
+          OPENWEIR_PACKAGE_REVISION: ${{ steps.preview.outputs.revision }}
           FORMAT: ${{ inputs.format }}
           OPENWEIR_FEED_MODE: test
           OPENWEIR_RUNTIME_DIR: dist/runtime
@@ -57,10 +64,11 @@ jobs:
       - name: Isolate the tested installers for publication
         env:
           FORMAT: ${{ inputs.format }}
+          REVISION: ${{ steps.preview.outputs.revision }}
         run: |
           set -eu
           mkdir -p dist/release
-          version=$(cat VERSION)
+          version=$(cat VERSION)-r$REVISION
           for arch in $(go run ./cmd/openweir-release arches "$FORMAT"); do
             name=$(go run ./cmd/openweir-release package-name "$version" "$FORMAT" "$arch")
             (cd "dist/feed/$arch" && grep -F "  $name" SHA256SUMS | sha256sum --check -)
@@ -81,7 +89,7 @@ jobs:
         run: |
           set -eu
           mkdir -p dist/preview
-          version=$(cat VERSION)_pre$NUMBER
+          version=$(cat VERSION)-r$NUMBER
           for arch in $(go run ./cmd/openweir-release arches "$FORMAT"); do
             name=$(go run ./cmd/openweir-release package-name "$version" "$FORMAT" "$arch")
             (cd "dist/feed/$arch/preview" && grep -F "  $name" SHA256SUMS | sha256sum --check -)

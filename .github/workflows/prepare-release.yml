@@ -34,6 +34,12 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha || github.sha }}
           persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Version from tags and conventional commits
+        run: go run ./cmd/openweir-release next-version > VERSION && cat VERSION
       - name: Verify the tested commit and repository version
         id: plan
         env:
@@ -102,7 +108,10 @@ jobs:
       - name: Verify both tested installers and render installation notes
         run: |
           set -eu
-          go run ./cmd/openweir-release assets "$VERSION" dist/tested dist/assets
+          # The installers carry the release revision CI gave them (version-rN).
+          rev=$(ls dist/tested/release-installer-ipk | sed -n "s/^luci-app-openweir_${VERSION//./\\.}-\([1-9][0-9]*\)_.*\.ipk\$/\1/p" | sort -u)
+          [ "$(printf '%s\n' "$rev" | wc -l)" = 1 ] && [ -n "$rev" ]
+          go run ./cmd/openweir-release assets "$VERSION-r$rev" dist/tested dist/assets
           (cd dist/assets && sha256sum --check ../SHA256SUMS)
           go run ./cmd/openweir-release notes "$GITHUB_REPOSITORY" "$VERSION" dist/assets > dist/notes.md
       - name: Publish the verified draft for the current main commit

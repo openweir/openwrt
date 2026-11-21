@@ -126,9 +126,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+      - name: Version from tags and conventional commits
+        run: go run ./cmd/openweir-release next-version > VERSION && cat VERSION
       - name: Cross-compile the bundled management commands
         env:
           OPENWEIR_MIHOMO_PUBLIC_KEY: ${{ vars.MIHOMO_PUBLISHER_KEY }}

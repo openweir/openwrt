@@ -36,7 +36,7 @@ payload="$tmp/pkg/tmp/openweir-package-payload"
 mkdir -m 700 "$payload"
 package_arch=${OPENWEIR_PACKAGE_ARCH:-}
 revision=${OPENWEIR_PACKAGE_REVISION:-1}
-# A develop build also emits preview/ with version <version>_pre<N> for the pre-release.
+# A develop build also emits preview/ with package revision <N> (version-rN) for the pre-release.
 prerelease=${OPENWEIR_PACKAGE_PRERELEASE:-}
 case "$prerelease" in ''|[1-9]|[1-9][0-9]|[1-9][0-9][0-9]|[1-9][0-9][0-9][0-9]) ;; *) echo 'Expected a preview number' >&2; exit 1;; esac
 case "$revision" in 0*|*[!0-9]*|'') echo 'Expected a positive package revision' >&2; exit 1;; esac

@@ -34,14 +34,18 @@ func RenderNotes(repo, version, assets string, preview *Preview) (string, error)
 		return "", err
 	}
 	sums := strings.TrimRight(string(raw), "\n")
-	// A preview's packages carry its number: 1.0.0_pre3 for preview 3 of 1.0.0.
+	// Preview n carries revision n (1.0.1-r3); the release carries the revision of its assets.
 	pkg := version
 	if preview != nil {
 		n, err := strconv.Atoi(strings.TrimPrefix(preview.Tag, "v"+version+"-preview."))
 		if err != nil || n < 1 || preview.Tag != fmt.Sprintf("v%s-preview.%d", version, n) {
 			return "", errors.New("invalid preview tag or commit")
 		}
-		pkg = PreviewVersion(version, n)
+		pkg = RevisionVersion(version, n)
+	} else if n, err := AssetRevision(version, assets); err == nil {
+		pkg = RevisionVersion(version, n)
+	} else {
+		return "", err
 	}
 	names := map[string]bool{}
 	for _, n := range AllNames(pkg) {
@@ -79,10 +83,10 @@ func RenderNotes(repo, version, assets string, preview *Preview) (string, error)
 		tag = preview.Tag
 		short := preview.Commit[:7]
 		intro = "Preview of " + strings.TrimPrefix(tag, "v") + ", built from " + short + " on develop.\n\n" +
-			"- The packages carry version " + pkg + ", which sorts before " + version + ", so the stable release upgrades them.\n" +
+			"- The packages carry version " + pkg + "; each later preview and the stable release take a higher revision, so they upgrade it directly.\n" +
 			"- The router's **Check for updates** never offers previews.\n\n"
 		introZh = strings.TrimPrefix(tag, "v") + " 预览版，由 develop 上的 " + short + " 构建。\n\n" +
-			"- 安装包版本号是 " + pkg + "，排在 " + version + " 之前，正式版发布后可直接覆盖升级。\n" +
+			"- 安装包版本号是 " + pkg + "，之后的预览版和正式版修订号递增，可直接覆盖升级。\n" +
 			"- 路由器的「检查更新」不会提供预览版。\n\n"
 	}
 	url := fmt.Sprintf("https://github.com/%s/releases/download/%s", repo, tag)
@@ -127,3 +131,23 @@ const notesTemplate = "{intro}## Downloads\n\n" +
 	"### OpenWrt 25.12 · APK\n\n```sh\napk add --no-network --allow-untrusted ./{apk_zh}\n```\n\n" +
 	"离线安装前，请准备好固件需要的系统依赖。已安装旧版 Cortex-A53 APK 的用户，可按[离线升级步骤](https://github.com/{repo}/blob/{tag}/README.zh-CN.md#从旧版-cortex-a53-apk-手动升级)保留已有网络组件。\n\n" +
 	"安装后进入 LuCI 的「服务 → OpenWeir」。mihomo 内核需单独选择版本，离线时可导入对应架构的原始发行包。\n"
+
+// AssetRevision reads the package revision from the IPK installers in dir.
+func AssetRevision(version, dir string) (int, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0, err
+	}
+	prefix := Name + "_" + version + "-"
+	for _, e := range entries {
+		rest, ok := strings.CutPrefix(e.Name(), prefix)
+		if !ok {
+			continue
+		}
+		rev, _, ok := strings.Cut(rest, "_")
+		if n, err := strconv.Atoi(rev); ok && err == nil && n > 0 && strconv.Itoa(n) == rev {
+			return n, nil
+		}
+	}
+	return 0, errors.New("no installer carries a package revision")
+}

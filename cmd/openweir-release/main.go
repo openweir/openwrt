@@ -60,6 +60,13 @@ func main() {
 		if !release.ValidVersion(a[0]) {
 			fail("expected a numeric major.minor.patch version: %q", a[0])
 		}
+	case "next-version":
+		// The version of the next release: the newest stable tag raised by the
+		// conventional commits after it. CI writes it to VERSION before building.
+		args(fs, argv, 0, "")
+		v, err := release.NextVersion(".")
+		check(err)
+		fmt.Println(v)
 	case "arches":
 		a := args(fs, argv, 1, "ipk|apk")
 		if !slices.Contains(release.Formats, a[0]) {

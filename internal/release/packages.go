@@ -37,25 +37,34 @@ var versionPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[
 // ValidVersion reports whether v is a plain major.minor.patch release version.
 func ValidVersion(v string) bool { return len(v) <= 64 && versionPattern.MatchString(v) }
 
-var previewPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)_pre[1-9][0-9]{0,5}$`)
+var revisionPattern = regexp.MustCompile(`^((?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*))-r([1-9][0-9]{0,5})$`)
 
-// PreviewVersion is the package version of preview n of version: 1.0.0_pre3. apk orders
-// _pre and opkg orders ~pre (used in the IPK control file) before the release itself, so
-// the stable packages upgrade a preview.
-func PreviewVersion(version string, n int) string { return fmt.Sprintf("%s_pre%d", version, n) }
+// RevisionVersion is the package version of revision n of version: 1.0.1-r3. Previews of a
+// version count r1, r2, …; its stable release takes the next revision, so every build upgrades
+// the one before it in both opkg and apk.
+func RevisionVersion(version string, n int) string { return fmt.Sprintf("%s-r%d", version, n) }
 
-// ValidPackageVersion accepts a release version or a preview package version.
+// ValidPackageVersion accepts a release version (revision 1) or a version with a revision.
 func ValidPackageVersion(v string) bool {
-	return ValidVersion(v) || len(v) <= 64 && previewPattern.MatchString(v)
+	return ValidVersion(v) || len(v) <= 64 && revisionPattern.MatchString(v)
+}
+
+// splitRevision returns the version and package revision of a package version.
+func splitRevision(v string) (string, string) {
+	if m := revisionPattern.FindStringSubmatch(v); m != nil {
+		return m[1], m[2]
+	}
+	return v, "1"
 }
 
 // PackageName returns the Release file name of the installer for an OpenWrt architecture.
 func PackageName(version, format, arch string) string {
+	base, rev := splitRevision(version)
 	switch format {
 	case "ipk":
-		return fmt.Sprintf("%s_%s-1_%s.ipk", Name, version, arch)
+		return fmt.Sprintf("%s_%s-%s_%s.ipk", Name, base, rev, arch)
 	case "apk":
-		return fmt.Sprintf("%s-%s-r1_%s.apk", Name, version, arch)
+		return fmt.Sprintf("%s-%s-r%s_%s.apk", Name, base, rev, arch)
 	}
 	panic("unknown package format: " + format)
 }

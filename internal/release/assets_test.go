@@ -210,11 +210,14 @@ func TestMatrix(t *testing.T) {
 }
 
 func TestPreviewPackagesCarryTheirNumber(t *testing.T) {
-	pkg := PreviewVersion(version, 2)
-	if pkg != "1.0.0_pre2" || !ValidPackageVersion(pkg) || ValidVersion(pkg) || ValidPackageVersion("1.0.0_pre0") {
+	pkg := RevisionVersion(version, 2)
+	if pkg != "1.0.0-r2" || !ValidPackageVersion(pkg) || ValidVersion(pkg) || ValidPackageVersion("1.0.0-r0") {
 		t.Fatal(pkg)
 	}
-	if got := PackageName(pkg, "apk", "mipsel_24kc"); got != "luci-app-openweir-1.0.0_pre2-r1_mipsel_24kc.apk" {
+	if got := PackageName(pkg, "apk", "mipsel_24kc"); got != "luci-app-openweir-1.0.0-r2_mipsel_24kc.apk" {
+		t.Fatal(got)
+	}
+	if got := PackageName(pkg, "ipk", "mipsel_24kc"); got != "luci-app-openweir_1.0.0-2_mipsel_24kc.ipk" {
 		t.Fatal(got)
 	}
 	f := newFixtureFor(t, pkg)
@@ -225,8 +228,8 @@ func TestPreviewPackagesCarryTheirNumber(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, s := range []string{"Preview of 1.0.0-preview.2, built from aaaaaaa", "1.0.0-preview.2 预览版", "version 1.0.0_pre2",
-		"https://github.com/openweir/openwrt/releases/download/v1.0.0-preview.2/luci-app-openweir_1.0.0_pre2-1_", "blob/v1.0.0-preview.2/README.md"} {
+	for _, s := range []string{"Preview of 1.0.0-preview.2, built from aaaaaaa", "1.0.0-preview.2 预览版", "version 1.0.0-r2",
+		"https://github.com/openweir/openwrt/releases/download/v1.0.0-preview.2/luci-app-openweir_1.0.0-2_", "blob/v1.0.0-preview.2/README.md"} {
 		if !strings.Contains(notes, s) {
 			t.Errorf("preview notes miss %q", s)
 		}
@@ -234,6 +237,23 @@ func TestPreviewPackagesCarryTheirNumber(t *testing.T) {
 	for _, tag := range []string{"v2.0.0-preview.1", "v1.0.0-preview.3", "v1.0.0-preview.02"} {
 		if _, err := RenderNotes("openweir/openwrt", version, f.output, &Preview{Tag: tag, Commit: strings.Repeat("a", 40)}); err == nil {
 			t.Errorf("accepted %s", tag)
+		}
+	}
+}
+
+func TestBumpFollowsConventionalCommits(t *testing.T) {
+	for _, c := range []struct {
+		msgs []string
+		want string
+	}{
+		{nil, "1.2.3"},
+		{[]string{"fix(ui): align"}, "1.2.4"},
+		{[]string{"docs: x", "feat(router): y"}, "1.3.0"},
+		{[]string{"feat!: drop fw3"}, "2.0.0"},
+		{[]string{"fix: z\n\nBREAKING CHANGE: new config"}, "2.0.0"},
+	} {
+		if got, err := Bump("1.2.3", c.msgs); err != nil || got != c.want {
+			t.Errorf("%v: got %s %v, want %s", c.msgs, got, err, c.want)
 		}
 	}
 }

@@ -1,6 +1,6 @@
 # Previews as GitHub pre-releases: after Router service CI passes on a push to develop, its
 # installers go out as v<VERSION>-preview.<N> (N counts from 1 per version) with package version
-# <VERSION>_pre<N>, so testers download them from
+# <VERSION>-r<N>, so testers download them from
 # the release page instead of Actions artifacts. main holds what is to be released and makes the
 # releases (prepare-release.yml). The router's package updater skips pre-releases
 # (packaging/openwrt/package-update), and only the newest preview is kept.
@@ -33,9 +33,12 @@ jobs:
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
           persist-credentials: false
+          fetch-depth: 0
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+      - name: Version from tags and conventional commits
+        run: go run ./cmd/openweir-release next-version > VERSION && cat VERSION
       - name: Skip a run that develop has moved past
         id: current
         run: |
@@ -70,7 +73,7 @@ jobs:
             echo "::error::v$version is already released; bump VERSION on develop so previews sort after it."
             exit 1
           fi
-          # CI numbered this preview when it built the packages (1.0.0_pre<N>); both formats agree.
+          # CI numbered this preview when it built the packages (version-r<N>); both formats agree.
           number=$(cat dist/preview/preview-installer-ipk/preview-number)
           test "$number" = "$(cat dist/preview/preview-installer-apk/preview-number)"
           case "$number" in [1-9]|[1-9][0-9]|[1-9][0-9][0-9]|[1-9][0-9][0-9][0-9]) ;; *) exit 1;; esac
@@ -83,7 +86,7 @@ jobs:
           for format in ipk apk; do
             mv "dist/preview/preview-installer-$format/preview" "dist/tested/release-installer-$format"
           done
-          go run ./cmd/openweir-release assets "${version}_pre$number" dist/tested dist/assets
+          go run ./cmd/openweir-release assets "${version}-r$number" dist/tested dist/assets
           (cd dist/assets && sha256sum --check ../SHA256SUMS)
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "version=$version-preview.$number" >> "$GITHUB_OUTPUT"

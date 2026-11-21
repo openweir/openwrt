@@ -56,9 +56,18 @@ ucode -F "release=$tmp/release.json" -e '
      die("Invalid official package release");
  if (index(arches[format], arch) < 0) die("No official package for this router architecture");
  let version = substr(release.tag_name, 1);
+ // Every installer of a release carries the same package revision (1.0.1-r4).
+ let revision;
+ for (let x in release.assets) {
+     let m = match(x.name, /^luci-app-openweir_[0-9.]+-([1-9][0-9]{0,5})_[A-Za-z0-9_-]+\.ipk$/);
+     if (!m) continue;
+     if (revision != null && revision !== m[1]) die("Inconsistent package revisions");
+     revision = m[1];
+ }
+ if (revision == null) die("Missing package revision");
  let wanted = [];
- for (let a in arches.opkg) push(wanted, ["opkg", a, "luci-app-openweir_" + version + "-1_" + a + ".ipk"]);
- for (let a in arches.apk) push(wanted, ["apk", a, "luci-app-openweir-" + version + "-r1_" + a + ".apk"]);
+ for (let a in arches.opkg) push(wanted, ["opkg", a, "luci-app-openweir_" + version + "-" + revision + "_" + a + ".ipk"]);
+ for (let a in arches.apk) push(wanted, ["apk", a, "luci-app-openweir-" + version + "-r" + revision + "_" + a + ".apk"]);
  let selected;
  for (let entry in wanted) {
      let formatName = entry[0], name = entry[2];
@@ -71,19 +80,20 @@ ucode -F "release=$tmp/release.json" -e '
          die("Invalid package asset identity or SHA256 digest");
      if (formatName == format && entry[1] == arch) selected = a;
  }
- print(version, "\n", selected.name, "\n", selected.size, "\n", substr(selected.digest, 7), "\n");
+ print(version, "\n", revision, "\n", selected.name, "\n", selected.size, "\n", substr(selected.digest, 7), "\n");
 ' -- "$pm" "$arch" > "$tmp/selection" || fail 'Cannot verify the official release metadata'
 {
  IFS= read -r release_version
+ IFS= read -r revision
  IFS= read -r file
  IFS= read -r size
  IFS= read -r digest
 } < "$tmp/selection"
 if [ "$pm" = apk ]; then
- version=$release_version-r1
+ version=$release_version-r$revision
  current=$(apk query --installed --format json --fields version "$name" | jsonfilter -e '@[0].version')
 else
- version=$release_version-1
+ version=$release_version-$revision
  current=$(opkg status "$name" | awk '$1=="Version:" {print $2}')
 fi
 case "$current" in ''|*[!A-Za-z0-9.+_~:-]*) fail 'Invalid installed package version';; esac

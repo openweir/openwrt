@@ -166,7 +166,7 @@ func commitOutputs(work, output string) error {
 // checksums and stages them in output, with one combined SHA256SUMS beside it.
 func Assemble(version, feeds, output string) error {
 	if !ValidPackageVersion(version) {
-		return fmt.Errorf("expected a release version such as 1.0.0, or a preview package version such as 1.0.0_pre3: %s", version)
+		return fmt.Errorf("expected a release version such as 1.0.0, or one with a package revision such as 1.0.0-r3: %s", version)
 	}
 	var dirs []string
 	for _, f := range Formats {
