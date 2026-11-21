@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"os/user"
+	"slices"
 	"strconv"
 
 	"github.com/openweir/openwrt/internal/control"
@@ -45,7 +47,20 @@ func routingKey(i Intent) string {
 // networkKey covers what the network helper applied: a change needs a new takeover.
 func networkKey(i Intent, n Network) string {
 	direct, _ := directDevices(i) // an invalid device rule already fails in takeover
-	return fmt.Sprint(n.Method, n.DNS, n.FakeIP, n.Family6, n.LAN, n.FailOpen, chinaShortcut(i, n), direct)
+	return fmt.Sprint(n.Method, n.DNS, n.FakeIP, n.Family6, takenLAN(n), n.FailOpen, chinaShortcut(i, n), direct)
+}
+
+// takenLAN keeps the LAN prefixes of the families the helper takes over. Without IPv6 takeover,
+// a delegated prefix that rotates on every PPPoE redial must not restart the takeover.
+func takenLAN(n Network) map[string][]netip.Prefix {
+	if n.Family6 {
+		return n.LAN
+	}
+	lan := make(map[string][]netip.Prefix, len(n.LAN))
+	for dev, ps := range n.LAN {
+		lan[dev] = slices.DeleteFunc(slices.Clone(ps), func(p netip.Prefix) bool { return !p.Addr().Is4() })
+	}
+	return lan
 }
 
 func takeover(i Intent, n Network) (guard, telegram string, err error) {
