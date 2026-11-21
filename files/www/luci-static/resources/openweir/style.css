@@ -1146,3 +1146,4 @@
 .ow .ow-warning > button:last-child { margin-left: auto; }
 .ow .ow-source-card .ow-actions > .ow-danger:last-child { margin-left: auto; }
 .ow .ow-label > small:empty { display: none; }
+.ow .ow-log-detail { display: block; margin-top: 4px; font-size: 12px; overflow-wrap: anywhere; }

@@ -176,6 +176,7 @@ export async function records(ui) {
 							{ class: 'ow-muted' },
 							(sources[v.source] || v.source) + ' · ' + datetime(v.time) + ' · ' + v.message,
 						),
+						v.detail ? h('code', { class: 'ow-log-detail' }, v.detail) : null,
 					);
 					return row;
 				}),
@@ -305,7 +306,7 @@ export async function records(ui) {
 						node_count: s.node_count,
 						rule_count: s.rule_count,
 					})),
-					events: events.map(({ time, source, level, message }) => ({ time, source, level, message })),
+					events: events.map(({ time, source, level, message, detail }) => ({ time, source, level, message, detail })),
 				};
 				download('openweir-diagnostics.json', JSON.stringify(report, null, 2));
 			}),

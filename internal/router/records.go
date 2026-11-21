@@ -17,6 +17,7 @@ type Event struct {
 	Source  string `json:"source"`
 	Level   string `json:"level"`
 	Message string `json:"message"`
+	Detail  string `json:"detail,omitempty"` // a redacted operation, only for unclassified core errors
 }
 type Records struct {
 	minTime     int64
@@ -49,13 +50,16 @@ func (r *Records) RuleHits() map[string]RuleHit {
 	}
 	return out
 }
-func (r *Records) Log(source, level, message string) {
+func (r *Records) Log(source, level, message string) { r.LogDetail(source, level, message, "") }
+
+// LogDetail records an event with a redacted operation shown under it.
+func (r *Records) LogDetail(source, level, message, detail string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := time.Now().UnixMilli()
 	if (source == "core" || source == "dns") && len(r.events) > 0 {
 		last := &r.events[len(r.events)-1]
-		if last.Source == source && last.Level == level && last.Message == message && now >= last.Time && now-last.Time <= 5000 {
+		if last.Source == source && last.Level == level && last.Message == message && last.Detail == detail && now >= last.Time && now-last.Time <= 5000 {
 			last.Count = max(last.Count, 1) + 1
 			last.Time = now
 			return
@@ -65,7 +69,7 @@ func (r *Records) Log(source, level, message string) {
 		copy(r.events, r.events[1:])
 		r.events = r.events[:recordLimit-1]
 	}
-	r.events = append(r.events, Event{Time: now, Source: source, Level: level, Message: message})
+	r.events = append(r.events, Event{Time: now, Source: source, Level: level, Message: message, Detail: detail})
 }
 
 // Core stderr is free form, and can contain signed URLs or full config values.
@@ -193,7 +197,47 @@ func (s *logSink) recordLine(line string) {
 	if fatal && reason != "core_diagnostic" {
 		s.terminal = reason
 	}
-	s.r.Log(source, level, reason)
+	detail := ""
+	if reason == "permission_denied" {
+		detail = deniedOperation(line)
+	}
+	s.r.LogDetail(source, level, reason, detail)
+}
+
+var (
+	detailAddress = regexp.MustCompile(`\[[0-9a-f:.]+\](:\d+)?|\b\d{1,3}(\.\d{1,3}){3}(:\d+)?\b|\b[0-9a-f]{0,4}(:[0-9a-f]{0,4}){2,7}\b`)
+	detailHost    = regexp.MustCompile(`\b[a-z0-9-]+(\.[a-z0-9-]+)+\.[a-z]{2,}\b`)
+	detailPath    = regexp.MustCompile(`(/[^/\s:]+/[^/\s:]+)/[^\s:]+`)
+	detailSafe    = regexp.MustCompile(`[^a-z0-9 _./:<>-]`)
+)
+
+// deniedOperation keeps the failing operation of a core permission error, such as
+// "listen udp <addr>: bind" or "open /etc/openweir/...", without addresses, host
+// names or deep paths.
+func deniedOperation(line string) string {
+	i := strings.Index(line, "permission denied")
+	if i < 0 {
+		i = strings.Index(line, "operation not permitted")
+	}
+	if i < 0 {
+		return ""
+	}
+	parts := strings.Split(strings.TrimRight(line[:i], " :"), ": ")
+	if len(parts) > 3 {
+		parts = parts[len(parts)-3:]
+	}
+	op := strings.Join(parts, ": ")
+	if j := strings.LastIndexAny(op, "=\""); j >= 0 {
+		op = op[j+1:]
+	}
+	op = detailAddress.ReplaceAllString(op, "<addr>")
+	op = detailHost.ReplaceAllString(op, "<host>")
+	op = detailPath.ReplaceAllString(op, "$1/...")
+	op = strings.TrimSpace(detailSafe.ReplaceAllString(op, ""))
+	if len(op) > 96 {
+		op = op[:96]
+	}
+	return op
 }
 
 func (r *Records) Observe(c control.Connection) {
