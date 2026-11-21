@@ -76,6 +76,9 @@ func (s *System) Impact(ctx context.Context, i Intent, tag string) (Impact, erro
 			res.Issues = append(res.Issues, Issue{"node", n.ID, reason})
 		}
 	}
+	for _, id := range unchain(p, unavailable) {
+		res.Issues = append(res.Issues, Issue{"node", id, "connects through a proxy unavailable on this device"})
+	}
 	network, e := networkOptions(ctx)
 	if e != nil {
 		return res, e

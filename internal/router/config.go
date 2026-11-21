@@ -78,6 +78,68 @@ func coreTarget(s string) string {
 	}
 }
 
+// unchain adds to unsupported the nodes that connect through a proxy the core will not have:
+// one missing from the profile or unsupported here, or a group without a usable member.
+// Groups skip them like any unsupported member. It returns the nodes it added.
+func unchain(p subscription.Profile, unsupported map[string]bool) []string {
+	known := map[string]bool{subscription.Direct: true, subscription.Reject: true}
+	for _, n := range p.Nodes {
+		known[n.ID] = !n.Special
+	}
+	for _, g := range p.Groups {
+		known[g.ID] = true
+	}
+	down := maps.Clone(unsupported)
+	usable := func(id string) bool { return known[id] && !down[id] }
+	var added []string
+	for changed := true; changed; {
+		changed = false
+		for _, n := range p.Nodes {
+			if via := n.Dialer(); via != "" && !down[n.ID] && !usable(via) {
+				down[n.ID], unsupported[n.ID], changed = true, true, true
+				added = append(added, n.ID)
+			}
+		}
+		for _, g := range p.Groups {
+			if !down[g.ID] && !slices.ContainsFunc(g.Members, usable) {
+				down[g.ID], changed = true, true
+			}
+		}
+	}
+	return added
+}
+
+// chainGroups lists, in profile order, the groups that usable chained nodes connect through
+// and the groups inside them: modes that compile no subscription groups still need these.
+func chainGroups(p subscription.Profile, unsupported map[string]bool) []subscription.Group {
+	byID := map[string]subscription.Group{}
+	for _, g := range p.Groups {
+		byID[g.ID] = g
+	}
+	need := map[string]bool{}
+	var visit func(string)
+	visit = func(id string) {
+		if g, ok := byID[id]; ok && !need[id] {
+			need[id] = true
+			for _, m := range g.Members {
+				visit(m)
+			}
+		}
+	}
+	for _, n := range p.Nodes {
+		if !n.Special && !unsupported[n.ID] {
+			visit(n.Dialer())
+		}
+	}
+	var out []subscription.Group
+	for _, g := range p.Groups {
+		if need[g.ID] {
+			out = append(out, g)
+		}
+	}
+	return out
+}
+
 var digestName = regexp.MustCompile("^[a-f0-9]{64}$")
 
 const dnsDomesticSet = "openweir-dns-cn"
@@ -241,14 +303,16 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 			foreign[ref.ID] = true
 		}
 	}
-	var nodes []string
 	unsupported := map[string]bool{}
 	for _, node := range p.Nodes {
-		if node.Special {
-			continue
-		}
-		if incompatible(node, c) != "" {
+		if !node.Special && incompatible(node, c) != "" {
 			unsupported[node.ID] = true
+		}
+	}
+	unchain(p, unsupported)
+	var nodes []string
+	for _, node := range p.Nodes {
+		if node.Special || unsupported[node.ID] {
 			continue
 		}
 		if node.ID == "" || available[node.ID] || node.Outbound == nil {
@@ -319,6 +383,7 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 		return nil
 	}
 	end := p.Final
+	compiled := p.Groups
 	if i.Mode == "global" || p.Local {
 		end = Local
 		if i.Mode == "global" {
@@ -327,21 +392,22 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 		if err := addGroup(end, "selector", nodes, nil); err != nil {
 			return nil, err
 		}
-	} else {
-		for _, g := range p.Groups {
-			if available[g.ID] || g.ID == "" {
-				return nil, errors.New("duplicate group identity")
-			}
-			available[g.ID] = true
+		// Chained nodes still connect through their groups.
+		compiled = chainGroups(p, unsupported)
+	}
+	for _, g := range compiled {
+		if available[g.ID] || g.ID == "" {
+			return nil, errors.New("duplicate group identity")
 		}
-		for _, g := range p.Groups {
-			if err := addGroup(g.ID, g.Kind, g.Members, g.Options); err != nil {
-				return nil, err
-			}
+		available[g.ID] = true
+	}
+	for _, g := range compiled {
+		if err := addGroup(g.ID, g.Kind, g.Members, g.Options); err != nil {
+			return nil, err
 		}
-		if end == "" && len(p.Groups) > 0 {
-			end = p.Groups[0].ID
-		}
+	}
+	if end == "" && len(p.Groups) > 0 {
+		end = p.Groups[0].ID
 	}
 	if i.Mode == "smart" {
 		for _, g := range i.Policy.Groups {

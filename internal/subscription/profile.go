@@ -45,6 +45,9 @@ type Member struct {
 	TCPProbe     bool   `json:"tcp_probe"`
 }
 
+// Dialer is the ID of the node or group a chained node connects through, or empty.
+func (n Node) Dialer() string { return field(n.Outbound, "dialer-proxy") }
+
 func (n Node) Summary() Member {
 	_, _, tcp := n.TCPProbeEndpoint()
 	return Member{Capability: n.CapabilityKey(), ID: n.ID, Name: publicLabel(n.Name, "Node "+n.Protocol), Protocol: n.Protocol, Special: n.Special, TCPProbe: tcp}
@@ -261,6 +264,10 @@ func parseVerified(sourceID string, body []byte, sets []BinarySet) (Profile, err
 		return p, errNoUsableNodes
 	}
 	resolve(&p)
+	if len(p.Nodes) == 0 {
+		// Every node was a broken chain.
+		return p, errNoUsableNodes
+	}
 	return p, nil
 }
 func Assess(p Profile, previous *Profile, policy Policy) Candidate {
@@ -322,7 +329,8 @@ func Assess(p Profile, previous *Profile, policy Policy) Candidate {
 		switch n.Code {
 		case "nonstandard_snell_field", "nonstandard_snell_credential", "invalid_credential":
 			continue
-		case "mihomo_router_field_ignored", "mihomo_protocol_unsupported", "mihomo_unavailable_member", "invalid_node", "unsupported_node", "invalid_endpoint", "node_missing_credential", "platform_routing_warnings", "unavailable_inventory", "subconv_unsupported_proxy", "subconv_unsupported_option":
+		case "mihomo_router_field_ignored", "mihomo_protocol_unsupported", "mihomo_unavailable_member", "invalid_node", "unsupported_node", "invalid_endpoint", "node_missing_credential", "platform_routing_warnings", "unavailable_inventory", "subconv_unsupported_proxy", "subconv_unsupported_option",
+			"dialer_proxy_unavailable", "dialer_proxy_cycle":
 			continue
 		}
 		switch n.Code {

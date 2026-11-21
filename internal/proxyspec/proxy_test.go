@@ -15,7 +15,7 @@ func TestNowhereOutboundUsesMihomoFields(t *testing.T) {
 }
 func TestFileAccessAndIncompleteConversionsAreRejected(t *testing.T) {
 	base := map[string]any{"type": "naive", "server": "node.example", "port": 443}
-	for k, v := range map[string]any{"interface-name": "wan", "certificate": "/tmp/local.pem", "dialer-proxy": "other", "plugin-path": "/usr/sbin/tool"} {
+	for k, v := range map[string]any{"interface-name": "wan", "routing-mark": 255, "certificate": "/tmp/local.pem", "dialer-proxy": 1, "plugin-path": "/usr/sbin/tool", "smux": map[string]any{"dialer-proxy": "other"}} {
 		base[k] = v
 		if _, e := Native(base); !errors.Is(e, ErrOption) {
 			t.Fatalf("accepted %s", k)
@@ -28,5 +28,15 @@ func TestFileAccessAndIncompleteConversionsAreRejected(t *testing.T) {
 	v, e := Native(map[string]any{"type": "anytls", "name": "edge", "server": "n.example", "port": 443, "password": "fixture", "reality-opts": map[string]any{"public-key": "a", "short-id": "b"}})
 	if e != nil || v["name"] != nil || !reflect.DeepEqual(v["reality-opts"], map[string]any{"public-key": "a", "short-id": "b"}) {
 		t.Fatal("native option was lost", e)
+	}
+}
+
+func TestChainsKeepTheirDialerName(t *testing.T) {
+	v, e := Native(map[string]any{"type": "http", "name": "exit", "server": "exit.example", "port": 443, "dialer-proxy": "Front"})
+	if e != nil || v["dialer-proxy"] != "Front" {
+		t.Fatal("chained node rejected", e)
+	}
+	if !Unsafe("interface-name", "wan") || !Unsafe("routing-mark", 1) || Unsafe("dialer-proxy", "Front") || Unsafe("udp", true) {
+		t.Fatal("router-safety policy changed")
 	}
 }

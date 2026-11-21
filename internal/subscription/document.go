@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 
 	"github.com/openweir/openwrt/internal/proxyspec"
@@ -163,6 +164,7 @@ func resolve(p *Profile) {
 		add(g.Name, g.ID)
 	}
 	bad := func(name string) bool { return ambiguous[name] || names[name] == "" }
+	p.chains(names, bad, special)
 	for i := range p.Groups {
 		g := &p.Groups[i]
 		if ambiguous[g.Name] {
@@ -245,6 +247,107 @@ func resolve(p *Profile) {
 	}
 	if p.Final != "" {
 		p.Final = target(p.Final, "final")
+	}
+}
+
+// chains resolves each node's dialer-proxy to the ID of a node or group of the same document,
+// as the core names them. The core refuses a whole configuration over a chain that names
+// nothing or can lead back to its own node, so such a node is dropped instead, and so is
+// every chain through it; references to it then resolve as to any other missing node.
+func (p *Profile) chains(names map[string]string, bad func(string) bool, special map[string]bool) {
+	via := map[string]string{}
+	drop := map[string]string{}
+	for _, n := range p.Nodes {
+		name := n.Dialer()
+		switch id := names[name]; {
+		case name == "":
+		case clashTarget(name) == Direct:
+			delete(n.Outbound, "dialer-proxy")
+		case bad(name) || special[id] || id == Reject:
+			drop[n.ID] = "dialer_proxy_unavailable"
+		default:
+			via[n.ID] = id
+		}
+	}
+	// A group in a chain may pick any member, so a member that leads back counts as a cycle.
+	edges := map[string][]string{}
+	for n, id := range via {
+		edges[n] = []string{id}
+	}
+	for _, g := range p.Groups {
+		for _, m := range g.Members {
+			if !bad(m) {
+				edges[g.ID] = append(edges[g.ID], names[m])
+			}
+		}
+	}
+	// Tarjan's strongly connected components: a chained node on a cycle can reach itself.
+	index, low := map[string]int{}, map[string]int{}
+	onStack := map[string]bool{}
+	var stack []string
+	var connect func(string)
+	connect = func(v string) {
+		index[v], low[v] = len(index), len(index)
+		stack = append(stack, v)
+		onStack[v] = true
+		for _, w := range edges[v] {
+			if _, seen := index[w]; !seen {
+				connect(w)
+				low[v] = min(low[v], low[w])
+			} else if onStack[w] {
+				low[v] = min(low[v], index[w])
+			}
+		}
+		if low[v] != index[v] {
+			return
+		}
+		top := len(stack) - 1
+		for stack[top] != v {
+			top--
+		}
+		component := stack[top:]
+		stack = stack[:top]
+		for _, w := range component {
+			onStack[w] = false
+		}
+		if len(component) > 1 || slices.Contains(edges[v], v) {
+			for _, w := range component {
+				if via[w] != "" {
+					drop[w] = "dialer_proxy_cycle"
+				}
+			}
+		}
+	}
+	for _, n := range p.Nodes {
+		if _, seen := index[n.ID]; via[n.ID] != "" && !seen {
+			connect(n.ID)
+		}
+	}
+	for changed := true; changed; {
+		changed = false
+		for n, id := range via {
+			if drop[n] == "" && drop[id] != "" {
+				drop[n] = "dialer_proxy_unavailable"
+				changed = true
+			}
+		}
+	}
+	kept := p.Nodes[:0]
+	for _, n := range p.Nodes {
+		if code := drop[n.ID]; code != "" {
+			p.notice(code, n.Name, false)
+			continue
+		}
+		if id := via[n.ID]; id != "" {
+			n.Outbound["dialer-proxy"] = id
+		}
+		kept = append(kept, n)
+	}
+	p.Nodes = kept
+	for name, id := range names {
+		if drop[id] != "" {
+			delete(names, name)
+		}
 	}
 }
 func hasYAMLRoot(s string) bool {

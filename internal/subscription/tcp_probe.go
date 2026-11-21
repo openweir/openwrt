@@ -5,9 +5,10 @@ import (
 )
 
 // TCPProbeEndpoint describes the imported server's TCP carrier, not the
-// application traffic that a QUIC tunnel might carry after it connects.
+// application traffic that a QUIC tunnel might carry after it connects. A chained
+// node is reached through another proxy, so the router cannot dial it itself.
 func (n Node) TCPProbeEndpoint() (network string, port int, ok bool) {
-	if n.Special || !hostValid(n.Server) || n.Port < 1 || n.Port > 65535 {
+	if n.Special || n.Dialer() != "" || !hostValid(n.Server) || n.Port < 1 || n.Port > 65535 {
 		return "", 0, false
 	}
 	m := n.Outbound

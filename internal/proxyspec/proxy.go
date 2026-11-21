@@ -30,9 +30,8 @@ func fields(v map[string]any, aliases map[string]string, out map[string]any) err
 	return nil
 }
 
-// Native returns a copy with router-sensitive options excluded by rejecting
-// the whole node. In particular a subscription cannot make a proxy read keys
-// from the router filesystem or run local dialer hooks.
+// Native returns a copy of a proxy the router runs: a known protocol whose options all pass
+// the router-safety policy (Unsafe). A dialer-proxy stays a name; the document resolves it.
 func Native(v map[string]any) (map[string]any, error) {
 	switch str(v, "type") {
 	case "http", "ss", "ssr", "socks5", "vless", "vmess", "trojan", "snell", "hysteria", "hysteria2", "tuic", "anytls", "naive", "nowhere", "mieru", "ssh", "wireguard", "juicity":
@@ -69,6 +68,13 @@ var requiredCredentials = map[string][]string{
 	"vless": {"uuid"}, "vmess": {"uuid"}, "ss": {"cipher", "password"}, "ssr": {"cipher", "password", "protocol", "obfs"}, "snell": {"psk"}, "trojan": {"password"}, "hysteria2": {"password"}, "anytls": {"password"}, "nowhere": {"password"}, "mieru": {"username", "password"},
 }
 
+// Unsafe is the router-safety policy for one proxy option, whatever format the node came
+// from: a subscription cannot make the core read the router's files, bind its interfaces,
+// set routing marks, enter network namespaces or run local plugins.
+func Unsafe(key string, value any) bool {
+	return unsafe(map[string]any{key: value}, 0)
+}
+
 func unsafe(v any, depth int) bool {
 	if depth > 32 {
 		return true
@@ -77,8 +83,13 @@ func unsafe(v any, depth int) bool {
 	case map[string]any:
 		for k, x := range m {
 			switch k {
-			case "interface-name", "routing-mark", "dialer-proxy", "netns", "ip-stack", "ca", "ca-path", "private-key-path", "key-path", "client-cert", "client-key", "wg-opts", "plugin-path":
+			case "interface-name", "routing-mark", "netns", "ip-stack", "ca", "ca-path", "private-key-path", "key-path", "client-cert", "client-key", "wg-opts", "plugin-path":
 				return true
+			case "dialer-proxy":
+				// A chain names a proxy or group of the same document, which resolves it.
+				if depth != 0 || str(m, k) == "" {
+					return true
+				}
 			case "certificate":
 				if !strings.HasPrefix(str(m, k), "-----BEGIN CERTIFICATE-----") {
 					return true
