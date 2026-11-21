@@ -44,7 +44,8 @@ func routingKey(i Intent) string {
 
 // networkKey covers what the network helper applied: a change needs a new takeover.
 func networkKey(i Intent, n Network) string {
-	return fmt.Sprint(n.Method, n.DNS, n.FakeIP, n.Family6, n.LAN, n.FailOpen, chinaShortcut(i, n))
+	direct, _ := directDevices(i) // an invalid device rule already fails in takeover
+	return fmt.Sprint(n.Method, n.DNS, n.FakeIP, n.Family6, n.LAN, n.FailOpen, chinaShortcut(i, n), direct)
 }
 
 func takeover(i Intent, n Network) (guard, telegram string, err error) {

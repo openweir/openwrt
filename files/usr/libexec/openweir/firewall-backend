@@ -87,6 +87,13 @@ legacy_plan() {
  fi
  # Replies to connections opened from outside (port forwards, inbound services) stay untouched.
  echo "-A OPENWEIR_LAN -m conntrack --ctdir REPLY $tag -j RETURN"
+ # Devices routed direct skip the takeover (direct_devices in the network helper). The core
+ # answers real addresses on fw3, so no fake-ip range needs to stay captured.
+ if [ "$fam" = 4 ]; then direct_ips=${direct4:-}; else direct_ips=${direct6:-}; fi
+ for prefix in $direct_ips; do echo "-A OPENWEIR_LAN -s $prefix $tag -j RETURN"; done
+ if [ "${legacy_mac:-0}" = 1 ]; then
+  for address in $direct_mac; do echo "-A OPENWEIR_LAN -m mac --mac-source $address $tag -j RETURN"; done
+ fi
  # Time sync stays direct: NTP names keep real addresses and a node without UDP must not stop the clock.
  echo "-A OPENWEIR_LAN -p udp --dport 123 $tag -j RETURN"
  echo "-A OPENWEIR_LAN -m addrtype --dst-type $desttypes $tag -j RETURN"
@@ -147,6 +154,10 @@ legacy_prepare() {
   if [ "${dns_intercept:-0}" = 1 ] && { [ "$fam" = 4 ] || [ "$v6" = 1 ]; }; then nat_table=nat; fi
   prior=$(legacy_snapshot "$xt" "$nat_table") || return 1
   if printf '%s\n' "$prior" | grep -q '^-A ' || "$xt" -w 2 -t mangle -S OPENWEIR_LAN >/dev/null 2>&1; then return 1; fi
+  # The MAC match is an optional xtables module; without it the core still routes those devices direct.
+  legacy_mac=0
+  if [ -n "${direct_mac:-}" ] && printf '*mangle\n-I PREROUTING -m mac --mac-source 02:00:00:00:00:01 -j RETURN\nCOMMIT\n' |
+   "$xtrestore" --test --noflush >/dev/null 2>&1; then legacy_mac=1; fi
   legacy_plan "$fam" >"$state/legacy.$fam.plan" || return 1
   "$xtrestore" --test --noflush <"$state/legacy.$fam.plan" || return 1
  done

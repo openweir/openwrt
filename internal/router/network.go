@@ -75,6 +75,61 @@ func deviceGuardPolicy(i Intent) (string, error) {
 	}
 	return rules.String(), nil
 }
+
+// directDevices lists the devices the firewall leaves out of the takeover because their rule
+// sends them direct, as OpenClash's LAN blacklist does: consoles, IPTV and download boxes keep
+// full speed and their NAT type instead of passing through the core. The core takes the first
+// device rule that matches, so a direct rule is listed only when no earlier rule can send some
+// of its devices elsewhere. A MAC rule's device may hold any address, so IP and MAC rules shadow
+// each other whenever both kinds route elsewhere first. Unlisted direct devices still go direct
+// through the core.
+func directDevices(i Intent) (string, error) {
+	var out strings.Builder
+	var routed []netip.Prefix
+	routedMACs, listed := map[string]bool{}, map[string]bool{}
+	for _, d := range i.Policy.Devices {
+		// As in Compile: global mode keeps only direct devices, and @proxy only exempts a device from default direct.
+		if i.Mode == "global" && d.Target != "@direct" || d.Target == "@proxy" {
+			continue
+		}
+		match, err := deviceMatch(d.Address)
+		if err != nil {
+			return "", err
+		}
+		mac := stringOption(match, "source_mac_address")
+		var prefix netip.Prefix
+		if mac == "" {
+			prefix = netip.MustParsePrefix(stringOption(match, "source_ip_cidr")).Masked()
+		}
+		if d.Target != "@direct" {
+			if mac != "" {
+				routedMACs[mac] = true
+			} else {
+				routed = append(routed, prefix)
+			}
+			continue
+		}
+		var line string
+		switch {
+		case mac != "":
+			if len(routed) > 0 || routedMACs[mac] {
+				continue
+			}
+			line = "mac " + mac
+		case len(routedMACs) > 0 || slices.ContainsFunc(routed, prefix.Overlaps):
+			continue
+		case prefix.Addr().Is4():
+			line = "4 " + prefix.String()
+		default:
+			line = "6 " + prefix.String()
+		}
+		if !listed[line] {
+			listed[line] = true
+			out.WriteString(line + "\n")
+		}
+	}
+	return out.String(), nil
+}
 func telegramAllowance(t *Telegram, n Network) (string, string, error) {
 	if t == nil {
 		return "", "", nil

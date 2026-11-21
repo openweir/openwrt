@@ -448,6 +448,15 @@ func (s *System) Start(ctx context.Context, i Intent) (err error) {
 	if e = Atomic(RunDir+"/device-guard.policy", []byte(policy), 0600); e != nil {
 		return e
 	}
+	direct, e := directDevices(i)
+	if e != nil {
+		return e
+	}
+	directHandoff := RunDir + "/direct-devices"
+	if e = Atomic(directHandoff, []byte(direct), 0600); e != nil {
+		return e
+	}
+	defer os.Remove(directHandoff)
 	// DNS reloads on a busy router can overlap multiple guard intervals.
 	// Keep proving core liveness while the serialized network helper applies.
 	applyCtx, endApply := context.WithCancel(ctx)

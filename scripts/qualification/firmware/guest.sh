@@ -41,6 +41,10 @@ check_clean() {
 }
 if [ "$fw" = fw4 ]; then nft add table inet unrelated
 else for xt in iptables-legacy ip6tables-legacy; do "$xt" -N unrelated; "$xt" -A unrelated -j RETURN; done; fi
+# Direct devices from the manager's handoff (directDevices in network.go) make every apply
+# build the bypass sets and rules, so the firmware's own nft and xtables check them.
+mkdir -p /var/run/openweir
+printf '4 192.168.41.250/32\n6 fd72:45::250/128\nmac 02:00:00:00:41:fa\n' >/var/run/openweir/direct-devices
 for method in tproxy tun; do
  [ "$method" != tun ] || { ip tuntap add dev owtun0 mode tun && ip link set owtun0 up || { report tun unsupported;continue; }; }
  uci set openweir.main.method="$method";uci set openweir.main.ipv6=1;uci set openweir.main.dns=1;uci commit openweir

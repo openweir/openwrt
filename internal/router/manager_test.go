@@ -326,6 +326,38 @@ func TestFaultPolicyMatchesRoutingOrder(t *testing.T) {
 	}
 }
 
+func TestDirectDevicesSkipTheTakeoverUnlessAnEarlierRuleRoutesThem(t *testing.T) {
+	i := Intent{Mode: "smart", Policy: Policy{DefaultDirect: true, Devices: []DeviceRule{
+		{"192.168.1.10", "@direct"}, {"02:00:00:00:00:AB", "@direct"}, {"fd00::10/64", "@direct"}, {"192.168.1.10/32", "@direct"},
+		// A proxy exception only exempts a device from default direct; it shadows nothing.
+		{"10.0.0.1/8", "@proxy"}, {"10.0.0.5", "@direct"},
+		{"192.168.2.0/24", "group:x"}, {"192.168.2.7", "@direct"}, {"192.168.3.7", "@direct"},
+		// After a routed IP rule a MAC device may hold that address, and the reverse.
+		{"02:00:00:00:00:02", "@direct"}, {"02:00:00:00:00:03", "@reject"}, {"192.168.4.1", "@direct"},
+	}}}
+	s, e := directDevices(i)
+	if e != nil || s != "4 192.168.1.10/32\nmac 02:00:00:00:00:ab\n6 fd00::/64\n4 10.0.0.5/32\n4 192.168.3.7/32\n" {
+		t.Fatalf("%q %v", s, e)
+	}
+	// Global mode drops every other device rule, so nothing shadows the direct ones.
+	i.Mode = "global"
+	s, e = directDevices(i)
+	if e != nil || s != "4 192.168.1.10/32\nmac 02:00:00:00:00:ab\n6 fd00::/64\n4 10.0.0.5/32\n4 192.168.2.7/32\n4 192.168.3.7/32\nmac 02:00:00:00:00:02\n4 192.168.4.1/32\n" {
+		t.Fatalf("%q %v", s, e)
+	}
+	if _, e = directDevices(Intent{Mode: "smart", Policy: Policy{Devices: []DeviceRule{{"lan", "@direct"}}}}); e == nil {
+		t.Fatal("accepted an invalid device")
+	}
+	// Turning a device direct re-applies the firewall; moving it between groups only reloads the core.
+	n := Network{Method: "tproxy"}
+	group := func(target string) Intent {
+		return Intent{Mode: "smart", Policy: Policy{Devices: []DeviceRule{{"192.168.1.10", target}}}}
+	}
+	if networkKey(group("group:a"), n) != networkKey(group("group:b"), n) || networkKey(group("group:a"), n) == networkKey(group("@direct"), n) {
+		t.Fatal("takeover key does not follow direct devices")
+	}
+}
+
 func TestCoreLogsKeepNetworkErrorsSeparateFromInformationalEvents(t *testing.T) {
 	records := NewRecords()
 	sink := logSink{r: records}
