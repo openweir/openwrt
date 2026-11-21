@@ -101,7 +101,8 @@ dns_setup() {
    fi
    # Without IPv6 takeover, AAAA answers would send preferred IPv6 traffic
    # around the proxy, so hide them while the takeover is active.
-   [ "$v6" = 1 ] || echo 'filter-aaaa'
+   # The option is case-sensitive and needs dnsmasq 2.87 or newer; an unknown line stops dnsmasq.
+   if [ "$v6" != 1 ] && dnsmasq --help 2>/dev/null | grep -q -- '--filter-AAAA'; then echo 'filter-AAAA'; fi
   } >"$tmp"
   chmod 0644 "$tmp"; mv -f "$tmp" "$dir/$dnsfile"
  done <"$state/dns"
