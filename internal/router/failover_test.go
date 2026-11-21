@@ -82,7 +82,8 @@ func TestLateFailoverLosesToManualSelection(t *testing.T) {
 	defer stop()
 	eventually(t, func() bool { return m.Status().Phase == "running" })
 	m.mu.Lock()
-	m.state.Intent.Policy.AutoFailover = true
+	on := true
+	m.state.Intent.Policy.AutoFailover = &on
 	m.mu.Unlock()
 
 	token, _, _, _ := m.ReviewToken("primary")

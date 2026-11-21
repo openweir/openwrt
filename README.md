@@ -73,6 +73,6 @@ ubus -v list openweir
 
 Core releases come from [openweir/mihomo](https://github.com/openweir/mihomo/releases). The installer matches the router CPU and ABI and verifies the upstream SHA-256 for files from GitHub, HTTPS mirrors and manual uploads. Automatic preparation checks for a compatible stable release. If upstream only offers a prerelease, open kernel management to check the available builds. Naive availability depends on the selected binary.
 
-When a subscription is configured, the candidate executable checks the generated router configuration before it can be selected. A stopped service stays stopped. A running switch requires 10 seconds of healthy local control, proxy and enabled DNS checks. Double-slot storage retains the last confirmed version for rollback.
+When a subscription is configured, the candidate executable checks the generated router configuration before it can be selected. A stopped service stays stopped. A running switch requires 3 seconds of healthy local control, proxy and enabled DNS checks. Double-slot storage retains the last confirmed version for rollback.
 
 On ARM64, the published `Prerelease-Alpha` build at `2ca4a53` accepted Snell v6 and AnyTLS with REALITY in its configuration check and rejected Naive and Nowhere. The locally built static core at `15fb245e` also accepted Nowhere. The router checks the selected artifact’s capabilities when displaying nodes. These results cover configuration parsing on that architecture.

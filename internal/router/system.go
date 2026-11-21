@@ -470,14 +470,14 @@ applyLoop:
 	}
 	window := time.Duration(0)
 	if launch.Token != "" {
-		// Three healthy checks in a row (checked every 5 s) confirm the new core.
-		window = 10 * time.Second
+		// Four healthy checks in a row (checked every second) confirm the new core.
+		window = 3 * time.Second
 		s.mu.Lock()
 		s.confirmUntil = time.Now().Add(window)
 		s.mu.Unlock()
 		defer func() { s.mu.Lock(); s.confirmUntil = time.Time{}; s.mu.Unlock() }()
 	}
-	if e = confirmWindow(ctx, window, 5*time.Second, 2*time.Second, s.verify, s.beat); e != nil {
+	if e = confirmWindow(ctx, window, time.Second, time.Second, s.verify, s.beat); e != nil {
 		return e
 	}
 	if e = validateAuthorization(); e != nil {

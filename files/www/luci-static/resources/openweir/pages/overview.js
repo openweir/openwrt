@@ -200,7 +200,10 @@ function deviceCard(ui, devices) {
 	function policyOf(d) {
 		return policy.devices?.find((r) => r.address.toLowerCase() === d.mac.toLowerCase())?.target || '';
 	}
+	// Each row shows the effective choice; picking what new devices get anyway drops the override.
+	const effective = (d) => policyOf(d) || (policy.default_direct ? '@direct' : '@proxy');
 	async function choose(d, target) {
+		if (target === (policy.default_direct ? '@direct' : '@proxy')) target = '';
 		const all = (policy.devices || []).filter((x) => x.address.toLowerCase() !== d.mac.toLowerCase());
 		if (target) all.push({ address: d.mac, target });
 		await ui.run('policy', { revision: ui.status.intent.revision, policy: { ...policy, devices: all } });
@@ -236,11 +239,10 @@ function deviceCard(ui, devices) {
 						ui,
 						'代理方式',
 						[
-							['', '默认'],
 							['@proxy', '代理'],
 							['@direct', '直连'],
 						],
-						policyOf(d),
+						effective(d),
 						(v) => choose(d, v),
 					),
 				),
@@ -268,7 +270,7 @@ function deviceCard(ui, devices) {
 			'div',
 			{ class: 'ow-row' },
 			h('h2', {}, '设备'),
-			h('small', { class: 'ow-muted' }, '在线 ' + online + ' / ' + devices.length + ' · 「默认」跟随新设备默认'),
+			h('small', { class: 'ow-muted' }, '在线 ' + online + ' / ' + devices.length),
 		),
 		h('div', { class: 'ow-toolbar ow-device-toolbar' }, filters, query),
 		list,
@@ -668,7 +670,7 @@ export async function overview(ui) {
 			? '连续 3 次检查失败后恢复直连'
 			: '内核故障时代理流量中断')),
 		updateRow('节点失联时自动切换',
-			toggle('节点失联时自动切换', !!policy.auto_failover, (v) => savePolicy({ auto_failover: v })),
+			toggle('节点失联时自动切换', policy.auto_failover !== false, (v) => savePolicy({ auto_failover: v })),
 			h('small', { class: 'ow-muted' }, '切到同组可用节点')),
 		h(
 			'div',

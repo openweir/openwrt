@@ -349,7 +349,7 @@ func (m *Manager) publish(i Intent, actual map[string]string) {
 }
 
 func (m *Manager) startFailover(parent context.Context, i Intent) {
-	if !i.Policy.AutoFailover {
+	if !i.Policy.Failover() {
 		return
 	}
 	sys, ok := m.backend.(interface{ Client() control.Client })

@@ -46,7 +46,7 @@ type CustomRule struct {
 	subscription.Rule
 }
 type Policy struct {
-	AutoFailover      bool         `json:"auto_failover,omitempty"`
+	AutoFailover      *bool        `json:"auto_failover,omitempty"` // unset means on
 	DefaultDirect     bool         `json:"default_direct,omitempty"`
 	RecordConnections *bool        `json:"record_connections,omitempty"`
 	Groups            []LocalGroup `json:"groups,omitempty"`
@@ -54,6 +54,10 @@ type Policy struct {
 	Devices           []DeviceRule `json:"devices,omitempty"`
 	Rules             []CustomRule `json:"rules,omitempty"`
 }
+
+// Failover reports whether a lost node switches to another one in its group; it is on unless turned off.
+func (p Policy) Failover() bool { return p.AutoFailover == nil || *p.AutoFailover }
+
 type obj = map[string]any
 
 func stringOption(m obj, k string) string { s, _ := m[k].(string); return s }

@@ -71,7 +71,7 @@ func (m *Manager) failoverLoop(ctx context.Context, c failoverControl, source, m
 			g := eligible[index%len(eligible)]
 			index++
 			token, i, needed, e := m.ReviewToken(source)
-			if e != nil || !needed || !i.Policy.AutoFailover || i.Mode != mode {
+			if e != nil || !needed || !i.Policy.Failover() || i.Mode != mode {
 				return
 			}
 			previous := failures[g.Tag]
@@ -154,7 +154,7 @@ func (m *Manager) acceptFailover(ctx context.Context, c failoverControl, source 
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if ctx.Err() != nil || m.state.Phase != "running" || !m.state.Intent.Enabled || !m.state.Intent.Policy.AutoFailover || m.state.Intent.Source != source || m.reviewToken() != token || m.groups[source+"\x00"+g.Tag].State == "pending" {
+	if ctx.Err() != nil || m.state.Phase != "running" || !m.state.Intent.Enabled || !m.state.Intent.Policy.Failover() || m.state.Intent.Source != source || m.reviewToken() != token || m.groups[source+"\x00"+g.Tag].State == "pending" {
 		return
 	}
 	if _, e := m.chooseLocked(source, g.Tag, target); e == nil {

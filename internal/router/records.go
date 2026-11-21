@@ -59,12 +59,17 @@ func (r *Records) LogDetail(source, level, message, detail string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	now := time.Now().UnixMilli()
-	if (source == "core" || source == "dns") && len(r.events) > 0 {
-		last := &r.events[len(r.events)-1]
-		if last.Source == source && last.Level == level && last.Message == message && last.Detail == detail && now >= last.Time && now-last.Time <= 5000 {
-			last.Count = max(last.Count, 1) + 1
-			last.Time = now
-			return
+	// Core and DNS repeats within a minute fold into one recent entry, which moves to the end.
+	if source == "core" || source == "dns" {
+		for i := len(r.events) - 1; i >= 0 && i >= len(r.events)-32; i-- {
+			e := r.events[i]
+			if e.Source == source && e.Level == level && e.Message == message && e.Detail == detail && now >= e.Time && now-e.Time <= 60000 {
+				e.Count = max(e.Count, 1) + 1
+				e.Time = now
+				copy(r.events[i:], r.events[i+1:])
+				r.events[len(r.events)-1] = e
+				return
+			}
 		}
 	}
 	if len(r.events) == recordLimit {
@@ -150,6 +155,9 @@ func corePermissionReason(line string) string {
 	}
 }
 
+var connectionNoise = map[string]bool{"connection_refused": true, "connection_reset": true, "connection_closed": true,
+	"io_timeout": true, "deadline_exceeded": true, "dial_failed": true, "handshake_failed": true}
+
 func (s *logSink) recordLine(line string) {
 	if strings.Contains(line, "\x1b") {
 		line = logColor.ReplaceAllString(line, "")
@@ -198,6 +206,11 @@ func (s *logSink) recordLine(line string) {
 				break
 			}
 		}
+	}
+	// A single connection failing at the target is ordinary traffic, already shown in the
+	// connection records; it is informational unless the core itself is going down.
+	if !fatal && connectionNoise[reason] {
+		level = "info"
 	}
 	if fatal && reason != "core_diagnostic" {
 		s.terminal = reason
