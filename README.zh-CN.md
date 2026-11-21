@@ -47,13 +47,13 @@ packaging/openwrt/install-test.sh 24.10.8 aarch64_generic dist/feed/aarch64_gene
 
 在概览的「检查运行环境」中可查看当前防火墙和所选模式缺少的能力。TProxy 需要 fw4 的 nftables 或 fw3 的 iptables-legacy 支持透明代理，开启 IPv6 时也检查 IPv6 规则。TUN 模式需要可用的 TUN 设备。固件自带的驱动、兼容的 ip 命令、BusyBox 锁工具和 dnsmasq-full 均可直接使用。
 
-开启「DNS 保护」后，dnsmasq 继续解析本地域名，并将上游查询交给 mihomo。还可以开启「接管设备 DNS」，让所选局域网中经过路由器的 TCP 和 UDP 53 查询统一交给网关解析。fw3 接管 IPv6 DNS 还需 `ip6tables-mod-nat`。停止服务后，路由器恢复原上游并移除重定向。
+开启「DNS 保护」后，dnsmasq 继续解析本地域名，并将上游查询交给 mihomo。和 OpenClash 一样，所选局域网设备发往其他 DNS 服务器的 TCP 和 UDP 53 查询也会统一交给网关解析。fw3 接管 IPv6 DNS 还需 `ip6tables-mod-nat`。停止服务后，路由器恢复原上游并移除重定向。
 
 内核用国内 DoH 解析中国大陆域名，其余域名经代理走加密 DNS，被污染的结果不会影响分流。两组服务器可在概览的「DNS」卡片中管理。开启 DNS 保护时默认使用 Fake-IP，可在运行模式旁切换回真实 IP。域名嗅探按真实域名连接；默认屏蔽 QUIC，让浏览器改用 TCP；未接管 IPv6 时，dnsmasq 会隐藏 AAAA 记录，设备保持使用 IPv4。在 fw4 上，路由器自身的流量默认也按规则分流，可在「代理路由器自身」中关闭。
 
 路由器直连的网段（LAN、WAN 子网和下发的 IPv6 前缀）始终直连，接口变化时自动更新。在 fw4 上，「连接优化」还可以让大陆 IP 和非常用端口在防火墙直接直连、不经内核；两项默认关闭，Fake-IP 模式下大陆 IP 直连只对直接用 IP 发起的连接生效。
 
-局域网的 DNS 请求默认经 dnsmasq 转发给内核。「本地 DNS 劫持」可切换为防火墙转发：53 端口直接转给内核，dnsmasq 保持原样，`.lan` 等本地域名仍由 dnsmasq 回答。DNS 卡片还提供「清理 DNS 缓存」（内核和 dnsmasq）和「Dnsmasq 修复」（清除 OpenWeir 残留配置并重启 dnsmasq）。
+局域网的 DNS 请求默认经 dnsmasq 转发给内核。「本地 DNS 劫持」可切换为防火墙转发：53 端口直接转给内核，dnsmasq 保持原样，`.lan` 等本地域名仍由 dnsmasq 回答。和 OpenClash 一样，接管期间 dnsmasq 不缓存结果，停止后恢复原缓存设置。DNS 卡片还提供「清理 DNS 缓存」（内核和 dnsmasq）和「Dnsmasq 修复」（清除 OpenWeir 残留配置并重启 dnsmasq）。
 
 切换代理模式、订阅、规则、分组或故障切换时，内核原地重载配置，不会断开。更改运行模式、DNS、IPv6、局域网或内核时会重新接管。
 

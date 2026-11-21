@@ -12,11 +12,10 @@ import (
 )
 
 type Preferences struct {
-	UpdateHours  int    `json:"update_hours"`
-	Enabled      bool   `json:"enabled"`
-	Method       string `json:"method"`
-	DNS          bool   `json:"dns"`
-	DNSIntercept bool   `json:"dns_intercept"`
+	UpdateHours int    `json:"update_hours"`
+	Enabled     bool   `json:"enabled"`
+	Method      string `json:"method"`
+	DNS         bool   `json:"dns"`
 	// How LAN lookups reach the core: "dnsmasq" forwards them (the default) and "firewall"
 	// redirects port 53 straight to it, leaving dnsmasq untouched. As in OpenClash.
 	DNSMode      string   `json:"dns_mode"`
@@ -72,7 +71,7 @@ func (p Preferences) Validate() error {
 
 // SameNetwork reports whether two preference sets produce the same takeover.
 func (p Preferences) SameNetwork(o Preferences) bool {
-	return p.Method == o.Method && p.DNS == o.DNS && dnsMode(p.DNSMode) == dnsMode(o.DNSMode) && p.DNSIntercept == o.DNSIntercept && p.IPv6 == o.IPv6 && slices.Equal(p.Networks, o.Networks) &&
+	return p.Method == o.Method && p.DNS == o.DNS && dnsMode(p.DNSMode) == dnsMode(o.DNSMode) && p.IPv6 == o.IPv6 && slices.Equal(p.Networks, o.Networks) &&
 		sameBit(p.FailOpen, o.FailOpen) && sameBit(p.LocalProxy, o.LocalProxy) && sameBit(p.BlockQUIC, o.BlockQUIC) && sameBit(p.FakeIP, o.FakeIP) &&
 		sameBit(p.Sniff, o.Sniff) && sameBit(p.Concurrent, o.Concurrent) && sameBit(p.UnifiedDelay, o.UnifiedDelay) &&
 		sameBit(p.BypassCN, o.BypassCN) && sameBit(p.CommonPorts, o.CommonPorts) &&
@@ -85,9 +84,8 @@ func sameList(a, b []string) bool { return a == nil || b == nil || slices.Equal(
 // An omitted switch keeps its saved value.
 func sameBit(a, b *bool) bool { return a == nil || b == nil || *a == *b }
 func ReadPreferences(ctx context.Context) (Preferences, error) {
-	p := Preferences{Enabled: uci(ctx, "enabled") == "1", Method: uci(ctx, "method"), DNS: uci(ctx, "dns") == "1", IPv6: uci(ctx, "ipv6") == "1", Networks: strings.Fields(uci(ctx, "network"))}
+	p := Preferences{Enabled: uci(ctx, "enabled") == "1", Method: uci(ctx, "method"), DNS: uci(ctx, "dns") == "1", IPv6: uci(ctx, "ipv6") != "0", Networks: strings.Fields(uci(ctx, "network"))}
 	p.UpdateHours, _ = strconv.Atoi(uci(ctx, "update_hours"))
-	p.DNSIntercept = uci(ctx, "dns_intercept") == "1"
 	p.DNSMode = dnsMode(uci(ctx, "dns_mode"))
 	failOpen := uci(ctx, "fail_open") != "0"
 	p.FailOpen = &failOpen
@@ -153,11 +151,11 @@ func SavePreferences(ctx context.Context, p Preferences) error {
 	if p.BlockQUIC != nil {
 		b.WriteString("set openweir.main.block_quic='" + bit(*p.BlockQUIC) + "'\n")
 	}
-	for k, v := range map[string]string{"update_hours": strconv.Itoa(p.UpdateHours), "enabled": bit(p.Enabled), "method": p.Method, "dns": bit(p.DNS), "dns_intercept": bit(p.DNSIntercept), "ipv6": bit(p.IPv6), "dns_mode": dnsMode(p.DNSMode)} {
+	for k, v := range map[string]string{"update_hours": strconv.Itoa(p.UpdateHours), "enabled": bit(p.Enabled), "method": p.Method, "dns": bit(p.DNS), "ipv6": bit(p.IPv6), "dns_mode": dnsMode(p.DNSMode)} {
 		b.WriteString("set openweir.main." + k + "='" + v + "'\n")
 	}
-	// Bypass lists from earlier builds are no longer used.
-	for _, k := range []string{"bypass_ip", "bypass_port", "bypass_source", "proxy_ip"} {
+	// Options from earlier builds that are no longer used: bypass lists and the separate DNS takeover switch.
+	for _, k := range []string{"bypass_ip", "bypass_port", "bypass_source", "proxy_ip", "dns_intercept"} {
 		b.WriteString("delete openweir.main." + k + "\n")
 	}
 	b.WriteString("delete openweir.main.network\n")

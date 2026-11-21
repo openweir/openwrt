@@ -19,9 +19,9 @@ func (e Error) Error() string { return string(e) }
 func errorf(format string, args ...any) error { return Error(fmt.Sprintf(format, args...)) }
 
 var (
-	semverTag   = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
-	commitSHA   = regexp.MustCompile(`^[0-9a-f]{40}$`)
-	manifestRow = regexp.MustCompile(`^([0-9a-f]{64}) [ *]([A-Za-z0-9][A-Za-z0-9_.+-]*)$`)
+	semverTag     = regexp.MustCompile(`^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$`)
+	commitSHA     = regexp.MustCompile(`^[0-9a-f]{40}$`)
+	manifestRow   = regexp.MustCompile(`^([0-9a-f]{64}) [ *]([A-Za-z0-9][A-Za-z0-9_.+-]*)$`)
 	digestPattern = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
 )
 

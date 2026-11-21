@@ -344,7 +344,16 @@ export async function overview(ui) {
 				return;
 			}
 		}
-		await ui.run('start', { revision: intent.revision });
+		// Show the connected (red) state at once; the refresh confirms it or rolls it back.
+		power.classList.add('on');
+		power.lastChild.textContent = '点按断开';
+		try {
+			await ui.run('start', { revision: intent.revision });
+		} catch (error) {
+			power.classList.remove('on');
+			power.lastChild.textContent = '点按连接';
+			throw error;
+		}
 		await ui.refresh();
 	};
 	const power = ui.button('', start, 'ow-power' + (running ? ' on' : ''));
@@ -640,8 +649,6 @@ export async function overview(ui) {
 		prefs.dns ? h('div', { class: 'ow-row' }, '本地 DNS 劫持',
 			segment(ui, '本地 DNS 劫持', [['dnsmasq', 'Dnsmasq 转发'], ['firewall', '防火墙转发']],
 				prefs.dns_mode || 'dnsmasq', (v) => saveP({ dns_mode: v }))) : null,
-		prefs.dns ? h('div', { class: 'ow-row' }, '接管设备 DNS（端口 53）',
-			toggle('接管设备 DNS（端口 53）', !!prefs.dns_intercept, (v) => saveP({ dns_intercept: v }))) : null,
 		upstreamRow(ui, '国内域名', '直连解析', 'domestic', prefs.dns_domestic, (v) => saveP({ dns_domestic: v })),
 		upstreamRow(ui, '其他域名', '经代理加密解析', 'foreign', prefs.dns_foreign, (v) => saveP({ dns_foreign: v })),
 		h('div', { class: 'ow-row' },
@@ -684,7 +691,7 @@ export async function overview(ui) {
 						await ui.run('policy', { revision: intent.revision, policy: { ...policy, auto_failover: undefined } });
 						await ui.refresh();
 						await ui.run('save_network', { args: {
-							...prefs, method: 'tproxy', ipv6: false, dns: true, dns_intercept: false, dns_mode: 'dnsmasq', fake_ip: true,
+							...prefs, method: 'tproxy', ipv6: true, dns: true, dns_mode: 'dnsmasq', fake_ip: true,
 							local_proxy: true, fail_open: true, block_quic: true, sniff: true, tcp_concurrent: true, unified_delay: true,
 							bypass_cn: false, common_ports: false,
 							dns_domestic: builtinDNS.domestic, dns_foreign: builtinDNS.foreign,

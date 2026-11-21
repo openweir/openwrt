@@ -142,17 +142,21 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 	config := obj{"mode": "rule", "mixed-port": MixedPort, "allow-lan": false, "external-controller": "127.0.0.1:19761", "secret": secret, "ipv6": n.Family6,
 		"log-level": "warning", "profile": obj{"store-selected": false, "store-fake-ip": false}, "geodata-mode": true, "geo-auto-update": false,
 		"hosts": obj{"probe.openweir.invalid": "192.0.2.1"}, "dns": obj{"enable": true, "listen": "", "enhanced-mode": "redir-host", "use-hosts": true,
-			"use-system-hosts": false, "ipv6": n.Family6, "default-nameserver": []string{resolver.String(), "223.5.5.5", "119.29.29.29"},
+			"use-system-hosts": false, "ipv6": false, "default-nameserver": []string{resolver.String(), "223.5.5.5", "119.29.29.29"},
+			// As in OpenClash, the core answers no AAAA records even with IPv6 proxying on: under
+			// fake-ip, AAAA lookups for proxied names otherwise wait on the remote resolver and
+			// stall browsers, and devices fall back to IPv4 that always works. Native IPv6
+			// traffic is still taken over and the core still dials IPv6 destinations.
 			// Foreign names resolve over encrypted DNS through the proxy; mainland
 			// names and node hostnames use domestic resolvers so CDNs stay local.
 			"nameserver": foreignDNS, "proxy-server-nameserver": domesticDNS, "direct-nameserver": domesticDNS, "respect-rules": true,
 			"nameserver-policy": obj{"rule-set:" + dnsDomesticSet: domesticDNS}, "fake-ip-range": "172.30.254.1/30"},
 		"find-process-mode": "off", "tcp-concurrent": !n.NoConcurrent, "unified-delay": !n.NoUnifiedDelay, "keep-alive-interval": 15, "keep-alive-idle": 600}
-	// Without DNS protection devices may hold poisoned answers from the WAN resolver, so the
-	// sniffed domain is dialled instead. With it their addresses are already clean (or fake
-	// IPs the core maps back), and rewriting destinations only breaks apps whose SNI differs
-	// from their real host, so it stays off, as in OpenClash.
-	config["sniffer"] = obj{"enable": !n.NoSniff, "override-destination": !n.DNS, "parse-pure-ip": true, "force-dns-mapping": true,
+	// Dial the sniffed domain, not the address the device chose. Devices may still hold
+	// poisoned answers (IPv6 resolvers from router advertisements, hard-coded DNS, cached
+	// lookups), and proxying such an address makes the node dial a bogus host and every
+	// such connection is refused. Services that break when rewritten are skipped below.
+	config["sniffer"] = obj{"enable": !n.NoSniff, "override-destination": true, "parse-pure-ip": true, "force-dns-mapping": true,
 		// Push and smart-home services break when their destination is rewritten.
 		"skip-domain": []string{"+.push.apple.com", "Mijia Cloud", "+.mi.com", "+.xiaomi.net", "dlg.io.mi.com", "+.oray.com", "+.sunlogin.net"},
 		"sniff":       obj{"TLS": obj{"ports": []string{"443", "8443"}}, "HTTP": obj{"ports": []string{"80", "8080-8880"}}, "QUIC": obj{"ports": []string{"443"}}}}

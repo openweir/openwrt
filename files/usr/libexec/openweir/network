@@ -68,8 +68,46 @@ valid_dir() {
  case "$1" in */../*|*/..|*' '*) return 1 ;; esac
  [ -d "$1" ] && [ ! -L "$1" ]
 }
+# As in OpenClash, dnsmasq caches nothing while it forwards to the core: a cached fake-ip
+# answer outliving the core's mapping would point devices at an address nothing serves.
+# The original sizes are kept on flash so a crash or reboot cannot leave the cache off.
+cachefile=/etc/openweir/private/dnsmasq-cache
+dns_section() {
+ case "$1" in
+  /tmp/dnsmasq.d) echo '@dnsmasq[0]' ;;
+  /tmp/dnsmasq.*.d) sec=${1#/tmp/dnsmasq.}; sec=${sec%.d}
+   case "$sec" in ''|*[!a-zA-Z0-9_]*) return 1 ;; esac
+   uci -q get "dhcp.$sec" >/dev/null || return 1
+   echo "$sec" ;;
+  *) return 1 ;;
+ esac
+}
+cache_off() {
+ [ ! -e "$cachefile" ] || cache_restore || return 1
+ tmp=$(mktemp "$cachefile.XXXXXX") || return 1
+ while IFS= read -r dir; do
+  sec=$(dns_section "$dir") || continue
+  printf '%s %s\n' "$sec" "$(uci -q get "dhcp.$sec.cachesize" || echo -)" >>"$tmp"
+  uci -q set "dhcp.$sec.cachesize=0"
+ done <"$state/dns"
+ mv -f "$tmp" "$cachefile" && uci -q commit dhcp
+}
+cache_restore() {
+ [ -e "$cachefile" ] || return 0
+ while read -r sec old; do
+  case "$sec" in '@dnsmasq[0]') ;; ''|*[!a-zA-Z0-9_]*) continue ;; esac
+  if [ "$old" = - ]; then uci -q delete "dhcp.$sec.cachesize"
+  else case "$old" in ''|*[!0-9]*) continue ;; esac; uci -q set "dhcp.$sec.cachesize=$old"; fi
+ done <"$cachefile"
+ uci -q commit dhcp && rm -f "$cachefile"
+}
 dns_restore() {
- [ -e "$state/dns" ] || return 0
+ if [ ! -e "$state/dns" ]; then
+  # A takeover that never recorded its directories may still have turned the cache off.
+  if [ -e "$cachefile" ]; then cache_restore && /etc/init.d/dnsmasq restart || return 1; fi
+  return 0
+ fi
+ cache_restore || return 1
  while IFS= read -r dir; do
   [ -d "$dir" ] || continue
   valid_dir "$dir" || return 1
@@ -109,6 +147,7 @@ dns_setup() {
   } >"$tmp"
   chmod 0644 "$tmp"; mv -f "$tmp" "$dir/$dnsfile"
  done <"$state/dns"
+ if [ "$dns" = 1 ]; then cache_off || return 1; fi
  /etc/init.d/dnsmasq restart
 }
 # Append elements to one of our sets in the pending batch, one per line.
@@ -148,6 +187,7 @@ dns_repair() {
   for f in /tmp/dnsmasq.d/$dnsfile /tmp/dnsmasq.*.d/$dnsfile /etc/dnsmasq.d/$dnsfile; do
    if [ -f "$f" ] && grep -Fqx '# OpenWeir managed upstream' "$f"; then rm -f "$f"; fi
   done
+  cache_restore || true
  fi
  /etc/init.d/dnsmasq restart
 }
@@ -369,10 +409,14 @@ apply() {
  openweir-net management-record
  names="";for dev in $interfaces; do names="$names, \"$dev\""; done
  names=${names#, }
- v6=$(uci -q get openweir.main.ipv6 || echo 0)
+ v6=$(uci -q get openweir.main.ipv6 || echo 1)
+ # The core's sockets pick no source address, so source-specific defaults ("default from ...")
+ # do not reach the IPv6 internet for it. Without a usable route, keep devices on IPv4.
+ [ "$v6" != 1 ] || ip -6 route get 2400:3200::1 >/dev/null 2>&1 || v6=0
  dns=$(uci -q get openweir.main.dns || echo 0)
  dns_intercept=0
- if [ "$dns" = 1 ]; then dns_intercept=$(uci -q get openweir.main.dns_intercept || echo 0); fi
+ # As in OpenClash, DNS protection also takes over lookups devices send to other resolvers.
+ if [ "$dns" = 1 ]; then dns_intercept=1; fi
  if [ "$v6" = 1 ]; then touch "$state/ipv6"; families='ipv4, ipv6';else rm -f "$state/ipv6"; families=ipv4;fi
  # Proxying the router itself needs nftables and the core's group id.
  local_proxy=$(uci -q get openweir.main.local_proxy || echo 1)
@@ -451,11 +495,13 @@ EOF
   iifname { $names } fib daddr type $targets meta l4proto { tcp, udp } th dport 53 redirect to :19764
  }
 EOF
+ # Lock devices to the router's DNS over both families, even when IPv6 is not proxied: an IPv6
+ # resolver from router advertisements would otherwise answer with poisoned or AAAA records.
  elif [ "$dns_intercept" = 1 ]; then
   cat >>"$batch" <<EOF
  chain lan_dns {
   type nat hook prerouting priority dstnat - 1; policy accept;
-  iifname { $names } meta nfproto { $families } fib daddr type unicast meta l4proto { tcp, udp } th dport 53 redirect to :53
+  iifname { $names } fib daddr type unicast meta l4proto { tcp, udp } th dport 53 redirect to :53
  }
 EOF
  fi
