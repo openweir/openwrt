@@ -577,11 +577,9 @@
 	background: transparent;
 	color: var(--ow-accent);
 }
+/* Devices span two rows beside a 2x2 block: proxy, DNS, recovery, updates. */
 .ow .ow-devices {
 	grid-row: span 2;
-}
-.ow .ow-dashboard > .ow-card:last-child {
-	grid-column: span 2;
 }
 .ow .ow-devices-note {
 	margin-top: auto;
@@ -1140,7 +1138,9 @@
 	text-align: right;
 }
 
-.ow .ow-label { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.ow .ow-label { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 0; }
+.ow .ow-row:has(> .ow-label) { flex-wrap: nowrap; }
+.ow .ow-row:has(> .ow-label) > :not(.ow-label) { flex: none; }
 .ow .ow-device-toolbar { justify-content: space-between; }
 .ow .ow-device-toolbar > input[type='search'] { margin-left: auto; }
 .ow .ow-warning > button:last-child { margin-left: auto; }

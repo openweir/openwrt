@@ -18,6 +18,8 @@ type Preferences struct {
 	DNS          bool     `json:"dns"`
 	DNSIntercept bool     `json:"dns_intercept"`
 	FailOpen     *bool    `json:"fail_open,omitempty"`
+	LocalProxy   *bool    `json:"local_proxy,omitempty"`
+	BlockQUIC    *bool    `json:"block_quic,omitempty"`
 	IPv6         bool     `json:"ipv6"`
 	Networks     []string `json:"networks"`
 }
@@ -47,14 +49,21 @@ func (p Preferences) Validate() error {
 // SameNetwork reports whether two preference sets produce the same takeover.
 func (p Preferences) SameNetwork(o Preferences) bool {
 	return p.Method == o.Method && p.DNS == o.DNS && p.DNSIntercept == o.DNSIntercept && p.IPv6 == o.IPv6 && slices.Equal(p.Networks, o.Networks) &&
-		(p.FailOpen == nil || o.FailOpen == nil || *p.FailOpen == *o.FailOpen)
+		sameBit(p.FailOpen, o.FailOpen) && sameBit(p.LocalProxy, o.LocalProxy) && sameBit(p.BlockQUIC, o.BlockQUIC)
 }
+
+// An omitted switch keeps its saved value.
+func sameBit(a, b *bool) bool { return a == nil || b == nil || *a == *b }
 func ReadPreferences(ctx context.Context) (Preferences, error) {
 	p := Preferences{Enabled: uci(ctx, "enabled") == "1", Method: uci(ctx, "method"), DNS: uci(ctx, "dns") == "1", IPv6: uci(ctx, "ipv6") == "1", Networks: strings.Fields(uci(ctx, "network"))}
 	p.UpdateHours, _ = strconv.Atoi(uci(ctx, "update_hours"))
 	p.DNSIntercept = uci(ctx, "dns_intercept") == "1"
 	failOpen := uci(ctx, "fail_open") != "0"
 	p.FailOpen = &failOpen
+	local := uci(ctx, "local_proxy") == "1"
+	p.LocalProxy = &local
+	quic := uci(ctx, "block_quic") != "0"
+	p.BlockQUIC = &quic
 	return p, p.Validate()
 }
 func SavePreferences(ctx context.Context, p Preferences) error {
@@ -75,6 +84,12 @@ func SavePreferences(ctx context.Context, p Preferences) error {
 	var b strings.Builder
 	if p.FailOpen != nil {
 		b.WriteString("set openweir.main.fail_open='" + bit(*p.FailOpen) + "'\n")
+	}
+	if p.LocalProxy != nil {
+		b.WriteString("set openweir.main.local_proxy='" + bit(*p.LocalProxy) + "'\n")
+	}
+	if p.BlockQUIC != nil {
+		b.WriteString("set openweir.main.block_quic='" + bit(*p.BlockQUIC) + "'\n")
 	}
 	for k, v := range map[string]string{"update_hours": strconv.Itoa(p.UpdateHours), "enabled": bit(p.Enabled), "method": p.Method, "dns": bit(p.DNS), "dns_intercept": bit(p.DNSIntercept), "ipv6": bit(p.IPv6)} {
 		b.WriteString("set openweir.main." + k + "='" + v + "'\n")

@@ -617,22 +617,29 @@ export async function overview(ui) {
 				(v) => savePolicy({ default_direct: v === 'direct' }),
 			),
 		),
-		updateRow('DNS 保护', toggle('DNS 保护', prefs.dns, (v) => saveP({ dns: v })),
-			h('small', { class: 'ow-muted' }, '本地域名照常解析，其余经内核查询')),
-		prefs.dns ? h('div', { class: 'ow-row' }, '接管设备 DNS（端口 53）',
-			toggle('接管设备 DNS（端口 53）', !!prefs.dns_intercept, (v) => saveP({ dns_intercept: v }))) : null,
-		h(
-			'div',
-			{ class: 'ow-row' },
-			'IPv6 代理',
-			toggle('IPv6 代理', prefs.ipv6, (v) => saveP({ ipv6: v })),
-		),
+		updateRow('IPv6 代理', toggle('IPv6 代理', prefs.ipv6, (v) => saveP({ ipv6: v })),
+			h('small', { class: 'ow-muted' }, prefs.ipv6 ? 'IPv6 流量同样经过代理' : '关闭时隐藏 IPv6 地址，设备改走 IPv4')),
+		updateRow('代理路由器自身', toggle('代理路由器自身', !!prefs.local_proxy, (v) => saveP({ local_proxy: v })),
+			h('small', { class: 'ow-muted' }, '路由器发起的连接也按规则分流，需 fw4')),
+		updateRow('屏蔽 QUIC', toggle('屏蔽 QUIC', prefs.block_quic !== false, (v) => saveP({ block_quic: v })),
+			h('small', { class: 'ow-muted' }, '浏览器改用 TCP，分流更准确')),
 		h(
 			'div',
 			{ class: 'ow-row' },
 			'开机启动',
 			toggle('开机启动', prefs.enabled, (v) => saveP({ enabled: v })),
 		),
+	);
+	const dnsPrefs = card(
+		'DNS',
+		updateRow('DNS 保护', toggle('DNS 保护', prefs.dns, (v) => saveP({ dns: v })),
+			h('small', { class: 'ow-muted' }, '本地域名照常解析，其余经内核查询')),
+		prefs.dns ? h('div', { class: 'ow-row' }, '接管设备 DNS（端口 53）',
+			toggle('接管设备 DNS（端口 53）', !!prefs.dns_intercept, (v) => saveP({ dns_intercept: v }))) : null,
+		updateRow('国内域名', h('span', { class: 'ow-muted' }, '阿里 / 腾讯 DoH'),
+			h('small', { class: 'ow-muted' }, '直连解析，就近访问国内 CDN')),
+		updateRow('其他域名', h('span', { class: 'ow-muted' }, 'Cloudflare / Google DoH'),
+			h('small', { class: 'ow-muted' }, '加密并经代理解析，避免污染')),
 	);
 	const failOpen = prefs.fail_open !== false;
 	const failOpenLabel = '代理无响应时回退直连';
@@ -680,6 +687,7 @@ export async function overview(ui) {
 		sourceCard(ui),
 		devices.unavailable ? card('设备',empty('局域网接口尚未就绪'),ui.button('重新检测',ui.refresh,'ow-link')) : deviceCard(ui, devices.items),
 		proxyPrefs,
+		dnsPrefs,
 		repair,
 		updates,
 	);

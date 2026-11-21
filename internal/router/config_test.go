@@ -312,12 +312,17 @@ func TestDNSSplitsDomesticAndProxiedUpstreams(t *testing.T) {
 	p := baseProfile(t, "p")
 	i := initial()
 	i.Source = p.Source
-	c := configForTest(t, i, p, Network{Method: "tproxy", Resolver: "192.0.2.53", LAN: map[string][]netip.Prefix{"br-lan": {netip.MustParsePrefix("192.168.3.1/24")}}})
+	c := configForTest(t, i, p, Network{Method: "tproxy", BlockQUIC: true, Resolver: "192.0.2.53", LAN: map[string][]netip.Prefix{"br-lan": {netip.MustParsePrefix("192.168.3.1/24")}}})
 	dns := c["dns"].(map[string]any)
 	if dns["respect-rules"] != true || dns["nameserver-policy"].(map[string]any)["rule-set:"+dnsDomesticSet] == nil || c["rule-providers"].(map[string]any)[dnsDomesticSet] == nil {
 		t.Fatal(dns)
 	}
 	if c["sniffer"].(map[string]any)["override-destination"] != true || !slices.Contains(c["rules"].([]any), any("AND,((NETWORK,UDP),(DST-PORT,443)),REJECT")) {
 		t.Fatal("sniffer override or QUIC block missing")
+	}
+	off, on := false, true
+	a, b := Preferences{BlockQUIC: &on}, Preferences{BlockQUIC: &off}
+	if a.SameNetwork(b) || !a.SameNetwork(Preferences{}) {
+		t.Fatal("QUIC switch must restart only when it changes")
 	}
 }

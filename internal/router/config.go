@@ -29,6 +29,7 @@ type Network struct {
 	Resolver  string
 	LAN       map[string][]netip.Prefix
 	Interface string
+	BlockQUIC bool
 }
 type DeviceRule struct {
 	Address string `json:"address"`
@@ -273,8 +274,10 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 		listeners = append(listeners, relay)
 		rules = append(rules, extra...)
 	}
-	// Reject QUIC so browsers fall back to TCP, where sniffing and routing are reliable.
-	rules = append(rules, "AND,((NETWORK,UDP),(DST-PORT,443)),REJECT")
+	if n.BlockQUIC {
+		// Browsers fall back to TCP, where sniffing and routing are reliable.
+		rules = append(rules, "AND,((NETWORK,UDP),(DST-PORT,443)),REJECT")
+	}
 	if len(listeners) > 0 {
 		config["listeners"] = listeners
 	}

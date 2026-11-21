@@ -326,6 +326,10 @@ apply() {
  dns_intercept=0
  if [ "$dns" = 1 ]; then dns_intercept=$(uci -q get openweir.main.dns_intercept || echo 0); fi
  if [ "$v6" = 1 ]; then touch "$state/ipv6"; families='ipv4, ipv6';else rm -f "$state/ipv6"; families=ipv4;fi
+ # Proxying the router itself needs nftables and the core's group id.
+ local_proxy=$(uci -q get openweir.main.local_proxy || echo 0)
+ core_gid=$(awk -F: '$1 == "openweir-core" { print $3 }' /etc/group)
+ if [ "$backend" != fw4 ] || [ -z "$core_gid" ] || [ "$core_gid" = 0 ]; then local_proxy=0; fi
  if [ "$backend" = fw3 ]; then
   stage=legacy_capabilities
   legacy_families=4
@@ -339,6 +343,12 @@ table inet openweir {
  comment "$note"
  chain lan {
   type filter hook prerouting priority mangle - 1; policy accept;
+EOF
+ if [ "$local_proxy" = 1 ] && [ "$method" = tproxy ]; then
+  # Router-originated packets marked in the output chain loop back through lo.
+  echo "  iifname \"lo\" meta mark & 0xffff == $mark meta l4proto { tcp, udp } tproxy to :$port accept" >>"$batch"
+ fi
+ cat >>"$batch" <<EOF
   iifname != { $names } return
   meta nfproto != { $families } return
   fib daddr type { local, broadcast, multicast } return
@@ -362,6 +372,21 @@ EOF
  chain lan_dns {
   type nat hook prerouting priority dstnat - 1; policy accept;
   iifname { $names } meta nfproto { $families } fib daddr type unicast meta l4proto { tcp, udp } th dport 53 redirect to :53
+ }
+EOF
+ fi
+ if [ "$local_proxy" = 1 ]; then
+  # The core's own group is excluded so its outbound traffic never loops.
+  cat >>"$batch" <<EOF
+ chain local {
+  type route hook output priority mangle - 1; policy accept;
+  meta nfproto != { $families } return
+  meta skgid $core_gid return
+  fib daddr type { local, broadcast, multicast } return
+  meta l4proto { tcp, udp } th dport 53 return
+  ip daddr { $(echo "$bypass4" | sed 's/ /, /g') } return
+  ip6 daddr { $(echo "$bypass6" | sed 's/ /, /g') } return
+  meta l4proto { tcp, udp } meta mark set (meta mark & 0xffff0000) | $mark
  }
 EOF
  fi
