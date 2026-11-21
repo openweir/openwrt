@@ -58,8 +58,25 @@ func networkOwnership(dir string) ownership {
 
 const dnsInjection = "# OpenWeir managed upstream\nno-resolv\nserver=127.0.0.1#19764\nserver=/probe.openweir.invalid/127.0.0.1#19764\nrebind-domain-ok=/probe.openweir.invalid/\n"
 
+// The network script writes this header, then only these lines depending on the DNS and IPv6 settings.
+var dnsLines = map[string]bool{"no-resolv": true, "server=127.0.0.1#19764": true, "server=/probe.openweir.invalid/127.0.0.1#19764": true,
+	"rebind-domain-ok=/probe.openweir.invalid/": true, "filter-AAAA": true}
+
+func ownDNS(content []byte) bool {
+	lines := strings.Split(strings.TrimSuffix(string(content), "\n"), "\n")
+	if lines[0] != "# OpenWeir managed upstream" {
+		return false
+	}
+	for _, l := range lines[1:] {
+		if !dnsLines[l] {
+			return false
+		}
+	}
+	return true
+}
+
 func (o ownership) dnsFile(path string, content []byte) bool {
-	if filepath.Base(path) != "99-openweir-upstream.conf" || string(content) != dnsInjection {
+	if filepath.Base(path) != "99-openweir-upstream.conf" || !ownDNS(content) {
 		return false
 	}
 	dir, err := filepath.EvalSymlinks(filepath.Dir(path))

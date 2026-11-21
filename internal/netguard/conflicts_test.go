@@ -235,3 +235,16 @@ func TestTUNAndHoldRoutesNeedTheirIndependentOwners(t *testing.T) {
 		t.Fatal("duplicate RPDB entry was ignored")
 	}
 }
+
+func TestOwnDNSVariants(t *testing.T) {
+	for _, s := range []string{dnsInjection, dnsInjection + "filter-AAAA\n", "# OpenWeir managed upstream\nfilter-AAAA\n"} {
+		if !ownDNS([]byte(s)) {
+			t.Fatalf("own file rejected: %q", s)
+		}
+	}
+	for _, s := range []string{"no-resolv\n", dnsInjection + "server=127.0.0.1#80\n", "# OpenWeir managed upstream\nfilter-aaaa\n"} {
+		if ownDNS([]byte(s)) {
+			t.Fatalf("foreign file accepted: %q", s)
+		}
+	}
+}

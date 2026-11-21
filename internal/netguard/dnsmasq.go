@@ -63,7 +63,7 @@ func (d *dnsInstance) readFile(name string, own ownership, depth int) bool {
 		return false
 	}
 	if filepath.Base(name) == upstreamFile {
-		if info.Size() == int64(len(dnsInjection)) {
+		if info.Size() <= 4096 {
 			if data, err := os.ReadFile(name); err == nil && own.dnsFile(name, data) {
 				return true
 			}
