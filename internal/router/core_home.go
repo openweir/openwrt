@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/openweir/openwrt/internal/cnlist"
 	"github.com/openweir/openwrt/internal/subscription"
 	"gopkg.in/yaml.v3"
 )
@@ -41,7 +42,7 @@ func prepareMihomo(p subscription.Profile, uid, gid int) error {
 		return err
 	}
 	for name, target := range map[string]string{
-		"rulesets": Root + "/rulesets", "builtin": packagedRules,
+		"rulesets": Root + "/rulesets", "builtin": packagedRules, "cnlists": cnlist.Dir,
 		"GeoSite.dat": Root + "/geodata/GeoSite.dat", "GeoIP.dat": Root + "/geodata/GeoIP.dat", "country.mmdb": Root + "/geodata/country.mmdb", "ASN.mmdb": Root + "/geodata/ASN.mmdb",
 	} {
 		path := filepath.Join(coreHome, name)

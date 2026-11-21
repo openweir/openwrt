@@ -117,6 +117,7 @@ const diagnosticText = {
     superseded: '已被更新的任务取代',
     cancelled: '已取消',
     task_journal_write_failed: '任务记录写入失败',
+    china_lists_update_failed: '大陆域名与 IP 列表多次更新失败，继续使用现有列表',
     network_unreachable: '内核发起连接时，系统报告网络不可达',
     connection_refused: '目标端拒绝了连接',
     dns_name_not_found: 'DNS 查询未找到域名',

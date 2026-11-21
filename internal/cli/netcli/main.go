@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"github.com/openweir/openwrt/internal/cnlist"
 	"github.com/openweir/openwrt/internal/netguard"
 	"github.com/openweir/openwrt/internal/subscription"
 	"os"
@@ -11,9 +12,9 @@ import (
 	"syscall"
 )
 
-// cnRanges prints the built-in mainland China ranges of one family as nft set elements.
+// cnRanges prints the mainland China ranges of one family as nft set elements.
 func cnRanges(v6 bool) error {
-	data, err := os.ReadFile("/usr/share/openweir/rules/geoip-cn.mrs")
+	data, err := os.ReadFile(cnlist.Path(cnlist.Addresses))
 	if err != nil {
 		return err
 	}

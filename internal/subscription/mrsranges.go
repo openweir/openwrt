@@ -12,7 +12,7 @@ import (
 // MRSRanges lists the address ranges of an ipcidr MRS rule set. IPv4 ranges are
 // returned unmapped; a range that crosses the IPv4-mapped block is dropped.
 func MRSRanges(data []byte) ([][2]netip.Addr, error) {
-	if _, err := mrsEntries(data, "ipcidr"); err != nil {
+	if _, err := MRSEntries(data, "ipcidr"); err != nil {
 		return nil, err
 	}
 	dec, err := zstd.NewReader(bytes.NewReader(data), zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxMemory(maxExpandedSet))

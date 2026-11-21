@@ -109,7 +109,7 @@ func lineMatch(behavior, line string, q setQuery) bool {
 // payload is a succinct trie over reversed names; an ipcidr payload is a list of
 // 16-byte from/to ranges.
 func mrsMatch(data []byte, behavior string, q setQuery) (bool, error) {
-	if _, err := mrsEntries(data, behavior); err != nil {
+	if _, err := MRSEntries(data, behavior); err != nil {
 		return false, err
 	}
 	dec, err := zstd.NewReader(bytes.NewReader(data), zstd.WithDecoderConcurrency(1), zstd.WithDecoderMaxMemory(maxExpandedSet))

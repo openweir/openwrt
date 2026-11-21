@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/openweir/openwrt/internal/cnlist"
 	"github.com/openweir/openwrt/internal/router"
 	sub "github.com/openweir/openwrt/internal/subscription"
 	"github.com/openweir/openwrt/internal/tlsdiag"
@@ -359,9 +360,6 @@ func nonNil[T any](items []T) []T {
 	return items
 }
 
-// Packaged rule sets of the built-in local profile.
-const packagedRules = "/usr/share/openweir/rules"
-
 func setMatch(store *sub.Store, in input) (any, []string, error) {
 	p, e := store.Load(in.Source)
 	if e != nil {
@@ -379,7 +377,7 @@ func setMatch(store *sub.Store, in input) (any, []string, error) {
 		}
 	}
 	if behavior, ok := map[string]string{"geosite-cn": "domain", "geoip-cn": "ipcidr"}[in.RuleSet]; ok && p.Summary().Local {
-		data, e := os.ReadFile(packagedRules + "/" + in.RuleSet + ".mrs")
+		data, e := os.ReadFile(cnlist.Path(in.RuleSet))
 		if e != nil {
 			return nil, nil, e
 		}

@@ -248,6 +248,21 @@ refresh() {
  if [ "$v6" = 1 ]; then set_elements local6 "$(local_prefixes 6)"; fi
  nft -f "$batch"
 }
+# An updated China address list replaces the shortcut sets in one transaction. They only
+# hold elements while the shortcut is on, so an empty cn4 leaves both alone.
+refresh_cn() {
+ [ -f "$state/owned" ] && [ "$(cat "$state/backend" 2>/dev/null)" = fw4 ] && owned_table || return 0
+ nft list set inet openweir cn4 | grep -q 'elements = ' || return 0
+ # Read both families before flushing: a failed read keeps the current sets.
+ ranges4=$(openweir-net cn-ranges 4) && [ -n "$ranges4" ] || return 1
+ ranges6=
+ if [ -f "$state/ipv6" ]; then ranges6=$(openweir-net cn-ranges 6) || return 1; fi
+ batch="$state/refresh-cn.nft"
+ { echo 'flush set inet openweir cn4'; echo 'flush set inet openweir cn6'; } >"$batch"
+ set_elements cn4 "$ranges4"
+ set_elements cn6 "$ranges6"
+ nft -f "$batch"
+}
 clean_routes() {
  family=$1
  [ -e "$state/route$family" ] || return 0
@@ -661,6 +676,7 @@ case "${1:-}" in
  verify) verify || { fail_stage managed_lan_probe; exit 1; } ;;
  release) release ;;
  refresh) refresh ;;
+ refresh-cn) refresh_cn ;;
  fault) fault ;;
  *) exit 2 ;;
 esac

@@ -686,6 +686,9 @@ export async function overview(ui) {
 		updateRow('OpenWeir 插件', ...pluginUpdate(ui)),
 		updateRow(...kernelSummary(ui, kernel, kernelUpdates)),
 		updateRow('内核存储位置', ...kernelStorage(ui, kernel, kernelUpdates, segment)),
+		// The router checks these lists itself once a week; there is nothing to press.
+		updateRow('大陆域名与 IP 列表', h('small', { class: 'ow-muted' }, '每周自动更新'),
+			h('small', { class: 'ow-muted' }, ui.status.china_lists ? '更新于 ' + day(ui.status.china_lists) : '插件内置版本')),
 	);
 	const grid = h(
 		'div',

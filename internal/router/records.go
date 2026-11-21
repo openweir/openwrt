@@ -123,9 +123,9 @@ var logColor = regexp.MustCompile("\x1b\\[[0-9;]*m")
 
 func corePermissionReason(line string) string {
 	switch {
-	case strings.Contains(line, "fswatch: watch /etc/openweir/rulesets:"), strings.Contains(line, "fswatch: watch /usr/share/openweir/rules:"):
+	case strings.Contains(line, "fswatch: watch /etc/openweir/rulesets:"), strings.Contains(line, "fswatch: watch /etc/openweir/cnlists:"), strings.Contains(line, "fswatch: watch /usr/share/openweir/rules:"):
 		return "core_rule_watch_permission"
-	case strings.Contains(line, "/var/run/openweir/mihomo/rulesets/"), strings.Contains(line, "/etc/openweir/rulesets/"), strings.Contains(line, "/usr/share/openweir/rules/"):
+	case strings.Contains(line, "/var/run/openweir/mihomo/rulesets/"), strings.Contains(line, "/etc/openweir/rulesets/"), strings.Contains(line, "/etc/openweir/cnlists/"), strings.Contains(line, "/usr/share/openweir/rules/"):
 		return "core_rule_file_permission"
 	case strings.Contains(line, "/etc/openweir/mihomo-kernel/configs/"):
 		return "core_config_file_permission"

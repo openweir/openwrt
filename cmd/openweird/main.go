@@ -22,6 +22,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/openweir/openwrt/internal/cnlist"
 	"github.com/openweir/openwrt/internal/router"
 	"github.com/openweir/openwrt/internal/subscription"
 )
@@ -142,6 +143,7 @@ func serve(ctx context.Context) error {
 	}
 	s.queueFirstKernel()
 	go s.schedule(jobsCtx)
+	go s.keepChinaLists(jobsCtx)
 	done := make(chan struct{})
 	go func() { m.Run(ctx); close(done) }()
 	server := &http.Server{Handler: s, ReadHeaderTimeout: 3 * time.Second, ReadTimeout: 25 * time.Second, WriteTimeout: 70 * time.Second, MaxHeaderBytes: 4096}
@@ -218,6 +220,9 @@ func (s *app) handle(ctx context.Context, method string, r request) (any, error)
 		return s.tests.snapshot(status.Intent.Source, r.Method)
 	case "status":
 		status.Version = subscription.PackageVersion()
+		if t := cnlist.Updated(); !t.IsZero() {
+			status.ChinaLists = t.UnixMilli()
+		}
 		if status.Phase == "starting" && s.sys != nil {
 			status.ConfirmationSeconds = s.sys.ConfirmationSeconds()
 		}
@@ -699,7 +704,7 @@ func runDaemon() {
 		e = uninstall(c)
 		stop()
 		if e == nil {
-			for _, p := range []string{router.Root + "/kernel", "/tmp/openweir/kernel", router.Root + "/mihomo-kernel", router.Root + "/sources", router.Root + "/private", router.Root + "/rulesets", "/tmp/openweir/mihomo-kernel", uploadRoot} {
+			for _, p := range []string{router.Root + "/kernel", "/tmp/openweir/kernel", router.Root + "/mihomo-kernel", router.Root + "/sources", router.Root + "/private", router.Root + "/rulesets", cnlist.Dir, "/tmp/openweir/mihomo-kernel", uploadRoot} {
 				if e = os.RemoveAll(filepath.Clean(p)); e != nil {
 					break
 				}

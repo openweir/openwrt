@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/openweir/openwrt/internal/cnlist"
 	"github.com/openweir/openwrt/internal/kernel"
 	"github.com/openweir/openwrt/internal/subscription"
 )
@@ -392,7 +393,7 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 		}
 		if p.Local {
 			for _, v := range []struct{ tag, behavior string }{{"geosite-cn", "domain"}, {"geoip-cn", "ipcidr"}} {
-				providers[v.tag] = obj{"type": "file", "format": "mrs", "behavior": v.behavior, "path": "./builtin/" + v.tag + ".mrs"}
+				providers[v.tag] = obj{"type": "file", "format": "mrs", "behavior": v.behavior, "path": chinaList(v.tag)}
 				rules = append(rules, "RULE-SET,"+v.tag+",DIRECT")
 			}
 		} else {
@@ -400,9 +401,9 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 				if _, provided := providers[r.RuleSet]; !provided {
 					switch r.RuleSet {
 					case subscription.DomesticIPSet:
-						providers[r.RuleSet] = obj{"type": "file", "format": "mrs", "behavior": "ipcidr", "path": "./builtin/geoip-cn.mrs"}
+						providers[r.RuleSet] = obj{"type": "file", "format": "mrs", "behavior": "ipcidr", "path": chinaList(cnlist.Addresses)}
 					case subscription.DomesticDomainSet:
-						providers[r.RuleSet] = obj{"type": "file", "format": "mrs", "behavior": "domain", "path": "./builtin/geosite-cn.mrs"}
+						providers[r.RuleSet] = obj{"type": "file", "format": "mrs", "behavior": "domain", "path": chinaList(cnlist.Domains)}
 					}
 				}
 				if err := addRule(r); err != nil {
@@ -415,7 +416,7 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 		return nil, errors.New("default route has no available group")
 	}
 	if _, taken := providers[dnsDomesticSet]; !taken {
-		providers[dnsDomesticSet] = obj{"type": "file", "format": "mrs", "behavior": "domain", "path": "./builtin/geosite-cn.mrs"}
+		providers[dnsDomesticSet] = obj{"type": "file", "format": "mrs", "behavior": "domain", "path": chinaList(cnlist.Domains)}
 	}
 	config["rule-providers"] = providers
 	config["rules"] = append(rules, "MATCH,"+coreTarget(end))

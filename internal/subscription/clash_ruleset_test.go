@@ -239,7 +239,7 @@ func TestOversizedMRSLengthRejectedBeforeAllocation(t *testing.T) {
 	enc, _ := zstd.NewWriter(nil, zstd.WithEncoderConcurrency(1))
 	defer enc.Close()
 	data := enc.EncodeAll(payload, nil)
-	if _, e := mrsEntries(data, "ipcidr"); e == nil {
+	if _, e := MRSEntries(data, "ipcidr"); e == nil {
 		t.Fatal("accepted impossible number of ranges")
 	}
 }

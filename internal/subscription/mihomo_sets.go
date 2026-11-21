@@ -11,9 +11,10 @@ import (
 	"github.com/klauspost/compress/zstd"
 )
 
-// Validate the MRS framing and its allocation lengths before passing the exact
-// original bytes to the core. Limit both its Zstandard window and decoded size.
-func mrsEntries(data []byte, behavior string) (int, error) {
+// MRSEntries validates the MRS framing and its allocation lengths before the exact
+// original bytes reach the core, and returns the entry count. Both the Zstandard
+// window and the decoded size are limited.
+func MRSEntries(data []byte, behavior string) (int, error) {
 	expected, ok := map[string]byte{"domain": 0, "ipcidr": 1}[behavior]
 	if !ok {
 		return 0, errRulePayload
@@ -73,7 +74,7 @@ func mihomoSet(tag, format, behavior string, data []byte) (BinarySet, error) {
 	var err error
 	switch format {
 	case "mrs":
-		count, err = mrsEntries(data, behavior)
+		count, err = MRSEntries(data, behavior)
 	case "yaml", "text":
 		err = readRulePayload(data, format, func(line string) error {
 			count++
