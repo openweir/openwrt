@@ -265,7 +265,11 @@ refresh_cn() {
  { echo 'flush set inet openweir cn4'; echo 'flush set inet openweir cn6'; } >"$batch"
  set_elements cn4 "$ranges4"
  set_elements cn6 "$ranges6"
+ # Like refresh: the copy fw4 replays must carry the new lists too.
+ lock_firewall fw4
  nft -f "$batch"
+ if [ -d "$state/replay" ]; then mv -f "$batch" "$state/replay/3-cn.nft"; fi
+ unlock_firewall
 }
 clean_routes() {
  family=$1
