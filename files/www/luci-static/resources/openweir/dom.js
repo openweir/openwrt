@@ -279,7 +279,6 @@ const errorText = {
     'managed LAN interface unavailable': '受管局域网接口不可用',
     'missing control secret': '缺少内核控制密钥',
     'missing core user': '缺少内核运行用户',
-    'missing WAN DNS resolver': '缺少上游 DNS 服务器',
     'network ownership lost': '网络接管已被其他程序修改',
     'network resource conflict or incomplete inspection': '网络资源冲突，或检查未完成',
     'no authorized primary source': '没有可用的主订阅',
@@ -307,8 +306,6 @@ const errorText = {
     'unsupported rule provider format': '不支持的规则集格式',
     'unsupported state schema': '不支持的状态文件版本',
     'unverified network fault disposition': '未确认故障时的网络处理方式',
-    'WAN DNS information unavailable': '无法读取上游 DNS 信息',
-    'WAN DNS resolver unavailable': '上游 DNS 不可用',
     'context deadline exceeded': '操作超时',
     'context canceled': '操作已取消',
 };

@@ -227,22 +227,11 @@ func networkOptions(ctx context.Context) (Network, error) {
 	if e != nil {
 		return n, e
 	}
-	b, err := os.ReadFile("/tmp/resolv.conf.d/resolv.conf.auto")
-	if err != nil {
-		return n, errors.New("WAN DNS information unavailable")
-	}
-	for _, line := range strings.Split(string(b), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) != 2 || fields[0] != "nameserver" {
-			continue
-		}
-		addr, err := netip.ParseAddr(fields[1])
-		if err == nil && addr.IsGlobalUnicast() {
-			n.Resolver = addr.String()
-			return n, nil
-		}
-	}
-	return n, errors.New("WAN DNS resolver unavailable")
+	// No WAN resolver is published while PPPoE redials, with peerdns off and no custom DNS, or on
+	// a side router; the core then bootstraps from the public default nameservers alone.
+	b, _ := os.ReadFile("/tmp/resolv.conf.d/resolv.conf.auto")
+	n.Resolver = wanResolver(b)
+	return n, nil
 }
 
 // managedLAN maps the usable managed interfaces to their addresses. One that is down, has no
@@ -276,4 +265,18 @@ func managedLAN(names []string, family6 bool, status func(string) (netifStatus, 
 		return nil, skipped
 	}
 	return lan, nil
+}
+
+// wanResolver returns the first global unicast nameserver netifd published, or "" for none.
+func wanResolver(resolv []byte) string {
+	for _, line := range strings.Split(string(resolv), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) != 2 || fields[0] != "nameserver" {
+			continue
+		}
+		if addr, err := netip.ParseAddr(fields[1]); err == nil && addr.IsGlobalUnicast() {
+			return addr.String()
+		}
+	}
+	return ""
 }

@@ -130,14 +130,15 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 	if len(foreignDNS) == 0 {
 		foreignDNS = ForeignDNS
 	}
-	resolver, err := netip.ParseAddr(n.Resolver)
-	if err != nil || resolver.IsLoopback() || resolver.IsUnspecified() {
-		return nil, errors.New("missing WAN DNS resolver")
+	// The WAN resolver is optional (see networkOptions): the public pair alone bootstraps the core.
+	defaultDNS := []string{"223.5.5.5", "119.29.29.29"}
+	if resolver, err := netip.ParseAddr(n.Resolver); err == nil && !resolver.IsLoopback() && !resolver.IsUnspecified() {
+		defaultDNS = append([]string{resolver.String()}, defaultDNS...)
 	}
 	config := obj{"mode": "rule", "mixed-port": MixedPort, "allow-lan": false, "external-controller": "127.0.0.1:19761", "secret": secret, "ipv6": n.Family6,
 		"log-level": "warning", "profile": obj{"store-selected": false, "store-fake-ip": false}, "geodata-mode": true, "geo-auto-update": false,
 		"hosts": obj{"probe.openweir.invalid": "192.0.2.1"}, "dns": obj{"enable": true, "listen": "", "enhanced-mode": "redir-host", "use-hosts": true,
-			"use-system-hosts": false, "ipv6": false, "default-nameserver": []string{resolver.String(), "223.5.5.5", "119.29.29.29"},
+			"use-system-hosts": false, "ipv6": false, "default-nameserver": defaultDNS,
 			// As in OpenClash, the core answers no AAAA records even with IPv6 proxying on: under
 			// fake-ip, AAAA lookups for proxied names otherwise wait on the remote resolver and
 			// stall browsers, and devices fall back to IPv4 that always works. Native IPv6
