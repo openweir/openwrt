@@ -32,8 +32,9 @@ type Network struct {
 	// FakeIP follows DNS protection where the router's own connections to fake addresses are
 	// captured too (fw4); elsewhere the core answers real addresses.
 	FakeIP bool
-	// FailOpen and ChinaDirect are read by the network helper when it applies the takeover.
-	// ChinaDirect needs nftables sets, so it is off on fw3; chinaShortcut adds the mode.
+	// FailOpen and ChinaDirect are read by the network helper when it applies the takeover;
+	// Compile reads ChinaDirect for the fake-ip filter. ChinaDirect needs nftables sets, so it
+	// is off on fw3; chinaShortcut adds the mode.
 	FailOpen, ChinaDirect bool
 	// Empty lists mean the built-in upstreams.
 	Domestic, Foreign []string
@@ -81,6 +82,7 @@ var digestName = regexp.MustCompile("^[a-f0-9]{64}$")
 
 const dnsDomesticSet = "openweir-dns-cn"
 const domesticIPSet = "openweir-ip-cn"
+const realIPSet = "openweir-real-ip"
 
 // Mainland names and addresses keep QUIC. The address check uses no-resolve: a connection
 // that only names its host matches by name, without a lookup for the rule.
@@ -400,6 +402,15 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 	// and so does other UDP on port 443 to the mainland (WireGuard, DTLS).
 	rules = append(rules, quicBlock)
 	providers[domesticIPSet] = obj{"type": "file", "format": "mrs", "behavior": "ipcidr", "path": "./builtin/geoip-cn.mrs"}
+	// With the China shortcut the firewall sends mainland addresses straight out. As with
+	// OpenClash's China route, mainland names then get real addresses from the domestic
+	// resolvers, so their traffic also leaves in the kernel instead of through the core.
+	if n.DNS && n.FakeIP && chinaShortcut(i, n) {
+		providers[realIPSet] = obj{"type": "inline", "behavior": "domain", "payload": fakeIPFilter}
+		dns := config["dns"].(obj)
+		dns["fake-ip-filter-mode"] = "rule"
+		dns["fake-ip-filter"] = []string{"RULE-SET," + realIPSet + ",real-ip", "RULE-SET," + dnsDomesticSet + ",real-ip", "MATCH,fake-ip"}
+	}
 	if i.Mode == "smart" {
 		for _, set := range p.BinarySets {
 			if !digestName.MatchString(set.SHA256) || filepath.Base(set.Filename()) != set.Filename() {

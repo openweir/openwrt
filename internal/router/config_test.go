@@ -374,6 +374,32 @@ func TestDNSUpstreamValidation(t *testing.T) {
 	}
 }
 
+func TestChinaShortcutGivesMainlandNamesRealAddresses(t *testing.T) {
+	p := baseProfile(t, "p")
+	i := initial()
+	i.Source = p.Source
+	n := Network{Method: "tproxy", DNS: true, FakeIP: true, ChinaDirect: true, Resolver: "192.0.2.53"}
+	c := configForTest(t, i, p, n)
+	dns := c["dns"].(map[string]any)
+	filter := []any{"RULE-SET," + realIPSet + ",real-ip", "RULE-SET," + dnsDomesticSet + ",real-ip", "MATCH,fake-ip"}
+	fixed := c["rule-providers"].(map[string]any)[realIPSet].(map[string]any)
+	if dns["fake-ip-filter-mode"] != "rule" || !slices.Equal(dns["fake-ip-filter"].([]any), filter) ||
+		fixed["type"] != "inline" || fixed["behavior"] != "domain" || len(fixed["payload"].([]any)) != len(fakeIPFilter) {
+		t.Fatal(dns["fake-ip-filter-mode"], dns["fake-ip-filter"], fixed)
+	}
+	// Without the shortcut mainland names keep fake addresses: global mode, or the switch off.
+	i.Mode = "global"
+	global := configForTest(t, i, p, n)
+	i.Mode = "smart"
+	n.ChinaDirect = false
+	for _, c := range []map[string]any{global, configForTest(t, i, p, n)} {
+		dns := c["dns"].(map[string]any)
+		if dns["fake-ip-filter-mode"] != nil || len(dns["fake-ip-filter"].([]any)) != len(fakeIPFilter) || c["rule-providers"].(map[string]any)[realIPSet] != nil {
+			t.Fatal(dns["fake-ip-filter-mode"], dns["fake-ip-filter"])
+		}
+	}
+}
+
 // dnsPolicyEntries reads nameserver-policy in document order, the order the core tries it.
 func dnsPolicyEntries(t *testing.T, data []byte) (keys []string, servers [][]string) {
 	t.Helper()
