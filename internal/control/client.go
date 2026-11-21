@@ -207,13 +207,6 @@ func (c Client) Rules(ctx context.Context) ([]Rule, error) {
 	return r.Rules, e
 }
 
-// FlushDNS clears the core's DNS cache and its fake-ip mappings.
-func (c Client) FlushDNS(ctx context.Context) error {
-	if e := c.call(ctx, "POST", "/cache/dns/flush", nil, nil); e != nil {
-		return e
-	}
-	return c.call(ctx, "POST", "/cache/fakeip/flush", nil, nil)
-}
 func (c Client) CloseConnection(ctx context.Context, id string) error {
 	name, e := segment(id)
 	if e != nil {

@@ -452,7 +452,12 @@ func (s *System) Start(ctx context.Context, i Intent) (err error) {
 	// Keep proving core liveness while the serialized network helper applies.
 	applyCtx, endApply := context.WithCancel(ctx)
 	applied := make(chan error, 1)
-	go func() { _, ae := command(applyCtx, networkHelper, "apply"); applied <- ae }()
+	// The firewall takes over IPv6 exactly when the core was configured for it.
+	family := "ipv4"
+	if n.Family6 {
+		family = "ipv6"
+	}
+	go func() { _, ae := command(applyCtx, networkHelper, "apply", family); applied <- ae }()
 	tick := time.NewTicker(2 * time.Second)
 applyLoop:
 	for {

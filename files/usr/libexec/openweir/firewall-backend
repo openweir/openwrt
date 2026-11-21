@@ -2,7 +2,6 @@
 # iptables on a firewall4 image can be an nft compatibility frontend.
 bypass4='0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4'
 bypass6='::/128 ::1/128 fe80::/10 fc00::/7 ff00::/8'
-# Ports kept when only common ports are proxied: web, mail, chat, DNS-over-TLS and Cloudflare's alternates.
 
 # Networks the router is directly attached to (LAN, WAN and delegated IPv6
 # prefixes), so public LAN addresses and the upstream modem stay direct.
@@ -88,6 +87,8 @@ legacy_plan() {
  fi
  # Replies to connections opened from outside (port forwards, inbound services) stay untouched.
  echo "-A OPENWEIR_LAN -m conntrack --ctdir REPLY $tag -j RETURN"
+ # Time sync stays direct: NTP names keep real addresses and a node without UDP must not stop the clock.
+ echo "-A OPENWEIR_LAN -p udp --dport 123 $tag -j RETURN"
  echo "-A OPENWEIR_LAN -m addrtype --dst-type $desttypes $tag -j RETURN"
  for prefix in $private_ips $(local_prefixes "$fam"); do
   echo "-A OPENWEIR_LAN -d $prefix $tag -j RETURN"

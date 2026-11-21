@@ -5,7 +5,8 @@ case "$ACTION" in ifup|ifdown) ;;
 esac
 [ -S /var/run/openweir/manager.sock ] || exit 0
 case "$INTERFACE" in
- wan|wan6) ;;
+ # Uplinks, including the dynamic wan_6 that PPPoE creates for DHCPv6: IPv6 proxying follows them.
+ wan|wan6|wan_*|wan6_*) ;;
  *) managed=$(uci -q get openweir.main.network) || exit 0
     case " $managed " in *" $INTERFACE "*) ;; *) exit 0 ;; esac ;;
 esac

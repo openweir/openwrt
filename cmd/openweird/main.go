@@ -300,22 +300,6 @@ func (s *app) handle(ctx context.Context, method string, r request) (any, error)
 		return nil, errors.New("uninstall in progress")
 	}
 	switch method {
-	case "flush_dns":
-		// Clients may still hold old answers; the core and dnsmasq at least start fresh.
-		if s.m.Status().Phase == "running" {
-			if err := s.sys.Client().FlushDNS(ctx); err != nil {
-				return nil, errors.New("core DNS cache unavailable")
-			}
-		}
-		_ = exec.CommandContext(ctx, "killall", "-HUP", "dnsmasq").Run()
-		return map[string]bool{"flushed": true}, nil
-	case "repair_dnsmasq":
-		c, end := context.WithTimeout(ctx, 30*time.Second)
-		defer end()
-		if err := exec.CommandContext(c, "/usr/libexec/openweir/network", "dns-repair").Run(); err != nil {
-			return nil, errors.New("dnsmasq repair failed")
-		}
-		return map[string]bool{"repaired": true}, nil
 	case "close_connection":
 		if err := s.sys.Client().CloseConnection(ctx, r.ID); err != nil {
 			return nil, err

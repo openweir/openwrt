@@ -257,8 +257,6 @@ const errorText = {
     'Package manager did not apply the requested version': '包管理器没有安装目标版本',
     'Refusing package downgrade': '不允许降级插件',
     'invalid network preferences': '设置无效',
-    'dnsmasq repair failed': 'Dnsmasq 修复失败',
-    'core DNS cache unavailable': '无法清理内核 DNS 缓存',
     'could not verify network prerequisites': '无法确认网络前置条件',
     'default route has no available group': '默认路线没有可用的策略组',
     'disk full': '存储空间已满',

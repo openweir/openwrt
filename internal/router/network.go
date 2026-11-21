@@ -149,11 +149,8 @@ func ipv6Uplink(ctx context.Context) bool {
 	return exec.CommandContext(ctx, "ip", "-6", "route", "get", "2400:3200::1").Run() == nil
 }
 func networkOptions(ctx context.Context) (Network, error) {
-	n := Network{Method: uci(ctx, "method"), DNS: uci(ctx, "dns") == "1", Family6: ipv6Uplink(ctx), BlockQUIC: true,
+	n := Network{Method: uci(ctx, "method"), DNS: uci(ctx, "dns") == "1", Family6: ipv6Uplink(ctx),
 		Domestic: upstreams(uci(ctx, "dns_domestic"), DomesticDNS), Foreign: upstreams(uci(ctx, "dns_foreign"), ForeignDNS), LAN: map[string][]netip.Prefix{}}
-	// Sniffing, concurrent dialing, unified delay and the QUIC block are always on, and
-	// fake-ip follows DNS protection: these are not user settings.
-	n.FakeIP = n.DNS
 	for _, name := range strings.Fields(uci(ctx, "network")) {
 		if strings.Trim(name, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") != "" {
 			return n, errors.New("invalid managed LAN")

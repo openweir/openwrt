@@ -29,11 +29,8 @@ type Network struct {
 	Resolver  string
 	LAN       map[string][]netip.Prefix
 	Interface string
-	BlockQUIC bool
-	FakeIP    bool
-	// Zero values mean the defaults: sniffing and tuning on, built-in upstreams.
-	NoSniff, NoConcurrent, NoUnifiedDelay bool
-	Domestic, Foreign                     []string
+	// Empty lists mean the built-in upstreams.
+	Domestic, Foreign []string
 }
 type DeviceRule struct {
 	Address string `json:"address"`
@@ -84,6 +81,8 @@ func coreTarget(s string) string {
 var digestName = regexp.MustCompile("^[a-f0-9]{64}$")
 
 const dnsDomesticSet = "openweir-dns-cn"
+
+var quicBlock = "AND,((NETWORK,UDP),(DST-PORT,443),(NOT,((RULE-SET," + dnsDomesticSet + ")))),REJECT"
 
 // Names that must keep real addresses, following OpenClash's filter: local and reserved
 // names, time sync, connectivity checks, STUN and consoles, carrier one-tap login,
@@ -149,12 +148,12 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 			// names and node hostnames use domestic resolvers so CDNs stay local.
 			"nameserver": foreignDNS, "proxy-server-nameserver": domesticDNS, "direct-nameserver": domesticDNS, "respect-rules": true,
 			"nameserver-policy": obj{"rule-set:" + dnsDomesticSet: domesticDNS}, "fake-ip-range": "172.30.254.1/30"},
-		"find-process-mode": "off", "tcp-concurrent": !n.NoConcurrent, "unified-delay": !n.NoUnifiedDelay, "keep-alive-interval": 15, "keep-alive-idle": 600}
+		"find-process-mode": "off", "tcp-concurrent": true, "unified-delay": true, "keep-alive-interval": 15, "keep-alive-idle": 600}
 	// Dial the sniffed domain, not the address the device chose. Devices may still hold
 	// poisoned answers (IPv6 resolvers from router advertisements, hard-coded DNS, cached
 	// lookups), and proxying such an address makes the node dial a bogus host and every
 	// such connection is refused. Services that break when rewritten are skipped below.
-	config["sniffer"] = obj{"enable": !n.NoSniff, "override-destination": true, "parse-pure-ip": true, "force-dns-mapping": true,
+	config["sniffer"] = obj{"enable": true, "override-destination": true, "parse-pure-ip": true, "force-dns-mapping": true,
 		// Push and smart-home services break when their destination is rewritten.
 		"skip-domain": []string{"+.push.apple.com", "Mijia Cloud", "+.mi.com", "+.xiaomi.net", "dlg.io.mi.com", "+.oray.com", "+.sunlogin.net"},
 		"sniff":       obj{"TLS": obj{"ports": []string{"443", "8443"}}, "HTTP": obj{"ports": []string{"80", "8080-8880"}}, "QUIC": obj{"ports": []string{"443"}}}}
@@ -162,12 +161,10 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 		dns := config["dns"].(obj)
 		dns["listen"] = "127.0.0.1:19764"
 		// Fake-ip needs devices to resolve through the core, so it follows DNS protection.
-		if n.FakeIP {
-			dns["enhanced-mode"] = "fake-ip"
-			dns["fake-ip-range"] = "198.18.0.1/16"
-			dns["fake-ip-filter"] = fakeIPFilter
-			config["profile"].(obj)["store-fake-ip"] = true
-		}
+		dns["enhanced-mode"] = "fake-ip"
+		dns["fake-ip-range"] = "198.18.0.1/16"
+		dns["fake-ip-filter"] = fakeIPFilter
+		config["profile"].(obj)["store-fake-ip"] = true
 	}
 	// Built-in listeners share a bind address. Keep the diagnostic SOCKS/HTTP
 	// socket loopback-only, and bind only the dedicated transparent socket to LAN.
@@ -320,10 +317,6 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 		listeners = append(listeners, relay)
 		rules = append(rules, extra...)
 	}
-	if n.BlockQUIC {
-		// Browsers fall back to TCP, where sniffing and routing are reliable.
-		rules = append(rules, "AND,((NETWORK,UDP),(DST-PORT,443)),REJECT")
-	}
 	if len(listeners) > 0 {
 		config["listeners"] = listeners
 	}
@@ -362,6 +355,9 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 		conditions := append([]string{"IN-TYPE," + strings.ToUpper(n.Method)}, exceptions...)
 		rules = append(rules, logical("AND", conditions)+",DIRECT")
 	}
+	// As in OpenClash, QUIC that may be proxied is refused so browsers fall back to TCP, where
+	// sniffing and routing are reliable. Direct devices and mainland names keep QUIC.
+	rules = append(rules, quicBlock)
 	if i.Mode == "smart" {
 		for _, set := range p.BinarySets {
 			if !digestName.MatchString(set.SHA256) || filepath.Base(set.Filename()) != set.Filename() {

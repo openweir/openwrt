@@ -70,41 +70,50 @@ valid_dir() {
 }
 # As in OpenClash, dnsmasq caches nothing while it forwards to the core: a cached fake-ip
 # answer outliving the core's mapping would point devices at an address nothing serves.
-# The original sizes are kept on flash so a crash or reboot cannot leave the cache off.
-cachefile=/etc/openweir/private/dnsmasq-cache
+# The original size is kept in the same dnsmasq section, so whatever keeps the change (a
+# reboot, a sysupgrade that keeps settings) also keeps the way back. Our own save directory
+# leaves anyone else's pending dhcp changes uncommitted.
+dhcp_uci() { mkdir -p "$state/uci" && uci -q -t "$state/uci" "$@"; }
 dns_section() {
  case "$1" in
   /tmp/dnsmasq.d) echo '@dnsmasq[0]' ;;
   /tmp/dnsmasq.*.d) sec=${1#/tmp/dnsmasq.}; sec=${sec%.d}
    case "$sec" in ''|*[!a-zA-Z0-9_]*) return 1 ;; esac
-   uci -q get "dhcp.$sec" >/dev/null || return 1
+   dhcp_uci get "dhcp.$sec" >/dev/null || return 1
    echo "$sec" ;;
   *) return 1 ;;
  esac
 }
 cache_off() {
- [ ! -e "$cachefile" ] || cache_restore || return 1
- tmp=$(mktemp "$cachefile.XXXXXX") || return 1
  while IFS= read -r dir; do
   sec=$(dns_section "$dir") || continue
-  printf '%s %s\n' "$sec" "$(uci -q get "dhcp.$sec.cachesize" || echo -)" >>"$tmp"
-  uci -q set "dhcp.$sec.cachesize=0"
+  # A takeover that never restored (a crash) already saved the size the user chose.
+  dhcp_uci get "dhcp.$sec.openweir_cachesize" >/dev/null ||
+   dhcp_uci set "dhcp.$sec.openweir_cachesize=$(dhcp_uci get "dhcp.$sec.cachesize" || echo -)" || return 1
+  dhcp_uci set "dhcp.$sec.cachesize=0" || return 1
  done <"$state/dns"
- mv -f "$tmp" "$cachefile" && uci -q commit dhcp
+ dhcp_uci commit dhcp
 }
+cache_saved() { dhcp_uci -X show dhcp | grep -q '^dhcp\.[A-Za-z0-9_]*\.openweir_cachesize='; }
 cache_restore() {
- [ -e "$cachefile" ] || return 0
- while read -r sec old; do
-  case "$sec" in '@dnsmasq[0]') ;; ''|*[!a-zA-Z0-9_]*) continue ;; esac
-  if [ "$old" = - ]; then uci -q delete "dhcp.$sec.cachesize"
-  else case "$old" in ''|*[!0-9]*) continue ;; esac; uci -q set "dhcp.$sec.cachesize=$old"; fi
- done <"$cachefile"
- uci -q commit dhcp && rm -f "$cachefile"
+ for entry in $(dhcp_uci -X show dhcp | sed -n "s/^dhcp\.\([A-Za-z0-9_]*\)\.openweir_cachesize='\([0-9-]*\)'$/\1=\2/p"); do
+  sec=${entry%%=*}; old=${entry#*=}
+  case "$old" in ''|*[!0-9]*) dhcp_uci delete "dhcp.$sec.cachesize" || : ;;
+   *) dhcp_uci set "dhcp.$sec.cachesize=$old" || return 1 ;; esac
+  dhcp_uci delete "dhcp.$sec.openweir_cachesize" || return 1
+ done
+ dhcp_uci commit dhcp
 }
 dns_restore() {
  if [ ! -e "$state/dns" ]; then
-  # A takeover that never recorded its directories may still have turned the cache off.
-  if [ -e "$cachefile" ]; then cache_restore && /etc/init.d/dnsmasq restart || return 1; fi
+  # Nothing is recorded, yet a crash or an interrupted upgrade may have left an OpenWeir include
+  # or the cache turned off. Every release, including the one at manager start, clears them.
+  changed=0
+  for f in /tmp/dnsmasq.d/$dnsfile /tmp/dnsmasq.*.d/$dnsfile; do
+   if [ -f "$f" ] && grep -Fqx '# OpenWeir managed upstream' "$f"; then rm -f "$f"; changed=1; fi
+  done
+  if cache_saved; then cache_restore || return 1; changed=1; fi
+  [ "$changed" = 0 ] || /etc/init.d/dnsmasq restart || return 1
   return 0
  fi
  cache_restore || return 1
@@ -169,17 +178,6 @@ refresh() {
  set_elements local4 "$(local_prefixes 4)"
  if [ "$v6" = 1 ]; then set_elements local6 "$(local_prefixes 6)"; fi
  nft -f "$batch"
-}
-# Remove an OpenWeir dnsmasq include the running takeover does not own (left by a crash or
-# an interrupted upgrade), then restart dnsmasq. Other programs' settings are left alone.
-dns_repair() {
- if [ ! -e "$state/dns" ]; then
-  for f in /tmp/dnsmasq.d/$dnsfile /tmp/dnsmasq.*.d/$dnsfile /etc/dnsmasq.d/$dnsfile; do
-   if [ -f "$f" ] && grep -Fqx '# OpenWeir managed upstream' "$f"; then rm -f "$f"; fi
-  done
-  cache_restore || true
- fi
- /etc/init.d/dnsmasq restart
 }
 clean_routes() {
  family=$1
@@ -395,10 +393,13 @@ apply() {
  openweir-net management-record
  names="";for dev in $interfaces; do names="$names, \"$dev\""; done
  names=${names#, }
- # IPv6 is taken over automatically when the core can reach the IPv6 internet. Its sockets
- # pick no source address, so source-specific defaults ("default from ...") do not count;
- # without a usable route devices stay on IPv4. Keep in step with ipv6Uplink in network.go.
- v6=0; if ip -6 route get 2400:3200::1 >/dev/null 2>&1; then v6=1; fi
+ # IPv6 is taken over when the core can reach the IPv6 internet. The manager decides once
+ # (ipv6Uplink in network.go) and passes the result, so the core's listeners and the firewall
+ # agree; a manual run checks the route the same way.
+ case "$family_arg" in
+  ipv6) v6=1 ;; ipv4) v6=0 ;;
+  *) v6=0; if ip -6 route get 2400:3200::1 >/dev/null 2>&1; then v6=1; fi ;;
+ esac
  dns=$(uci -q get openweir.main.dns || echo 0)
  dns_intercept=0
  # As in OpenClash, DNS protection also takes over lookups devices send to other resolvers.
@@ -442,6 +443,8 @@ EOF
   meta nfproto != { $families } return
   # Replies to connections that something else opened (port forwards, inbound services) stay untouched.
   ct direction reply return
+  # Time sync stays direct: NTP names keep real addresses and a node without UDP must not stop the clock.
+  udp dport 123 return
 EOF
  fake_ping
  cat >>"$batch" <<EOF
@@ -497,6 +500,7 @@ EOF
   fi
   cat >>"$batch" <<EOF
   meta l4proto { tcp, udp } th dport 53 return
+  udp dport 123 return
   ip daddr { $(echo "$bypass4" | sed 's/ /, /g') } return
   ip6 daddr { $(echo "$bypass6" | sed 's/ /, /g') } return
   ip daddr @local4 return
@@ -575,11 +579,10 @@ finish_apply() {
  fail_stage "$failed_step"
 }
 case "${1:-}" in
- apply) trap 'finish_apply "$?"' EXIT; apply ;;
+ apply) family_arg=${2:-}; trap 'finish_apply "$?"' EXIT; apply ;;
  verify) verify || { fail_stage managed_lan_probe; exit 1; } ;;
  release) release ;;
  refresh) refresh ;;
- dns-repair) dns_repair ;;
  fault) fault ;;
  *) exit 2 ;;
 esac

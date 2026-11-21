@@ -619,15 +619,6 @@ export async function overview(ui) {
 			h('small', { class: 'ow-muted' }, '由内核解析，防污染')),
 		upstreamRow(ui, '国内域名', '直连解析', 'domestic', prefs.dns_domestic, (v) => saveP({ dns_domestic: v })),
 		upstreamRow(ui, '其他域名', '经代理加密解析', 'foreign', prefs.dns_foreign, (v) => saveP({ dns_foreign: v })),
-		h('div', { class: 'ow-row' },
-			ui.button('清理 DNS 缓存', async () => {
-				await ui.run('flush_dns', {});
-				ui.notify('已清理内核和 dnsmasq 的 DNS 缓存');
-			}, 'ow-link'),
-			ui.button('Dnsmasq 修复', async () => {
-				await ui.run('repair_dnsmasq', {});
-				ui.notify('已清除残留配置并重启 dnsmasq');
-			}, 'ow-link')),
 	);
 	const failOpen = prefs.fail_open !== false;
 	const failOpenLabel = '代理无响应时回退直连';
