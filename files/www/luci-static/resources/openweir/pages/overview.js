@@ -560,7 +560,10 @@ export async function overview(ui) {
 				['core', '核心'],
 				['dns', 'DNS'],
 				['baidu', '百度'],
+				['netease', '网易云'],
 				['google', 'Google'],
+				['youtube', 'YouTube'],
+				['github', 'GitHub'],
 			].map(([k, n]) =>
 				h(
 					'span',

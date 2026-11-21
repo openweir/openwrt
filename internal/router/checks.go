@@ -45,7 +45,11 @@ func (s *System) Checks(ctx context.Context, dns bool) map[string]Check {
 	tr := &http.Transport{Proxy: http.ProxyURL(proxy), DisableKeepAlives: true}
 	defer tr.CloseIdleConnections()
 	client := http.Client{Transport: tr, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
-	for name, endpoint := range map[string]string{"baidu": "https://www.baidu.com/", "google": "https://www.google.com/generate_204"} {
+	// Sites on both sides of the rules: mainland ones should go direct, the rest through the proxy.
+	for name, endpoint := range map[string]string{
+		"baidu": "https://www.baidu.com/", "netease": "https://music.163.com/",
+		"google": "https://www.google.com/generate_204", "youtube": "https://www.youtube.com/generate_204", "github": "https://github.com/",
+	} {
 		tests[name] = func() error {
 			req, err := http.NewRequestWithContext(ctx, http.MethodHead, endpoint, nil)
 			if err != nil {
