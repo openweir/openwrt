@@ -64,6 +64,12 @@ jobs:
         run: |
           set -euo pipefail
           version=$(cat VERSION)
+          # A preview must sort after the newest release: once v<VERSION> is published,
+          # develop has to move VERSION to the next version first.
+          if gh release view "v$version" --repo "$GITHUB_REPOSITORY" --json isPrerelease --jq '.isPrerelease' 2>/dev/null | grep -qx false; then
+            echo "::error::v$version is already released; bump VERSION on develop so previews sort after it."
+            exit 1
+          fi
           # CI numbered this preview when it built the packages (1.0.0_pre<N>); both formats agree.
           number=$(cat dist/preview/preview-installer-ipk/preview-number)
           test "$number" = "$(cat dist/preview/preview-installer-apk/preview-number)"
