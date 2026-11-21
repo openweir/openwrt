@@ -249,6 +249,7 @@ func (s *app) handle(ctx context.Context, method string, r request) (any, error)
 		if r.Limit == 0 {
 			r.Limit = 6
 		}
+		events.Viewed()
 		return items(events.Routes(r.Limit)), nil
 	case "logs":
 		if r.Limit == 0 {
@@ -259,8 +260,10 @@ func (s *app) handle(ctx context.Context, method string, r request) (any, error)
 		if r.Limit == 0 {
 			r.Limit = 50
 		}
+		events.Viewed()
 		return map[string]any{"items": events.Page(method, r.Offset, r.Limit)}, nil
 	case "rule_hits":
+		events.Viewed()
 		return events.RuleHits(), nil
 	case "task":
 		return s.task(r.Task)

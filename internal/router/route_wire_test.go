@@ -111,7 +111,8 @@ func TestWireSharedOutbound(t *testing.T) {
 		time.Sleep(30 * time.Millisecond)
 	}
 	records := NewRecords()
-	go func() { _ = api.Connections(ctx, records.Observe) }()
+	records.Viewed()
+	go func() { _ = api.Connections(ctx, records.pollWait, records.Observe) }()
 	for _, oct := range []byte{20, 200} {
 		conn, e := net.DialTimeout("tcp4", addr.String(), time.Second)
 		if e != nil {

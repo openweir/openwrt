@@ -74,7 +74,8 @@ func TestSnapshotConnectionUsesObservedChainAndBytes(t *testing.T) {
 	ctx, end := context.WithCancel(context.Background())
 	defer end()
 	var item Connection
-	err := c.Connections(ctx, func(v Connection) { item = v; end() })
+	wait := func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }
+	err := c.Connections(ctx, wait, func(v Connection) { item = v; end() })
 	if !errors.Is(err, context.Canceled) || item.Outbound != "@direct" || item.Chain[1] != "Domestic" || item.Result != "traffic_observed" || item.Destination != "example.org:443" {
 		t.Fatal(item, err)
 	}

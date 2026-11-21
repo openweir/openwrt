@@ -96,10 +96,11 @@ func FailedDial(line string, now int64) (Connection, bool) {
 	return c, true
 }
 
-func (c Client) Connections(ctx context.Context, record func(Connection)) error {
+// Connections records each connection the core opens, changes or closes, comparing one
+// snapshot with the next. wait sets the pace: a connection opened and closed between two
+// snapshots is never seen.
+func (c Client) Connections(ctx context.Context, wait func(context.Context) error, record func(Connection)) error {
 	previous := map[string]Connection{}
-	tick := time.NewTicker(time.Second)
-	defer tick.Stop()
 	for {
 		var snapshot struct{ Connections []tracked }
 		if err := c.call(ctx, "GET", "/connections", nil, &snapshot); err != nil {
@@ -123,10 +124,8 @@ func (c Client) Connections(ctx context.Context, record func(Connection)) error 
 			}
 		}
 		previous = active
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-tick.C:
+		if err := wait(ctx); err != nil {
+			return err
 		}
 	}
 }

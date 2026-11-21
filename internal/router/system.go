@@ -538,7 +538,7 @@ func (s *System) startMonitor(i Intent, n Network, gid int, key string) {
 	go func() {
 		client := control.Client{Secret: key}
 		for stream.Err() == nil {
-			_ = client.Connections(stream, s.records.Observe)
+			_ = client.Connections(stream, s.records.pollWait, s.records.Observe)
 			_ = ctxWait(stream, time.Second)
 		}
 	}()

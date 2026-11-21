@@ -2,6 +2,7 @@ package router
 
 import (
 	"bytes"
+	"context"
 	"regexp"
 	"slices"
 	"strconv"
@@ -34,6 +35,10 @@ type Records struct {
 	index       map[string]int
 	pos         int
 	ruleHits    map[string]*RuleHit
+
+	// The connection poll's pace; see pollWait.
+	viewed time.Time     // the last read of the connection records
+	view   chan struct{} // wakes an idle poll for a new reader
 }
 
 // RuleHit counts the connections a rule set matched since the records were last
@@ -45,7 +50,54 @@ type RuleHit struct {
 
 const ruleHitLimit = 1024
 
-func NewRecords() *Records { return &Records{index: map[string]int{}, ruleHits: map[string]*RuleHit{}} }
+func NewRecords() *Records {
+	return &Records{index: map[string]int{}, ruleHits: map[string]*RuleHit{}, view: make(chan struct{}, 1)}
+}
+
+// Each connection poll parses the core's full snapshot. It runs every second only while
+// someone reads the records (the records pages poll every 3.5 s, the overview's routes every
+// 2.5 s), otherwise every five: connections shorter than that may then go unrecorded and
+// uncounted in the rule hits, and a close is noted up to five seconds late. Failed dials
+// come from the core log and are unaffected.
+const (
+	viewedPoll = time.Second
+	idlePoll   = 5 * time.Second
+	viewWindow = 10 * time.Second
+)
+
+// Viewed notes a read of the connection records. A reader arriving while the poll is idle
+// wakes it at once.
+func (r *Records) Viewed() {
+	r.mu.Lock()
+	idle := time.Since(r.viewed) > viewWindow
+	r.viewed = time.Now()
+	r.mu.Unlock()
+	if idle {
+		select {
+		case r.view <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// pollWait waits until the next connection snapshot is due.
+func (r *Records) pollWait(ctx context.Context) error {
+	r.mu.Lock()
+	d := idlePoll
+	if time.Since(r.viewed) <= viewWindow {
+		d = viewedPoll
+	}
+	r.mu.Unlock()
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+	case <-r.view:
+	}
+	return nil
+}
 
 // RuleHits returns the per-rule-set connection counts.
 func (r *Records) RuleHits() map[string]RuleHit {
