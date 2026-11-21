@@ -165,8 +165,8 @@ func commitOutputs(work, output string) error {
 // Assemble verifies the per-architecture installers in feeds/release-installer-{ipk,apk} against their
 // checksums and stages them in output, with one combined SHA256SUMS beside it.
 func Assemble(version, feeds, output string) error {
-	if !ValidVersion(version) {
-		return fmt.Errorf("expected a release version such as 1.0.0: %s", version)
+	if !ValidPackageVersion(version) {
+		return fmt.Errorf("expected a release version such as 1.0.0, or a preview package version such as 1.0.0_pre3: %s", version)
 	}
 	var dirs []string
 	for _, f := range Formats {

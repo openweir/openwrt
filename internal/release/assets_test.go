@@ -32,7 +32,9 @@ func writeSums(t *testing.T, feed string) {
 	}
 }
 
-func newFixture(t *testing.T) fixture {
+func newFixture(t *testing.T) fixture { return newFixtureFor(t, version) }
+
+func newFixtureFor(t *testing.T, version string) fixture {
 	root := t.TempDir()
 	f := fixture{root, filepath.Join(root, "feeds"), filepath.Join(root, "assets")}
 	for _, format := range Formats {
@@ -111,18 +113,8 @@ func TestExactPublicAssetsAndOfflineCommands(t *testing.T) {
 			t.Errorf("notes miss %s", name)
 		}
 	}
-	preview, err := RenderNotes("openweir/openwrt", version, f.output, &Preview{Tag: "v1.0.0-preview.2", Commit: strings.Repeat("a", 40)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, s := range []string{"Preview of 1.0.0-preview.2, built from aaaaaaa", "1.0.0-preview.2 预览版",
-		"https://github.com/openweir/openwrt/releases/download/v1.0.0-preview.2/" + want[0], "blob/v1.0.0-preview.2/README.md"} {
-		if !strings.Contains(preview, s) {
-			t.Errorf("preview notes miss %q", s)
-		}
-	}
-	if _, err := RenderNotes("openweir/openwrt", version, f.output, &Preview{Tag: "v2.0.0-preview.1", Commit: strings.Repeat("a", 40)}); err == nil {
-		t.Error("accepted a preview tag of another version")
+	if _, err := RenderNotes("openweir/openwrt", version, f.output, &Preview{Tag: "v1.0.0-preview.2", Commit: strings.Repeat("a", 40)}); err == nil {
+		t.Error("preview notes accepted the stable packages")
 	}
 	if strings.Contains(notes, string(sums)) {
 		t.Error("notes repeat the checksums; they belong in the SHA256SUMS asset")
@@ -213,6 +205,35 @@ func TestMatrix(t *testing.T) {
 	for _, j := range Matrix("apk") {
 		if j.Firmware != "25.12.6" {
 			t.Fatal(j)
+		}
+	}
+}
+
+func TestPreviewPackagesCarryTheirNumber(t *testing.T) {
+	pkg := PreviewVersion(version, 2)
+	if pkg != "1.0.0_pre2" || !ValidPackageVersion(pkg) || ValidVersion(pkg) || ValidPackageVersion("1.0.0_pre0") {
+		t.Fatal(pkg)
+	}
+	if got := PackageName(pkg, "apk", "mipsel_24kc"); got != "luci-app-openweir-1.0.0_pre2-r1_mipsel_24kc.apk" {
+		t.Fatal(got)
+	}
+	f := newFixtureFor(t, pkg)
+	if err := Assemble(pkg, f.feeds, f.output); err != nil {
+		t.Fatal(err)
+	}
+	notes, err := RenderNotes("openweir/openwrt", version, f.output, &Preview{Tag: "v1.0.0-preview.2", Commit: strings.Repeat("a", 40)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range []string{"Preview of 1.0.0-preview.2, built from aaaaaaa", "1.0.0-preview.2 预览版", "version 1.0.0_pre2",
+		"https://github.com/openweir/openwrt/releases/download/v1.0.0-preview.2/luci-app-openweir_1.0.0_pre2-1_", "blob/v1.0.0-preview.2/README.md"} {
+		if !strings.Contains(notes, s) {
+			t.Errorf("preview notes miss %q", s)
+		}
+	}
+	for _, tag := range []string{"v2.0.0-preview.1", "v1.0.0-preview.3", "v1.0.0-preview.02"} {
+		if _, err := RenderNotes("openweir/openwrt", version, f.output, &Preview{Tag: tag, Commit: strings.Repeat("a", 40)}); err == nil {
+			t.Errorf("accepted %s", tag)
 		}
 	}
 }

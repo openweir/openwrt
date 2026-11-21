@@ -183,7 +183,7 @@ case "$RELEASE" in
   fi
   cat > "$pkg/CONTROL/control" <<EOF
 Package: $name
-Version: $VERSION-$REVISION
+Version: $(echo "$VERSION" | sed 's/_pre/~pre/')-$REVISION
 Architecture: ${PACKAGE_ARCH:-all}
 Depends: $comma_deps
 Recommends: $retained
@@ -199,11 +199,16 @@ EOF
   install -m755 "$input/prerm" "$pkg/CONTROL/prerm"
   [ ! -e "$pkg/etc/config/openweir" ] || echo /etc/config/openweir > "$pkg/CONTROL/conffiles"
   ./scripts/ipkg-build "$pkg" "$feed"
+  # opkg orders 1.0.0~pre3 before 1.0.0; the file name keeps the apk spelling 1.0.0_pre3.
+  for f in "$feed"/*~pre*.ipk; do [ ! -e "$f" ] || mv "$f" "$(echo "$f" | sed 's/~pre/_pre/')"; done
   ;;
 esac
 (cd "$feed" && sha256sum * > /tmp/feed-sums && mv /tmp/feed-sums SHA256SUMS)
 )
 emit_feed "$VERSION" /tmp/feed
+if [ -n "${PRERELEASE:-}" ]; then
+ emit_feed "${VERSION}_pre$PRERELEASE" /tmp/feed/preview
+fi
 if [ "$FEED_MODE" = test ] && [ "$VERSION" != 0.0.0 ]; then
  emit_feed 0.0.0 /tmp/feed/baseline
 fi

@@ -36,6 +36,9 @@ payload="$tmp/pkg/tmp/openweir-package-payload"
 mkdir -m 700 "$payload"
 package_arch=${OPENWEIR_PACKAGE_ARCH:-}
 revision=${OPENWEIR_PACKAGE_REVISION:-1}
+# A develop build also emits preview/ with version <version>_pre<N> for the pre-release.
+prerelease=${OPENWEIR_PACKAGE_PRERELEASE:-}
+case "$prerelease" in ''|[1-9]|[1-9][0-9]|[1-9][0-9][0-9]|[1-9][0-9][0-9][0-9]) ;; *) echo 'Expected a preview number' >&2; exit 1;; esac
 case "$revision" in 0*|*[!0-9]*|'') echo 'Expected a positive package revision' >&2; exit 1;; esac
 [ -n "$package_arch" ] || [ "$revision" = 1 ] || { echo 'Release assets use revision 1' >&2; exit 1; }
 if [ -n "$package_arch" ]; then
@@ -64,5 +67,5 @@ image="ghcr.io/openwrt/sdk:$arch-$release"
 docker buildx build --platform linux/amd64 --file "$base/package.Dockerfile" \
  --build-arg "SDK=$image" --build-arg "RELEASE=$release" --build-arg "ARCH=$arch" \
  --build-arg "VERSION=$version" --build-arg "REVISION=$revision" \
- --build-arg "PACKAGE_ARCH=$package_arch" --build-arg "FEED_MODE=$mode" \
+ --build-arg "PACKAGE_ARCH=$package_arch" --build-arg "FEED_MODE=$mode" --build-arg "PRERELEASE=$prerelease" \
  --output "type=local,dest=$output" "$tmp"

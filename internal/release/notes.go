@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -33,8 +34,17 @@ func RenderNotes(repo, version, assets string, preview *Preview) (string, error)
 		return "", err
 	}
 	sums := strings.TrimRight(string(raw), "\n")
+	// A preview's packages carry its number: 1.0.0_pre3 for preview 3 of 1.0.0.
+	pkg := version
+	if preview != nil {
+		n, err := strconv.Atoi(strings.TrimPrefix(preview.Tag, "v"+version+"-preview."))
+		if err != nil || n < 1 || preview.Tag != fmt.Sprintf("v%s-preview.%d", version, n) {
+			return "", errors.New("invalid preview tag or commit")
+		}
+		pkg = PreviewVersion(version, n)
+	}
 	names := map[string]bool{}
-	for _, n := range AllNames(version) {
+	for _, n := range AllNames(pkg) {
 		names[n] = true
 	}
 	entries, err := os.ReadDir(assets)
@@ -69,10 +79,10 @@ func RenderNotes(repo, version, assets string, preview *Preview) (string, error)
 		tag = preview.Tag
 		short := preview.Commit[:7]
 		intro = "Preview of " + strings.TrimPrefix(tag, "v") + ", built from " + short + " on develop.\n\n" +
-			"- The packages carry version " + version + " but are not the stable release's packages. Don't mix them; reinstall the stable release once it is out.\n" +
+			"- The packages carry version " + pkg + ", which sorts before " + version + ", so the stable release upgrades them.\n" +
 			"- The router's **Check for updates** never offers previews.\n\n"
 		introZh = strings.TrimPrefix(tag, "v") + " 预览版，由 develop 上的 " + short + " 构建。\n\n" +
-			"- 安装包内的版本号是 " + version + "，但不是同版本正式版的安装包，请勿混用；正式版发布后请重新安装正式版。\n" +
+			"- 安装包版本号是 " + pkg + "，排在 " + version + " 之前，正式版发布后可直接覆盖升级。\n" +
 			"- 路由器的「检查更新」不会提供预览版。\n\n"
 	}
 	url := fmt.Sprintf("https://github.com/%s/releases/download/%s", repo, tag)
@@ -81,7 +91,7 @@ func RenderNotes(repo, version, assets string, preview *Preview) (string, error)
 		if !slices.Contains(Arches[format], arch) {
 			return "—"
 		}
-		name := PackageName(version, format, arch)
+		name := PackageName(pkg, format, arch)
 		return fmt.Sprintf("[%s](%s/%s)", name, url, name)
 	}
 	for _, arch := range AllArches {
@@ -89,10 +99,10 @@ func RenderNotes(repo, version, assets string, preview *Preview) (string, error)
 	}
 	r := strings.NewReplacer(
 		"{table}", strings.Join(rows, "\n"),
-		"{ipk}", PackageName(version, "ipk", "<arch>"),
-		"{apk}", PackageName(version, "apk", "<arch>"),
-		"{ipk_zh}", PackageName(version, "ipk", "<架构>"),
-		"{apk_zh}", PackageName(version, "apk", "<架构>"),
+		"{ipk}", PackageName(pkg, "ipk", "<arch>"),
+		"{apk}", PackageName(pkg, "apk", "<arch>"),
+		"{ipk_zh}", PackageName(pkg, "ipk", "<架构>"),
+		"{apk_zh}", PackageName(pkg, "apk", "<架构>"),
 		"{repo}", repo,
 		"{tag}", tag,
 		"{intro}", intro,

@@ -68,7 +68,7 @@ func main() {
 		fmt.Println(strings.Join(release.Arches[a[0]], " "))
 	case "package-name":
 		a := args(fs, argv, 3, "VERSION ipk|apk ARCH")
-		if !release.ValidVersion(a[0]) || !slices.Contains(release.Formats, a[1]) || !slices.Contains(release.Arches[a[1]], a[2]) {
+		if !release.ValidPackageVersion(a[0]) || !slices.Contains(release.Formats, a[1]) || !slices.Contains(release.Arches[a[1]], a[2]) {
 			fail("invalid version, format or architecture")
 		}
 		fmt.Println(release.PackageName(a[0], a[1], a[2]))

@@ -23,8 +23,22 @@ jobs:
           pattern: runtime-*
           merge-multiple: true
           path: dist/runtime
+      # A push to develop becomes the next preview of this version; its packages carry the
+      # number (1.0.0_pre3) next to the stable-numbered ones that the install tests use.
+      - name: Number the preview
+        id: preview
+        if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version=$(cat VERSION)
+          last=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName \
+            --jq "[.[].tagName | select(startswith(\"v$version-preview.\")) | ltrimstr(\"v$version-preview.\") | select(test(\"^[0-9]+\$\")) | tonumber] | max // 0")
+          echo "number=$((last + 1))" >> "$GITHUB_OUTPUT"
       - name: Package one installer per OpenWrt architecture
         env:
+          OPENWEIR_PACKAGE_PRERELEASE: ${{ steps.preview.outputs.number }}
           FORMAT: ${{ inputs.format }}
           OPENWEIR_FEED_MODE: test
           OPENWEIR_RUNTIME_DIR: dist/runtime
@@ -57,6 +71,31 @@ jobs:
         with:
           name: release-installer-${{ inputs.format }}
           path: dist/release/
+          if-no-files-found: error
+          retention-days: 14
+      - name: Isolate the preview installers
+        if: steps.preview.outputs.number != ''
+        env:
+          FORMAT: ${{ inputs.format }}
+          NUMBER: ${{ steps.preview.outputs.number }}
+        run: |
+          set -eu
+          mkdir -p dist/preview
+          version=$(cat VERSION)_pre$NUMBER
+          for arch in $(go run ./cmd/openweir-release arches "$FORMAT"); do
+            name=$(go run ./cmd/openweir-release package-name "$version" "$FORMAT" "$arch")
+            (cd "dist/feed/$arch/preview" && grep -F "  $name" SHA256SUMS | sha256sum --check -)
+            cp "dist/feed/$arch/preview/$name" dist/preview/
+          done
+          (cd dist/preview && sha256sum -- * > ../preview-sums && mv ../preview-sums SHA256SUMS)
+          echo "$NUMBER" > dist/preview-number
+      - uses: actions/upload-artifact@v7
+        if: steps.preview.outputs.number != ''
+        with:
+          name: preview-installer-${{ inputs.format }}
+          path: |
+            dist/preview/
+            dist/preview-number
           if-no-files-found: error
           retention-days: 14
       - id: targets

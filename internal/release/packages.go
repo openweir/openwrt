@@ -37,6 +37,18 @@ var versionPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[
 // ValidVersion reports whether v is a plain major.minor.patch release version.
 func ValidVersion(v string) bool { return len(v) <= 64 && versionPattern.MatchString(v) }
 
+var previewPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)_pre[1-9][0-9]{0,5}$`)
+
+// PreviewVersion is the package version of preview n of version: 1.0.0_pre3. apk orders
+// _pre and opkg orders ~pre (used in the IPK control file) before the release itself, so
+// the stable packages upgrade a preview.
+func PreviewVersion(version string, n int) string { return fmt.Sprintf("%s_pre%d", version, n) }
+
+// ValidPackageVersion accepts a release version or a preview package version.
+func ValidPackageVersion(v string) bool {
+	return ValidVersion(v) || len(v) <= 64 && previewPattern.MatchString(v)
+}
+
 // PackageName returns the Release file name of the installer for an OpenWrt architecture.
 func PackageName(version, format, arch string) string {
 	switch format {
