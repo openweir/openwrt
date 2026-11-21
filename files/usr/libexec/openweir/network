@@ -356,6 +356,8 @@ EOF
  cat >>"$batch" <<EOF
   iifname != { $names } return
   meta nfproto != { $families } return
+  # Replies to connections that something else opened (port forwards, inbound services) stay untouched.
+  ct direction reply return
   fib daddr type { local, broadcast, multicast } return
 EOF
  if [ "$dns_intercept" = 1 ]; then
@@ -387,6 +389,8 @@ EOF
   type route hook output priority mangle - 1; policy accept;
   meta nfproto != { $families } return
   meta skgid $core_gid return
+  # Only connections the router itself opens: replies from LuCI, VPN servers and other inbound services stay direct.
+  ct direction reply return
   fib daddr type { local, broadcast, multicast } return
 EOF
   if [ "$local_proxy" != 1 ]; then

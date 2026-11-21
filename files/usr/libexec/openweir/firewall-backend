@@ -72,6 +72,8 @@ legacy_plan() {
    echo "-A OPENWEIR_LAN -p $proto_name --dport 53 $tag -j RETURN"
   done
  fi
+ # Replies to connections opened from outside (port forwards, inbound services) stay untouched.
+ echo "-A OPENWEIR_LAN -m conntrack --ctdir REPLY $tag -j RETURN"
  echo "-A OPENWEIR_LAN -m addrtype --dst-type $desttypes $tag -j RETURN"
  for prefix in $private_ips; do
   echo "-A OPENWEIR_LAN -d $prefix $tag -j RETURN"
