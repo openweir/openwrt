@@ -25,7 +25,7 @@ type applied struct {
 }
 
 func networkKey(n Network) string {
-	return fmt.Sprint(n.Method, n.DNS, n.DNSMasq, n.Family6, n.LAN)
+	return fmt.Sprint(n.Method, n.DNS, n.Family6, n.LAN)
 }
 
 func takeover(i Intent, n Network) (guard, telegram string, err error) {

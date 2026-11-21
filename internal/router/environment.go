@@ -42,6 +42,31 @@ func EnvironmentStatus() Environment {
 	return env
 }
 
+// AutoMethod picks the capture method: TProxy where the firewall supports it, otherwise TUN.
+func AutoMethod() string {
+	env := EnvironmentStatus()
+	if !env.FirewallTProxy && env.FirewallTUN {
+		return "tun"
+	}
+	return "tproxy"
+}
+
+// StoredMethod returns the method EnsureMethod recorded at startup, probing only when it is missing.
+func StoredMethod(ctx context.Context) string {
+	if m := uci(ctx, "method"); m == "tproxy" || m == "tun" {
+		return m
+	}
+	return AutoMethod()
+}
+
+// EnsureMethod stores the automatic capture method so the network helper uses it too.
+func EnsureMethod(ctx context.Context) {
+	if m := AutoMethod(); uci(ctx, "method") != m {
+		_ = exec.CommandContext(ctx, "uci", "-q", "set", "openweir.main.method="+m).Run()
+		_ = exec.CommandContext(ctx, "uci", "-q", "commit", "openweir").Run()
+	}
+}
+
 // The helper reports identifiers exclusively. Diagnostics never relay command
 // output, UCI values, rules, or filenames into logs or the LuCI API.
 var networkRequirements = map[string]struct{ description, provider string }{

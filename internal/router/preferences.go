@@ -12,26 +12,15 @@ import (
 )
 
 type Preferences struct {
-	UpdateHours int    `json:"update_hours"`
-	Enabled     bool   `json:"enabled"`
-	Method      string `json:"method"`
-	DNS         bool   `json:"dns"`
-	// How LAN lookups reach the core: "dnsmasq" forwards them (the default) and "firewall"
-	// redirects port 53 straight to it, leaving dnsmasq untouched. As in OpenClash.
-	DNSMode      string   `json:"dns_mode"`
-	FailOpen     *bool    `json:"fail_open,omitempty"`
-	LocalProxy   *bool    `json:"local_proxy,omitempty"`
-	BlockQUIC    *bool    `json:"block_quic,omitempty"`
-	FakeIP       *bool    `json:"fake_ip,omitempty"`
-	Sniff        *bool    `json:"sniff,omitempty"`
-	Concurrent   *bool    `json:"tcp_concurrent,omitempty"`
-	UnifiedDelay *bool    `json:"unified_delay,omitempty"`
-	BypassCN     *bool    `json:"bypass_cn,omitempty"`
-	CommonPorts  *bool    `json:"common_ports,omitempty"`
-	DNSDomestic  []string `json:"dns_domestic,omitempty"`
-	DNSForeign   []string `json:"dns_foreign,omitempty"`
-	IPv6         bool     `json:"ipv6"`
-	Networks     []string `json:"networks"`
+	UpdateHours int      `json:"update_hours"`
+	Enabled     bool     `json:"enabled"`
+	Method      string   `json:"method"`
+	DNS         bool     `json:"dns"`
+	FailOpen    *bool    `json:"fail_open,omitempty"`
+	BypassCN    *bool    `json:"bypass_cn,omitempty"`
+	DNSDomestic []string `json:"dns_domestic,omitempty"`
+	DNSForeign  []string `json:"dns_foreign,omitempty"`
+	Networks    []string `json:"networks"`
 }
 
 var networkName = regexp.MustCompile("^[A-Za-z0-9_]{1,32}$")
@@ -39,9 +28,6 @@ var networkName = regexp.MustCompile("^[A-Za-z0-9_]{1,32}$")
 func (p Preferences) Validate() error {
 	if p.UpdateHours < 0 || p.UpdateHours > 720 {
 		return errors.New("invalid subscription refresh period")
-	}
-	if p.DNSMode != "" && p.DNSMode != "firewall" && p.DNSMode != "dnsmasq" {
-		return errors.New("unsupported DNS mode")
 	}
 	if p.Method != "tproxy" && p.Method != "tun" {
 		return errors.New("unsupported network method")
@@ -71,10 +57,8 @@ func (p Preferences) Validate() error {
 
 // SameNetwork reports whether two preference sets produce the same takeover.
 func (p Preferences) SameNetwork(o Preferences) bool {
-	return p.Method == o.Method && p.DNS == o.DNS && dnsMode(p.DNSMode) == dnsMode(o.DNSMode) && p.IPv6 == o.IPv6 && slices.Equal(p.Networks, o.Networks) &&
-		sameBit(p.FailOpen, o.FailOpen) && sameBit(p.LocalProxy, o.LocalProxy) && sameBit(p.BlockQUIC, o.BlockQUIC) && sameBit(p.FakeIP, o.FakeIP) &&
-		sameBit(p.Sniff, o.Sniff) && sameBit(p.Concurrent, o.Concurrent) && sameBit(p.UnifiedDelay, o.UnifiedDelay) &&
-		sameBit(p.BypassCN, o.BypassCN) && sameBit(p.CommonPorts, o.CommonPorts) &&
+	return p.Method == o.Method && p.DNS == o.DNS && slices.Equal(p.Networks, o.Networks) &&
+		sameBit(p.FailOpen, o.FailOpen) && sameBit(p.BypassCN, o.BypassCN) &&
 		sameList(p.DNSDomestic, o.DNSDomestic) && sameList(p.DNSForeign, o.DNSForeign)
 }
 
@@ -84,28 +68,13 @@ func sameList(a, b []string) bool { return a == nil || b == nil || slices.Equal(
 // An omitted switch keeps its saved value.
 func sameBit(a, b *bool) bool { return a == nil || b == nil || *a == *b }
 func ReadPreferences(ctx context.Context) (Preferences, error) {
-	p := Preferences{Enabled: uci(ctx, "enabled") == "1", Method: uci(ctx, "method"), DNS: uci(ctx, "dns") == "1", IPv6: uci(ctx, "ipv6") != "0", Networks: strings.Fields(uci(ctx, "network"))}
+	p := Preferences{Enabled: uci(ctx, "enabled") == "1", Method: uci(ctx, "method"), DNS: uci(ctx, "dns") == "1", Networks: strings.Fields(uci(ctx, "network"))}
 	p.UpdateHours, _ = strconv.Atoi(uci(ctx, "update_hours"))
-	p.DNSMode = dnsMode(uci(ctx, "dns_mode"))
 	failOpen := uci(ctx, "fail_open") != "0"
 	p.FailOpen = &failOpen
-	local := uci(ctx, "local_proxy") != "0"
-	p.LocalProxy = &local
-	quic := uci(ctx, "block_quic") != "0"
-	p.BlockQUIC = &quic
-	fake := uci(ctx, "fake_ip") != "0"
-	p.FakeIP = &fake
-	sniff := uci(ctx, "sniff") != "0"
-	p.Sniff = &sniff
-	concurrent := uci(ctx, "tcp_concurrent") != "0"
-	p.Concurrent = &concurrent
-	unified := uci(ctx, "unified_delay") != "0"
-	p.UnifiedDelay = &unified
-	// Both narrow what the firewall hands to the core, so they stay off unless chosen.
+	// Narrows what the firewall hands to the core, so it stays off unless chosen.
 	cn := uci(ctx, "bypass_cn") == "1"
 	p.BypassCN = &cn
-	ports := uci(ctx, "common_ports") == "1"
-	p.CommonPorts = &ports
 	p.DNSDomestic = upstreams(uci(ctx, "dns_domestic"), DomesticDNS)
 	p.DNSForeign = upstreams(uci(ctx, "dns_foreign"), ForeignDNS)
 	return p, p.Validate()
@@ -129,13 +98,8 @@ func SavePreferences(ctx context.Context, p Preferences) error {
 	if p.FailOpen != nil {
 		b.WriteString("set openweir.main.fail_open='" + bit(*p.FailOpen) + "'\n")
 	}
-	if p.LocalProxy != nil {
-		b.WriteString("set openweir.main.local_proxy='" + bit(*p.LocalProxy) + "'\n")
-	}
-	for k, v := range map[string]*bool{"sniff": p.Sniff, "tcp_concurrent": p.Concurrent, "unified_delay": p.UnifiedDelay, "bypass_cn": p.BypassCN, "common_ports": p.CommonPorts} {
-		if v != nil {
-			b.WriteString("set openweir.main." + k + "='" + bit(*v) + "'\n")
-		}
+	if p.BypassCN != nil {
+		b.WriteString("set openweir.main.bypass_cn='" + bit(*p.BypassCN) + "'\n")
 	}
 	for k, list := range map[string][]string{"dns_domestic": p.DNSDomestic, "dns_foreign": p.DNSForeign} {
 		if list != nil {
@@ -145,17 +109,14 @@ func SavePreferences(ctx context.Context, p Preferences) error {
 			}
 		}
 	}
-	if p.FakeIP != nil {
-		b.WriteString("set openweir.main.fake_ip='" + bit(*p.FakeIP) + "'\n")
-	}
-	if p.BlockQUIC != nil {
-		b.WriteString("set openweir.main.block_quic='" + bit(*p.BlockQUIC) + "'\n")
-	}
-	for k, v := range map[string]string{"update_hours": strconv.Itoa(p.UpdateHours), "enabled": bit(p.Enabled), "method": p.Method, "dns": bit(p.DNS), "ipv6": bit(p.IPv6), "dns_mode": dnsMode(p.DNSMode)} {
+	for k, v := range map[string]string{"update_hours": strconv.Itoa(p.UpdateHours), "enabled": bit(p.Enabled), "method": p.Method, "dns": bit(p.DNS)} {
 		b.WriteString("set openweir.main." + k + "='" + v + "'\n")
 	}
-	// Options from earlier builds that are no longer used: bypass lists and the separate DNS takeover switch.
-	for _, k := range []string{"bypass_ip", "bypass_port", "bypass_source", "proxy_ip", "dns_intercept"} {
+	// Options from earlier builds that are no longer user settings: bypass lists, the DNS takeover
+	// and DNS mode switches, IPv6, common ports and the tuning switches that now always use the
+	// recommended value.
+	for _, k := range []string{"bypass_ip", "bypass_port", "bypass_source", "proxy_ip", "dns_intercept", "ipv6", "common_ports",
+		"dns_mode", "local_proxy", "block_quic", "fake_ip", "sniff", "tcp_concurrent", "unified_delay"} {
 		b.WriteString("delete openweir.main." + k + "\n")
 	}
 	b.WriteString("delete openweir.main.network\n")
@@ -171,14 +132,6 @@ func SavePreferences(ctx context.Context, p Preferences) error {
 		return errors.New("could not save network preferences")
 	}
 	return nil
-}
-
-// dnsMode defaults to dnsmasq forwarding.
-func dnsMode(v string) string {
-	if v == "firewall" {
-		return v
-	}
-	return "dnsmasq"
 }
 
 var upstreamPattern = regexp.MustCompile(`^((https|tls|quic)://[A-Za-z0-9.:\[\]_-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~/-]*)?|[0-9.]+|[0-9A-Fa-f:]+)$`)

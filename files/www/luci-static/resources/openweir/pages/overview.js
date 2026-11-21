@@ -474,33 +474,6 @@ export async function overview(ui) {
 					await ui.refresh();
 				}),
 			),
-			field(
-				'运行模式',
-				segment(
-					ui,
-					'运行模式',
-					[
-						['tproxy', 'TProxy'],
-						['tun', 'TUN'],
-					],
-					prefs.method,
-					(v) => saveP({ method: v }),
-				),
-			),
-			field(
-				'DNS 模式',
-				segment(
-					ui,
-					'DNS 模式',
-					[
-						['real', '真实 IP'],
-						['fake', 'Fake-IP'],
-					],
-					prefs.dns && prefs.fake_ip !== false ? 'fake' : 'real',
-					// Fake-IP answers come from the core, so it turns DNS protection on.
-					(v) => saveP(v === 'fake' ? { fake_ip: true, dns: true } : { fake_ip: false }),
-				),
-			),
 		),
 	);
 	if (intent.mode === 'global') {
@@ -631,10 +604,8 @@ export async function overview(ui) {
 				(v) => savePolicy({ default_direct: v === 'direct' }),
 			),
 		),
-		updateRow('IPv6 代理', toggle('IPv6 代理', prefs.ipv6, (v) => saveP({ ipv6: v })),
-			h('small', { class: 'ow-muted' }, prefs.ipv6 ? 'IPv6 也走代理' : '关闭时设备改走 IPv4')),
-		updateRow('代理路由器自身', toggle('代理路由器自身', prefs.local_proxy !== false, (v) => saveP({ local_proxy: v })),
-			h('small', { class: 'ow-muted' }, '路由器本机流量也分流')),
+		updateRow('大陆 IP 直连', toggle('大陆 IP 直连', !!prefs.bypass_cn, (v) => saveP({ bypass_cn: v })),
+			h('small', { class: 'ow-muted' }, '国内 IP 不经内核，速度更快')),
 		h(
 			'div',
 			{ class: 'ow-row' },
@@ -646,9 +617,6 @@ export async function overview(ui) {
 		'DNS',
 		updateRow('DNS 保护', toggle('DNS 保护', prefs.dns, (v) => saveP({ dns: v })),
 			h('small', { class: 'ow-muted' }, '由内核解析，防污染')),
-		prefs.dns ? h('div', { class: 'ow-row' }, '本地 DNS 劫持',
-			segment(ui, '本地 DNS 劫持', [['dnsmasq', 'Dnsmasq 转发'], ['firewall', '防火墙转发']],
-				prefs.dns_mode || 'dnsmasq', (v) => saveP({ dns_mode: v }))) : null,
 		upstreamRow(ui, '国内域名', '直连解析', 'domestic', prefs.dns_domestic, (v) => saveP({ dns_domestic: v })),
 		upstreamRow(ui, '其他域名', '经代理加密解析', 'foreign', prefs.dns_foreign, (v) => saveP({ dns_foreign: v })),
 		h('div', { class: 'ow-row' },
@@ -661,20 +629,6 @@ export async function overview(ui) {
 				ui.notify('已清除残留配置并重启 dnsmasq');
 			}, 'ow-link')),
 	);
-	// A compact two-column card; each note moves into the label's tooltip.
-	const compactToggle = (title, note, value, fn) =>
-		h('div', { class: 'ow-row', title: note }, title, toggle(title, value, fn));
-	const tuning = card(
-		'连接优化',
-		h('div', { class: 'ow-tuning' },
-			compactToggle('域名嗅探', '按真实域名连接', prefs.sniff !== false, (v) => saveP({ sniff: v })),
-			compactToggle('屏蔽 QUIC', '改用 TCP，分流更准', prefs.block_quic !== false, (v) => saveP({ block_quic: v })),
-			compactToggle('并发连接', '多地址同时连接', prefs.tcp_concurrent !== false, (v) => saveP({ tcp_concurrent: v })),
-			compactToggle('统一延迟', '测速不计握手', prefs.unified_delay !== false, (v) => saveP({ unified_delay: v })),
-			compactToggle('大陆 IP 直连', '国内 IP 在防火墙直连，不经内核；Fake-IP 下仅对直接用 IP 的连接生效', !!prefs.bypass_cn, (v) => saveP({ bypass_cn: v })),
-			compactToggle('仅常用端口', '只代理网页、邮件等常用端口，其余直连', !!prefs.common_ports, (v) => saveP({ common_ports: v })),
-		),
-	);
 	const failOpen = prefs.fail_open !== false;
 	const failOpenLabel = '代理无响应时回退直连';
 	const fallback = toggle(failOpenLabel, failOpen, (v) => saveP({ fail_open: v }));
@@ -682,7 +636,7 @@ export async function overview(ui) {
 	// Recommended settings; the LAN networks, start at boot and the update period are kept.
 	const restoreDefaults = () => {
 		const d = ui.dialog('恢复默认设置', h('div', { class: 'ow-stack' },
-			h('p', {}, '运行模式、DNS、连接优化和节点自动切换将恢复为推荐的默认值，代理会重启一次。'),
+			h('p', {}, 'DNS、大陆 IP 直连、故障回退和节点自动切换将恢复为推荐的默认值，代理会重启一次。'),
 			h('small', { class: 'ow-muted' }, '订阅、规则、设备设置和管理的局域网不受影响。'),
 			h('div', { class: 'ow-row' },
 				ui.button('取消', () => d.close()),
@@ -691,9 +645,7 @@ export async function overview(ui) {
 						await ui.run('policy', { revision: intent.revision, policy: { ...policy, auto_failover: undefined } });
 						await ui.refresh();
 						await ui.run('save_network', { args: {
-							...prefs, method: 'tproxy', ipv6: true, dns: true, dns_mode: 'dnsmasq', fake_ip: true,
-							local_proxy: true, fail_open: true, block_quic: true, sniff: true, tcp_concurrent: true, unified_delay: true,
-							bypass_cn: false, common_ports: false,
+							...prefs, dns: true, fail_open: true, bypass_cn: false,
 							dns_domestic: builtinDNS.domestic, dns_foreign: builtinDNS.foreign,
 						} });
 						await ui.refresh();
@@ -745,8 +697,8 @@ export async function overview(ui) {
 		'div',
 		{ class: 'ow-dashboard' },
 		hero,
-		// Subscriptions and connection tuning share the column beside the hero.
-		h('div', { class: 'ow-side-stack' }, sourceCard(ui), tuning),
+		// Subscriptions share the column beside the hero.
+		h('div', { class: 'ow-side-stack' }, sourceCard(ui)),
 		devices.unavailable ? card('设备',empty('局域网接口尚未就绪'),ui.button('重新检测',ui.refresh,'ow-link')) : deviceCard(ui, devices.items),
 		proxyPrefs,
 		dnsPrefs,

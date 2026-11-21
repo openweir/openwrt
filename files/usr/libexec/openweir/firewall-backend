@@ -3,7 +3,6 @@
 bypass4='0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4'
 bypass6='::/128 ::1/128 fe80::/10 fc00::/7 ff00::/8'
 # Ports kept when only common ports are proxied: web, mail, chat, DNS-over-TLS and Cloudflare's alternates.
-common_ports='21, 22, 53, 80, 123, 143, 194, 443, 465, 587, 853, 993, 995, 998, 2052, 2053, 2082, 2083, 2086, 2095, 2096, 5222, 5228, 5229, 5230, 8080, 8443, 8880, 8888, 8889'
 
 # Networks the router is directly attached to (LAN, WAN and delegated IPv6
 # prefixes), so public LAN addresses and the upstream modem stay direct.
@@ -264,7 +263,7 @@ firewall_capabilities() {
  purpose=${1:-all}
  info=$(firewall_status); echo "$info"; kind=${info%% *}
  selected=$(uci -q get openweir.main.method || echo tproxy)
- v6=$(uci -q get openweir.main.ipv6 || echo 1); echo "ipv6 $v6"
+ v6=0; if ip -6 route get 2400:3200::1 >/dev/null 2>&1; then v6=1; fi; echo "ipv6 $v6"
  dns=$(uci -q get openweir.main.dns || echo 0)
  dns_intercept=0
  if [ "$dns" = 1 ]; then dns_intercept=1; fi

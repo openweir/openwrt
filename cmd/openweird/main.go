@@ -120,6 +120,8 @@ func serve(ctx context.Context) error {
 	defer stopJobs()
 	s := &app{clockEvents: make(chan struct{}, 1), m: m, sys: sys, ctx: jobsCtx, stopJobs: stopJobs, busy: map[string]bool{}, jobs: map[string]job{}}
 	s.journalError = s.loadJobs()
+	// The capture method follows the firewall; store it before the first takeover.
+	router.EnsureMethod(ctx)
 	// Read UCI only once per boot. Restarting the manager on the same boot retains
 	// the last explicit operation, including a manual stop.
 	if _, err := os.Stat(router.RunDir + "/boot-policy"); os.IsNotExist(err) {
@@ -321,7 +323,12 @@ func (s *app) handle(ctx context.Context, method string, r request) (any, error)
 		return map[string]bool{"accepted": true}, nil
 	case "save_network":
 		var prefs router.Preferences
-		if json.Unmarshal(r.Args, &prefs) != nil || prefs.Validate() != nil {
+		if json.Unmarshal(r.Args, &prefs) != nil {
+			return nil, errors.New("invalid network preferences")
+		}
+		// The capture method is chosen automatically at startup, not by the page.
+		prefs.Method = router.StoredMethod(ctx)
+		if prefs.Validate() != nil {
 			return nil, errors.New("invalid network preferences")
 		}
 		return s.runJob("uci", "save_network", func(ctx context.Context) (json.RawMessage, error) {

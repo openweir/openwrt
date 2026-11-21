@@ -321,9 +321,9 @@ func TestDNSSplitsDomesticAndProxiedUpstreams(t *testing.T) {
 		t.Fatal("sniffer override or QUIC block missing")
 	}
 	off, on := false, true
-	a, b := Preferences{BlockQUIC: &on}, Preferences{BlockQUIC: &off}
+	a, b := Preferences{BypassCN: &on}, Preferences{BypassCN: &off}
 	if a.SameNetwork(b) || !a.SameNetwork(Preferences{}) {
-		t.Fatal("QUIC switch must restart only when it changes")
+		t.Fatal("China IP switch must restart only when it changes")
 	}
 }
 

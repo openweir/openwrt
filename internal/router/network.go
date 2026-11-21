@@ -143,14 +143,17 @@ func interfacePrefixes(n netifStatus) ([]netip.Prefix, error) {
 // ipv6Uplink reports whether a socket without a chosen source address, as the core opens, can
 // route to the IPv6 internet. Source-specific defaults ("default from <prefix>", common with
 // PPPoE on OpenWrt) do not count. Without such a route the core would dial unreachable IPv6
-// node and site addresses, so IPv6 proxying stays off. The lookup sends no traffic.
+// node and site addresses, so IPv6 is taken over only with such a route; there is no
+// user setting. The lookup sends no traffic.
 func ipv6Uplink(ctx context.Context) bool {
 	return exec.CommandContext(ctx, "ip", "-6", "route", "get", "2400:3200::1").Run() == nil
 }
 func networkOptions(ctx context.Context) (Network, error) {
-	n := Network{Method: uci(ctx, "method"), DNS: uci(ctx, "dns") == "1", Family6: uci(ctx, "ipv6") != "0" && ipv6Uplink(ctx), BlockQUIC: uci(ctx, "block_quic") != "0", FakeIP: uci(ctx, "fake_ip") != "0", DNSMasq: uci(ctx, "dns_mode") != "firewall",
-		NoSniff: uci(ctx, "sniff") == "0", NoConcurrent: uci(ctx, "tcp_concurrent") == "0", NoUnifiedDelay: uci(ctx, "unified_delay") == "0",
+	n := Network{Method: uci(ctx, "method"), DNS: uci(ctx, "dns") == "1", Family6: ipv6Uplink(ctx), BlockQUIC: true,
 		Domestic: upstreams(uci(ctx, "dns_domestic"), DomesticDNS), Foreign: upstreams(uci(ctx, "dns_foreign"), ForeignDNS), LAN: map[string][]netip.Prefix{}}
+	// Sniffing, concurrent dialing, unified delay and the QUIC block are always on, and
+	// fake-ip follows DNS protection: these are not user settings.
+	n.FakeIP = n.DNS
 	for _, name := range strings.Fields(uci(ctx, "network")) {
 		if strings.Trim(name, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") != "" {
 			return n, errors.New("invalid managed LAN")

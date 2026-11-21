@@ -160,16 +160,6 @@ fake_ping() {
  [ "$fake_ip" = 1 ] || return 0
  echo "  meta nfproto ipv4 ip daddr 198.18.0.0/16 icmp type echo-request meta mark set (meta mark & 0xffff0000) | $mark accept" >>"$batch"
 }
-# Unused ports skip the core. With fake-ip every port to the fake range must still reach it.
-port_filter() {
- [ "$only_common" = 1 ] || return 0
- if [ "$fake_ip" = 1 ]; then
-  echo "  meta nfproto ipv4 ip daddr != 198.18.0.0/16 meta l4proto { tcp, udp } th dport != { $common_ports } return" >>"$batch"
- else
-  echo "  meta nfproto ipv4 meta l4proto { tcp, udp } th dport != { $common_ports } return" >>"$batch"
- fi
- echo "  meta nfproto ipv6 meta l4proto { tcp, udp } th dport != { $common_ports } return" >>"$batch"
-}
 # Interface changes (PPPoE redial, a new IPv6 prefix) only replace the attached-network sets.
 refresh() {
  [ -f "$state/owned" ] && [ "$(cat "$state/backend" 2>/dev/null)" = fw4 ] && owned_table || return 0
@@ -234,7 +224,7 @@ release_active() {
   restored=0
   for _ in 1 2 3 4; do if verify_direct; then restored=1; break; fi; sleep 1; done
   [ "$restored" = 1 ] || { fail_stage direct_lan_probe; return 1; }
-  rm -f "$state/owned" "$state/armed" "$state/interfaces" "$state/dns-probed" "$state/dns-firewall" "$state/ipv6" "$state/management.json" "$state/backend"
+  rm -f "$state/owned" "$state/armed" "$state/interfaces" "$state/dns-probed" "$state/ipv6" "$state/management.json" "$state/backend"
  fi
  return "$failure"
 }
@@ -289,11 +279,7 @@ probe_interfaces() {
     ip "-$family" route get "$addr" | grep -Eq '^local ' || return 1
     if [ -e "$state/dns-probed" ]; then
      if [ "$phase" = active ]; then
-      server=$addr
-      if [ -e "$state/dns-firewall" ]; then
-       if [ "$family" = 4 ]; then server="$addr:19764"; else server="[$addr]:19764"; fi
-      fi
-      nslookup -retry=1 -timeout=1 -type=A probe.openweir.invalid "$server" 2>/dev/null | grep -Eq '^Address([[:space:]][0-9]+)?:[[:space:]]+192\.0\.2\.1([[:space:]]|$)' || return 1
+      nslookup -retry=1 -timeout=1 -type=A probe.openweir.invalid "$addr" 2>/dev/null | grep -Eq '^Address([[:space:]][0-9]+)?:[[:space:]]+192\.0\.2\.1([[:space:]]|$)' || return 1
      else
       nslookup -retry=1 -timeout=1 -type=A localhost "$addr" >/dev/null 2>&1 || return 1
      fi
@@ -409,30 +395,26 @@ apply() {
  openweir-net management-record
  names="";for dev in $interfaces; do names="$names, \"$dev\""; done
  names=${names#, }
- v6=$(uci -q get openweir.main.ipv6 || echo 1)
- # The core's sockets pick no source address, so source-specific defaults ("default from ...")
- # do not reach the IPv6 internet for it. Without a usable route, keep devices on IPv4.
- [ "$v6" != 1 ] || ip -6 route get 2400:3200::1 >/dev/null 2>&1 || v6=0
+ # IPv6 is taken over automatically when the core can reach the IPv6 internet. Its sockets
+ # pick no source address, so source-specific defaults ("default from ...") do not count;
+ # without a usable route devices stay on IPv4. Keep in step with ipv6Uplink in network.go.
+ v6=0; if ip -6 route get 2400:3200::1 >/dev/null 2>&1; then v6=1; fi
  dns=$(uci -q get openweir.main.dns || echo 0)
  dns_intercept=0
  # As in OpenClash, DNS protection also takes over lookups devices send to other resolvers.
  if [ "$dns" = 1 ]; then dns_intercept=1; fi
  if [ "$v6" = 1 ]; then touch "$state/ipv6"; families='ipv4, ipv6';else rm -f "$state/ipv6"; families=ipv4;fi
  # Proxying the router itself needs nftables and the core's group id.
- local_proxy=$(uci -q get openweir.main.local_proxy || echo 1)
+ local_proxy=1
  core_gid=$(awk -F: '$1 == "openweir-core" { print $3 }' /etc/group)
  # With fake-ip the router's own lookups also return fake addresses, which only
  # the core can serve, so router traffic to that range is always captured.
  fake_ip=0
- if [ "$dns" = 1 ] && [ "$(uci -q get openweir.main.fake_ip)" != 0 ]; then fake_ip=1; fi
+ if [ "$dns" = 1 ]; then fake_ip=1; fi
  if [ "$backend" != fw4 ] || [ -z "$core_gid" ] || [ "$core_gid" = 0 ]; then local_proxy=0; fake_ip=0; fi
- # Firewall-level shortcuts need nftables sets; on fw3 the core still routes these itself.
+ # The China IP shortcut needs nftables sets; on fw3 the core still routes these itself.
  bypass_cn=$(uci -q get openweir.main.bypass_cn || echo 0)
- only_common=$(uci -q get openweir.main.common_ports || echo 0)
- if [ "$backend" != fw4 ]; then bypass_cn=0; only_common=0; fi
- # LAN lookups reach the core through dnsmasq (default) or a firewall redirect to its port.
- dns_mode=$(uci -q get openweir.main.dns_mode || echo dnsmasq)
- if [ "$dns_mode" != firewall ] || [ "$backend" != fw4 ] || [ "$dns" != 1 ]; then dns_mode=dnsmasq; fi
+ if [ "$backend" != fw4 ]; then bypass_cn=0; fi
  if [ "$backend" = fw3 ]; then
   stage=legacy_capabilities
   legacy_families=4
@@ -477,7 +459,6 @@ EOF
   ip daddr @cn4 return
   ip6 daddr @cn6 return
 EOF
- port_filter
  if [ "$method" = tun ]; then
   echo '  meta nfproto ipv4 icmp type echo-request meta mark set (meta mark & 0xffff0000) | 0x4f57 return' >>"$batch"
   [ "$v6" != 1 ] || echo '  meta nfproto ipv6 icmpv6 type echo-request meta mark set (meta mark & 0xffff0000) | 0x4f57 return' >>"$batch"
@@ -486,18 +467,9 @@ EOF
   echo "  meta l4proto { tcp, udp } meta mark set (meta mark & 0xffff0000) | 0x4f57 tproxy to :$port accept" >>"$batch"
  fi
  echo ' }' >>"$batch"
- if [ "$dns_mode" = firewall ]; then
-  # Both families: the core answers AAAA itself according to the IPv6 setting.
-  if [ "$dns_intercept" = 1 ]; then targets='{ local, unicast }'; else targets=local; fi
-  cat >>"$batch" <<EOF
- chain lan_dns {
-  type nat hook prerouting priority dstnat - 1; policy accept;
-  iifname { $names } fib daddr type $targets meta l4proto { tcp, udp } th dport 53 redirect to :19764
- }
-EOF
  # Lock devices to the router's DNS over both families, even when IPv6 is not proxied: an IPv6
  # resolver from router advertisements would otherwise answer with poisoned or AAAA records.
- elif [ "$dns_intercept" = 1 ]; then
+ if [ "$dns_intercept" = 1 ]; then
   cat >>"$batch" <<EOF
  chain lan_dns {
   type nat hook prerouting priority dstnat - 1; policy accept;
@@ -532,21 +504,19 @@ EOF
   ip daddr @cn4 return
   ip6 daddr @cn6 return
 EOF
-  port_filter
   cat >>"$batch" <<EOF
   meta l4proto { tcp, udp } meta mark set (meta mark & 0xffff0000) | $mark
  }
 EOF
  fi
- if [ "$method" = tproxy ] || [ "$dns_mode" = firewall ]; then
-  {
-   echo ' chain listener_guard {'
-   echo '  type filter hook input priority filter - 1; policy accept;'
-   echo '  iifname "lo" return'
-   [ "$dns_mode" != firewall ] || echo "  iifname != { $names } meta l4proto { tcp, udp } th dport 19764 reject"
-   [ "$method" != tproxy ] || echo "  meta l4proto { tcp, udp } th dport $port meta mark & 0xffff != $mark reject"
-   echo ' }'
-  } >>"$batch"
+ if [ "$method" = tproxy ]; then
+  cat >>"$batch" <<EOF
+ chain listener_guard {
+  type filter hook input priority filter - 1; policy accept;
+  iifname "lo" return
+  meta l4proto { tcp, udp } th dport $port meta mark & 0xffff != $mark reject
+ }
+EOF
  fi
  echo '}' >>"$batch"
  set_elements local4 "$(local_prefixes 4)"
@@ -572,9 +542,7 @@ EOF
  stage=ipv4_route
  add_routes 4
  if [ "$v6" = 1 ]; then stage=ipv6_route; add_routes 6; fi
- rm -f "$state/dns-firewall"
- if [ "${dns_mode:-dnsmasq}" = firewall ]; then touch "$state/dns-firewall" "$state/dns-probed"
- elif [ "$dns" = 1 ]; then stage=dns_reload; dns_setup; touch "$state/dns-probed"
+ if [ "$dns" = 1 ]; then stage=dns_reload; dns_setup; touch "$state/dns-probed"
  elif [ "$v6" != 1 ]; then stage=dns_reload; dns_setup || true; fi
  stage=firewall_apply
  if [ "$backend" = fw3 ]; then

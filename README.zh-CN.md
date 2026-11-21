@@ -45,17 +45,17 @@ packaging/openwrt/install-test.sh 24.10.8 aarch64_generic dist/feed/aarch64_gene
 
 安装时会在临时目录展开架构载荷，再将匹配本机 CPU 的管理程序写入持久存储。每个正式版安装包对应一个 OpenWrt 架构（`DISTRIB_ARCH`），请按路由器架构下载（发布说明里列出了每个 OpenWrt 架构对应的包）。临时目录需预留约“安装包大小 + 1 MiB”；若安装包也在 `/tmp`，还需计入安装包本身。管理程序按架构约占 8–10 MiB。LuCI 的「检查更新」从官方 GitHub Release 读取对应文件的 SHA-256，核对下载内容后即可一键安装。[打包细节](packaging/openwrt/README.md)
 
-在概览的「检查运行环境」中可查看当前防火墙和所选模式缺少的能力。TProxy 需要 fw4 的 nftables 或 fw3 的 iptables-legacy 支持透明代理，开启 IPv6 时也检查 IPv6 规则。TUN 模式需要可用的 TUN 设备。固件自带的驱动、兼容的 ip 命令、BusyBox 锁工具和 dnsmasq-full 均可直接使用。
+运行模式自动选择：防火墙支持透明代理时用 TProxy，否则用 TUN。在概览的「检查运行环境」中可查看当前防火墙缺少的能力。TProxy 需要 fw4 的 nftables 或 fw3 的 iptables-legacy 支持透明代理，路由器有 IPv6 出口时也检查 IPv6 规则。TUN 模式需要可用的 TUN 设备。固件自带的驱动、兼容的 ip 命令、BusyBox 锁工具和 dnsmasq-full 均可直接使用。
 
 开启「DNS 保护」后，dnsmasq 继续解析本地域名，并将上游查询交给 mihomo。和 OpenClash 一样，所选局域网设备发往其他 DNS 服务器的 TCP 和 UDP 53 查询也会统一交给网关解析。fw3 接管 IPv6 DNS 还需 `ip6tables-mod-nat`。停止服务后，路由器恢复原上游并移除重定向。
 
-内核用国内 DoH 解析中国大陆域名，其余域名经代理走加密 DNS，被污染的结果不会影响分流。两组服务器可在概览的「DNS」卡片中管理。开启 DNS 保护时默认使用 Fake-IP，可在运行模式旁切换回真实 IP。域名嗅探按真实域名连接；默认屏蔽 QUIC，让浏览器改用 TCP；未接管 IPv6 时，dnsmasq 会隐藏 AAAA 记录，设备保持使用 IPv4。在 fw4 上，路由器自身的流量默认也按规则分流，可在「代理路由器自身」中关闭。
+内核用国内 DoH 解析中国大陆域名，其余域名经代理走加密 DNS，被污染的结果不会影响分流。两组服务器可在概览的「DNS」卡片中管理。开启 DNS 保护时使用 Fake-IP，内核不返回 AAAA 记录，设备访问代理域名时使用 IPv4。内核始终按嗅探到的真实域名连接、屏蔽 QUIC 让浏览器改用 TCP，并开启并发连接和统一延迟。在 fw4 上，路由器自身的流量也按规则分流。这些都是固定的推荐设置，无需配置。
 
-路由器直连的网段（LAN、WAN 子网和下发的 IPv6 前缀）始终直连，接口变化时自动更新。在 fw4 上，「连接优化」还可以让大陆 IP 和非常用端口在防火墙直接直连、不经内核；两项默认关闭，Fake-IP 模式下大陆 IP 直连只对直接用 IP 发起的连接生效。
+路由器直连的网段（LAN、WAN 子网和下发的 IPv6 前缀）始终直连，接口变化时自动更新。在 fw4 上，「大陆 IP 直连」还可以让大陆 IP 在防火墙直接直连、不经内核；默认关闭，Fake-IP 模式下只对直接用 IP 发起的连接生效。
 
-局域网的 DNS 请求默认经 dnsmasq 转发给内核。「本地 DNS 劫持」可切换为防火墙转发：53 端口直接转给内核，dnsmasq 保持原样，`.lan` 等本地域名仍由 dnsmasq 回答。和 OpenClash 一样，接管期间 dnsmasq 不缓存结果，停止后恢复原缓存设置。DNS 卡片还提供「清理 DNS 缓存」（内核和 dnsmasq）和「Dnsmasq 修复」（清除 OpenWeir 残留配置并重启 dnsmasq）。
+局域网的 DNS 请求经 dnsmasq 转发给内核，`.lan` 等本地域名仍由 dnsmasq 回答。和 OpenClash 一样，接管期间 dnsmasq 不缓存结果，停止后恢复原缓存设置。DNS 卡片还提供「清理 DNS 缓存」（内核和 dnsmasq）和「Dnsmasq 修复」（清除 OpenWeir 残留配置并重启 dnsmasq）。
 
-切换代理模式、订阅、规则、分组或故障切换时，内核原地重载配置，不会断开。更改运行模式、DNS、IPv6、局域网或内核时会重新接管。
+切换代理模式、订阅、规则、分组或故障切换时，内核原地重载配置，不会断开。更改 DNS、局域网或内核，或 IPv6 出口出现或消失时会重新接管。
 
 按域名指定的上游 DNS 可以继续使用，例如仅将公司域名交给内网 DNS 解析。受管的 dnsmasq 实例若有显式默认上游、动态上游列表，或与未接管实例共用配置目录，「检查运行环境」会指出冲突。启用「失败时回退直连」后，若连续探测到 mihomo 的本地 DNS 无法应答，守护进程会恢复直连 DNS。
 
