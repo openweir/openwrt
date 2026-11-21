@@ -382,9 +382,11 @@ func (m *Manager) reload(ctx context.Context) error {
 	e := r.Reload(c, i)
 	end()
 	if e != nil {
-		if ctx.Err() == nil {
+		// A change of listeners or firewall needs a restart by design, and the restart logs
+		// itself; only a reload that failed is worth a line.
+		if ctx.Err() == nil && !errors.Is(e, ErrNeedsRestart) {
 			if recorder, ok := m.backend.(interface{ Records() *Records }); ok {
-				recorder.Records().Log("service", "info", "reload fallback "+e.Error())
+				recorder.Records().Log("service", "warn", "reload fallback "+e.Error())
 			}
 		}
 		return errHotFallback

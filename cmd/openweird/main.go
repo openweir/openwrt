@@ -607,6 +607,9 @@ func (s *app) runJob(lane, action string, fn func(context.Context) (json.RawMess
 			s.sys.Records().Log("task", "warn", "task_journal_write_failed")
 		}
 		s.mu.Unlock()
+		if quietTask(action, e) {
+			return
+		}
 		event := action + " " + j.Stage + " " + id
 		if action == bootstrapAction && j.Error != "" || response.Error != "" && response.Error == j.Error {
 			event += " " + j.Error
@@ -617,6 +620,16 @@ func (s *app) runJob(lane, action string, fn func(context.Context) (json.RawMess
 	}()
 	return map[string]string{"task": id}, nil
 }
+
+// quietTask keeps routine outcomes out of the log, as OpenClash does: latency tests and
+// connectivity checks show their results where they were started, and a settings change
+// already logs itself as a service event. Failures are still logged, except a test that a
+// newer one cancelled.
+func quietTask(action string, e error) bool {
+	routine := strings.HasPrefix(action, "latency/") || action == "health_check"
+	return routine && (e == nil || errors.Is(e, context.Canceled)) || e == nil && strings.HasPrefix(action, "configure/")
+}
+
 func call(ctx context.Context, method string, data []byte) ([]byte, error) {
 	t := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
 		return (&net.Dialer{}).DialContext(ctx, "unix", socket)

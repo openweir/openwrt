@@ -519,7 +519,9 @@ func (s *System) startMonitor(i Intent, n Network, gid int, key string) {
 	if macs := policyMACs(i); len(macs) > 0 {
 		go s.watchDevices(stream, macs, n, gid)
 	}
-	if i.Policy.RecordConnections != nil && !*i.Policy.RecordConnections {
+	recording := i.Policy.RecordConnections == nil || *i.Policy.RecordConnections
+	s.records.Record(recording)
+	if !recording {
 		return
 	}
 	go func() {

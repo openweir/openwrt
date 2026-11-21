@@ -23,7 +23,7 @@ func (r *Records) Routes(limit int) []RouteObservation {
 	seen := map[string]bool{}
 	for j := len(r.connections) - 1; j >= 0 && len(out) < min(max(limit, 1), 32); j-- {
 		c := r.connections[(j+r.pos)%len(r.connections)]
-		if c.Outbound == "" || c.Created != 0 && c.Created < r.routeSince {
+		if c.Outbound == "" || c.Result == "failed" || c.Created != 0 && c.Created < r.routeSince {
 			continue
 		}
 		var chain []string

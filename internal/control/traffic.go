@@ -6,8 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
-	"net/url"
+	"regexp"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -37,7 +38,7 @@ type tracked struct {
 	Upload, Download      uint64
 	Start                 time.Time
 	Chains                []string
-	Metadata              struct{ Network, Host, SourceIP, DestinationIP, SourcePort, DestinationPort string }
+	Metadata              struct{ Network, Host, SourceIP, DestinationIP, DestinationPort string }
 }
 
 func join(host, port string) string {
@@ -52,7 +53,8 @@ func (t tracked) connection() Connection {
 	if dest == "" {
 		dest = m.DestinationIP
 	}
-	r := Connection{ID: t.ID, Source: join(m.SourceIP, m.SourcePort), Destination: join(dest, m.DestinationPort), Network: m.Network, Rule: t.Rule, Result: "routed", Chain: t.Chains}
+	// The device is its address; the source port only tells one connection from the next.
+	r := Connection{ID: t.ID, Source: m.SourceIP, Destination: join(dest, m.DestinationPort), Network: m.Network, Rule: t.Rule, Result: "routed", Chain: t.Chains}
 	if t.RulePayload != "" {
 		r.Rule += "," + t.RulePayload
 	}
@@ -70,6 +72,30 @@ func (t tracked) connection() Connection {
 	}
 	return r
 }
+
+// dialFailure matches the core's report of a connection it could not open:
+// [TCP] dial <outbound> [(match <rule>/<payload>)] <source>[(<process>)] --> <destination> error: <cause>
+var dialFailure = regexp.MustCompile(`\[(TCP|UDP)\] dial (\S+) (?:\(match ([^/]+)/(.*?)\) )?(\S+?)(?:\(.*?\))? --> (\S+) error: `)
+
+// FailedDial reads a core log line that reports a failed dial as a closed connection record.
+// The cause stays out: it can carry node addresses and free-form server text.
+func FailedDial(line string, now int64) (Connection, bool) {
+	m := dialFailure.FindStringSubmatch(line)
+	if m == nil {
+		return Connection{}, false
+	}
+	source := m[5]
+	if host, _, e := net.SplitHostPort(source); e == nil {
+		source = host
+	}
+	out := fromCore(m[2])
+	c := Connection{Source: source, Destination: m[6], Network: strings.ToLower(m[1]), Outbound: out, Chain: []string{out}, Created: now, Closed: now, Result: "failed"}
+	if m[3] != "" {
+		c.Rule = m[3] + "," + m[4]
+	}
+	return c, true
+}
+
 func (c Client) Connections(ctx context.Context, record func(Connection)) error {
 	previous := map[string]Connection{}
 	tick := time.NewTicker(time.Second)
@@ -105,31 +131,6 @@ func (c Client) Connections(ctx context.Context, record func(Connection)) error 
 	}
 }
 
-type Log struct {
-	Level   string `json:"type"`
-	Payload string `json:"payload"`
-}
-
-func (c Client) Logs(ctx context.Context, level string, consume func(Log)) error {
-	if !slices.Contains([]string{"debug", "info", "warning", "error", "silent"}, level) {
-		return errors.New("invalid log level")
-	}
-	r, e := c.request(ctx, "GET", "/logs?level="+url.QueryEscape(level), nil)
-	if e != nil {
-		return e
-	}
-	defer r.Close()
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 4096), 64<<10)
-	for scanner.Scan() {
-		var line Log
-		if e = json.Unmarshal(scanner.Bytes(), &line); e != nil {
-			return e
-		}
-		consume(line)
-	}
-	return scanner.Err()
-}
 func (c Client) Traffic(ctx context.Context) (Traffic, error) {
 	var snapshot struct {
 		Memory      uint64

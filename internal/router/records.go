@@ -2,11 +2,14 @@ package router
 
 import (
 	"bytes"
-	"github.com/openweir/openwrt/internal/control"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/openweir/openwrt/internal/control"
 )
 
 const recordLimit = 512
@@ -23,6 +26,8 @@ type Records struct {
 	minTime     int64
 	routeSince  int64  // the current core started; earlier routes name another configuration
 	source      string // the subscription the running core uses
+	recording   bool   // connection records are on; see Policy.RecordConnections
+	failures    uint64 // numbers the records of failed dials, which the core gives no ID
 	mu          sync.Mutex
 	events      []Event
 	connections []control.Connection
@@ -158,10 +163,20 @@ func corePermissionReason(line string) string {
 var connectionNoise = map[string]bool{"connection_refused": true, "connection_reset": true, "connection_closed": true,
 	"io_timeout": true, "deadline_exceeded": true, "dial_failed": true, "handshake_failed": true}
 
+// ordinary marks core warnings that normal operation produces all the time (OpenClash shows
+// them only in its raw core log): one connection or packet failing, which the core retries
+// and reports up to ten times per connection, a group starting its health check after
+// repeated failures (node failover follows up on those) and the core stopping. Failed dials
+// become connection records; the rest are dropped.
+var ordinary = []string{"[tcp] dial ", "[udp] dial ", "[udp] resolve ip error", "[udp] destination ip not valid",
+	"[udp] dosniff error", "[udp] parse metadata failed", "[metadata] ", "[icmp] failed to connect", "isn't a *net.udpaddr",
+	"nil *net.udpaddr", "activate health check", "mihomo shutting down"}
+
 func (s *logSink) recordLine(line string) {
 	if strings.Contains(line, "\x1b") {
 		line = logColor.ReplaceAllString(line, "")
 	}
+	original := line
 	line = strings.ToLower(line)
 	level := "warn"
 	fatal := false
@@ -187,12 +202,19 @@ func (s *logSink) recordLine(line string) {
 		}
 		break
 	}
+	denied := strings.Contains(line, "permission denied") || strings.Contains(line, "operation not permitted")
+	if !fatal && !denied && slices.ContainsFunc(ordinary, func(n string) bool { return strings.Contains(line, n) }) {
+		if c, ok := control.FailedDial(original, time.Now().UnixMilli()); ok {
+			s.r.Failed(c)
+		}
+		return
+	}
 	source := "core"
 	if strings.Contains(line, "dns:") || strings.Contains(line, "dns/") {
 		source = "dns"
 	}
 	reason := "core_diagnostic"
-	if strings.Contains(line, "permission denied") || strings.Contains(line, "operation not permitted") {
+	if denied {
 		reason = corePermissionReason(line)
 	} else {
 		for _, x := range []struct{ needle, reason string }{{"address already in use", "listen_address_in_use"}, {"connection refused", "connection_refused"}, {"network is unreachable", "network_unreachable"}, {"i/o timeout", "io_timeout"}, {"context deadline exceeded", "deadline_exceeded"}, {"no such host", "dns_name_not_found"}, {"certificate", "tls_certificate_error"}, {"handshake", "handshake_failed"}, {"no space left", "disk_full"}, {"invalid config", "invalid_configuration"}, {"failed to create new os thread", "core_thread_creation_failed"}, {"pthread_create failed", "core_thread_creation_failed"},
@@ -207,10 +229,10 @@ func (s *logSink) recordLine(line string) {
 			}
 		}
 	}
-	// A single connection failing at the target is ordinary traffic, already shown in the
-	// connection records; it is informational unless the core itself is going down.
+	// A single connection failing at the target is ordinary traffic; it matters only when the
+	// core itself is going down.
 	if !fatal && connectionNoise[reason] {
-		level = "info"
+		return
 	}
 	if fatal && reason != "core_diagnostic" {
 		s.terminal = reason
@@ -282,6 +304,39 @@ func (r *Records) Observe(c control.Connection) {
 	if c.Created == 0 && c.Destination == "" {
 		return
 	}
+	r.insertLocked(c)
+}
+
+// Record turns the connection records on or off with the running policy.
+func (r *Records) Record(on bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.recording = on
+}
+
+// Failed keeps a connection the core could not open. A device retrying the same destination
+// through the same outbound within a minute updates its last record instead of adding more.
+func (r *Records) Failed(c control.Connection) {
+	c = sliceConnection(c)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if !r.recording {
+		return
+	}
+	for k := range min(32, len(r.connections)) {
+		j := (r.pos + len(r.connections) - 1 - k) % len(r.connections)
+		old := &r.connections[j]
+		if old.Result == "failed" && old.Source == c.Source && old.Destination == c.Destination && old.Outbound == c.Outbound && c.Created-old.Created <= 60000 {
+			old.Closed = c.Closed
+			return
+		}
+	}
+	r.failures++
+	c.ID = "failed:" + strconv.FormatUint(r.failures, 10)
+	r.insertLocked(c)
+}
+
+func (r *Records) insertLocked(c control.Connection) {
 	if set, ok := strings.CutPrefix(c.Rule, "RuleSet,"); ok && set != "" {
 		hit := r.ruleHits[set]
 		if hit == nil && len(r.ruleHits) < ruleHitLimit {
