@@ -85,7 +85,8 @@ var quicBlock = "AND,((NETWORK,UDP),(DST-PORT,443),(NOT,((RULE-SET," + dnsDomest
 
 // Names that must keep real addresses, following OpenClash's filter: local and reserved
 // names, time sync, connectivity checks, STUN and consoles, carrier one-tap login,
-// VoWiFi, router setup pages, Windows domain controllers and Apple software update.
+// VoWiFi, router setup pages, Windows domain controllers, Apple software update and iCloud
+// Private Relay, whose Safari "Hide IP" otherwise fails Cloudflare challenges (OpenClash #4370).
 var fakeIPFilter = []string{
 	"*.lan", "*.local", "*.localdomain", "*.localhost", "*.home.arpa", "*.example", "*.invalid", "*.test", "localhost.ptlink",
 	"localhost.ptlogin2.qq.com", "localhost.sec.qq.com", "localhost.*.weixin.qq.com",
@@ -101,6 +102,7 @@ var fakeIPFilter = []string{
 	"*.router.asus.com", "*.linksys.com", "*.linksyssmartwifi.com", "heartbeat.belkin.com",
 	"PDC._msDCS.*.*", "DC._msDCS.*.*", "GC._msDCS.*.*",
 	"mesu.apple.com", "swscan.apple.com", "swquery.apple.com", "swdownload.apple.com", "swcdn.apple.com", "swdist.apple.com",
+	"mask.icloud.com", "mask-h2.icloud.com", "mask.apple-dns.net",
 	"local.adguard.org", "injections.adguard.org", "resolver1.opendns.com",
 	"probe.openweir.invalid",
 }

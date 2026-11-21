@@ -339,8 +339,15 @@ func TestFakeIPFollowsDNSProtection(t *testing.T) {
 		t.Fatal("fake-ip without DNS protection")
 	}
 	n.DNS = true
-	if c := configForTest(t, i, p, n); c["dns"].(map[string]any)["enhanced-mode"] != "fake-ip" {
+	c := configForTest(t, i, p, n)
+	dns := c["dns"].(map[string]any)
+	if dns["enhanced-mode"] != "fake-ip" {
 		t.Fatal("fake-ip missing")
+	}
+	for _, name := range []string{"mask.icloud.com", "mask-h2.icloud.com", "mask.apple-dns.net"} {
+		if !slices.Contains(dns["fake-ip-filter"].([]any), any(name)) {
+			t.Fatal("iCloud Private Relay gets a fake address:", name)
+		}
 	}
 }
 
