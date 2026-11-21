@@ -156,3 +156,21 @@ jobs:
     uses: ./.github/workflows/package-format.yml
     with:
       format: apk
+  # Publishing runs as part of this workflow, so it uses this commit's workflow files and the
+  # packages this run tested (a workflow_run trigger would run main's copy instead).
+  preview:
+    name: Publish preview
+    if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
+    needs: [core, browser, ipk, apk]
+    permissions:
+      contents: write
+      actions: write
+    uses: ./.github/workflows/preview.yml
+  release:
+    name: Publish release
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    needs: [core, browser, ipk, apk]
+    permissions:
+      contents: write
+      actions: read
+    uses: ./.github/workflows/prepare-release.yml

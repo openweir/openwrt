@@ -1,37 +1,24 @@
-# Previews as GitHub pre-releases: after Router service CI passes on a push to develop, its
-# installers go out as v<VERSION>-preview.<N> (N counts from 1 per version) with package version
-# <VERSION>-r<N>, so testers download them from
-# the release page instead of Actions artifacts. main holds what is to be released and makes the
-# releases (prepare-release.yml). The router's package updater skips pre-releases
-# (packaging/openwrt/package-update), and only the newest preview is kept.
+# Previews as GitHub pre-releases: the last job of Router service CI on a push to develop calls
+# this, so the publishing steps always come from the same commit as the packages. Installers go
+# out as v<VERSION>-preview.<N> with package version <VERSION>-r<N> (N counts from 1 per version);
+# the release then takes the next revision, so each build upgrades the one before it. The
+# router's package updater skips pre-releases, and only the newest preview is kept.
 name: Publish OpenWrt preview
 on:
-  workflow_run:
-    workflows: [Router service CI]
-    branches: [develop]
-    types: [completed]
-permissions:
-  contents: write
-  actions: write
-
-# A newer develop commit supersedes the preview being published.
-concurrency:
-  group: openwrt-preview
-  cancel-in-progress: true
+  workflow_call:
 
 jobs:
   publish:
-    if: >-
-      github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' &&
-      github.event.workflow_run.head_repository.full_name == github.repository
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
     env:
       GH_TOKEN: ${{ github.token }}
-      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+      HEAD_SHA: ${{ github.sha }}
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
           persist-credentials: false
           fetch-depth: 0
       - uses: actions/setup-go@v7
@@ -59,8 +46,6 @@ jobs:
         with:
           pattern: preview-installer-*
           path: dist/preview
-          github-token: ${{ github.token }}
-          run-id: ${{ github.event.workflow_run.id }}
       - name: Verify both tested installers
         if: steps.current.outputs.publish == 'true'
         id: files
