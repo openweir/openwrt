@@ -354,3 +354,74 @@ type memStoreNoop struct{ v Intent }
 
 func (s *memStoreNoop) Load() (Intent, error) { return initial(), nil }
 func (s *memStoreNoop) Save(i Intent) error   { s.v = i; return nil }
+
+type reloadService struct {
+	fakeService
+	reload func(context.Context, Intent) error
+}
+
+func (r reloadService) Reload(c context.Context, i Intent) error { return r.reload(c, i) }
+
+func TestModeChangeReloadsInPlace(t *testing.T) {
+	var mu sync.Mutex
+	starts, reloads, directs := 0, 0, 0
+	f := reloadService{fakeService{
+		start:  func(context.Context, Intent) error { mu.Lock(); starts++; mu.Unlock(); return nil },
+		direct: func(context.Context) error { mu.Lock(); directs++; mu.Unlock(); return nil },
+	}, func(_ context.Context, i Intent) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if i.Mode != "global" {
+			return errors.New("reload got a stale intent")
+		}
+		reloads++
+		return nil
+	}}
+	i := initial()
+	i.Enabled = true
+	i.Source = "primary"
+	m := New(&fakeStore{i: i}, f, Timing{time.Second, 100 * time.Millisecond, 5 * time.Millisecond, time.Second})
+	ctx, end := context.WithCancel(context.Background())
+	defer end()
+	go m.Run(ctx)
+	eventually(t, func() bool { return m.Status().Phase == "running" })
+	mu.Lock()
+	before := directs
+	mu.Unlock()
+	rev, e := m.Change(nil, func(i *Intent) error { i.Mode = "global"; return nil })
+	if e != nil {
+		t.Fatal(e)
+	}
+	eventually(t, func() bool { s := m.Status(); return s.Applied == rev && s.Phase == "running" })
+	mu.Lock()
+	defer mu.Unlock()
+	if starts != 1 || reloads != 1 || directs != before {
+		t.Fatalf("starts=%d reloads=%d directs %d->%d", starts, reloads, before, directs)
+	}
+}
+
+func TestFailedReloadFallsBackToRestart(t *testing.T) {
+	var mu sync.Mutex
+	starts := 0
+	f := reloadService{fakeService{
+		start: func(context.Context, Intent) error { mu.Lock(); starts++; mu.Unlock(); return nil },
+	}, func(context.Context, Intent) error { return ErrNeedsRestart }}
+	i := initial()
+	i.Enabled = true
+	i.Source = "primary"
+	m := New(&fakeStore{i: i}, f, Timing{time.Second, 100 * time.Millisecond, 5 * time.Millisecond, time.Second})
+	ctx, end := context.WithCancel(context.Background())
+	defer end()
+	go m.Run(ctx)
+	eventually(t, func() bool { return m.Status().Phase == "running" })
+	rev, e := m.Change(nil, func(i *Intent) error { i.Mode = "global"; return nil })
+	if e != nil {
+		t.Fatal(e)
+	}
+	eventually(t, func() bool { s := m.Status(); return s.Applied == rev && s.Phase == "running" })
+	mu.Lock()
+	defer mu.Unlock()
+	if starts != 2 {
+		t.Fatalf("expected a full restart, got %d starts", starts)
+	}
+}

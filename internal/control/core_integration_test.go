@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -86,6 +87,17 @@ func TestMihomoController(t *testing.T) {
 	}
 	if err = c.Reload(ctx, path); err != nil {
 		t.Fatal(err)
+	}
+	// A payload reload swaps rules in place without a file the core can read.
+	next := strings.Replace(config, "rules: ['MATCH,Test/A']", "rules: ['DOMAIN,example.com,DIRECT', 'MATCH,Test/A']", 1)
+	if err = c.ReloadPayload(ctx, []byte(next)); err != nil {
+		t.Fatal(err)
+	}
+	if rules, err = c.Rules(ctx); err != nil || len(rules) != 2 {
+		t.Fatal(rules, err)
+	}
+	if err = c.ReloadPayload(ctx, []byte("proxy-groups: [")); err == nil {
+		t.Fatal("invalid payload accepted")
 	}
 	if err = c.CloseConnection(ctx, "00000000-0000-0000-0000-000000000000"); err != nil {
 		t.Fatal(err)

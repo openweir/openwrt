@@ -181,6 +181,12 @@ func (c Client) SetMode(ctx context.Context, mode string) error {
 func (c Client) Reload(ctx context.Context, configPath string) error {
 	return c.call(ctx, "PUT", "/configs?force=true", map[string]string{"path": configPath}, nil)
 }
+
+// ReloadPayload replaces the running configuration without recreating
+// unchanged listeners.
+func (c Client) ReloadPayload(ctx context.Context, config []byte) error {
+	return c.call(ctx, "PUT", "/configs", map[string]string{"payload": string(config)}, nil)
+}
 func (c Client) RefreshRules(ctx context.Context, provider string) error {
 	name, e := segment(provider)
 	if e != nil {

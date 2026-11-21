@@ -46,6 +46,7 @@ type System struct {
 	family6       bool
 	records       *Records
 	recovered     bool
+	applied       *applied
 }
 
 func NewSystem() *System { return &System{records: NewRecords()} }
@@ -190,6 +191,7 @@ func (s *System) stopCore(ctx context.Context) error {
 	s.process = nil
 	s.txn = ""
 	s.cancelMonitor = nil
+	s.applied = nil
 	s.audit = nil
 	s.mu.Unlock()
 	return nil
@@ -492,6 +494,12 @@ applyLoop:
 		s.txn = ""
 		s.mu.Unlock()
 	}
+	s.remember(i, n, caps.Tag)
+	s.startMonitor(i, n, gid, key)
+	return nil
+}
+
+func (s *System) startMonitor(i Intent, n Network, gid int, key string) {
 	stream, end := context.WithCancel(context.Background())
 	audit := &routingAudit{}
 	s.mu.Lock()
@@ -503,7 +511,7 @@ applyLoop:
 		go s.watchDevices(stream, macs, n, gid)
 	}
 	if i.Policy.RecordConnections != nil && !*i.Policy.RecordConnections {
-		return nil
+		return
 	}
 	go func() {
 		client := control.Client{Secret: key}
@@ -512,5 +520,4 @@ applyLoop:
 			_ = ctxWait(stream, time.Second)
 		}
 	}()
-	return nil
 }

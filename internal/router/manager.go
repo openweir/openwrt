@@ -53,10 +53,19 @@ type Manager struct {
 	groups      map[string]GroupResult
 	lanes       map[string]uint64
 	wake        chan struct{}
+	hot         chan struct{}
+	failCancel  context.CancelFunc
 }
 
+// Reloader swaps the running configuration without releasing the network.
+type Reloader interface {
+	Reload(context.Context, Intent) error
+}
+
+var errHotFallback = errors.New("hot reload fell back to restart")
+
 func New(s Store, b Backend, t Timing) *Manager {
-	m := &Manager{instance: newInstance(), store: s, backend: b, timing: t, wake: make(chan struct{}, 1), groups: map[string]GroupResult{}, lanes: map[string]uint64{}}
+	m := &Manager{instance: newInstance(), store: s, backend: b, timing: t, wake: make(chan struct{}, 1), hot: make(chan struct{}, 1), groups: map[string]GroupResult{}, lanes: map[string]uint64{}}
 	v, e := s.Load()
 	if errors.Is(e, os.ErrNotExist) {
 		v = initial()
@@ -113,7 +122,11 @@ func (m *Manager) Change(expected *uint64, edit func(*Intent) error) (uint64, er
 	if e := m.store.Save(i); e != nil {
 		return 0, e
 	}
+	old := m.state.Intent
 	m.state.Intent = i
+	if m.hotLocked(old, i) {
+		return i.Revision, nil
+	}
 	if m.cancel != nil {
 		m.cancel()
 	}
@@ -122,6 +135,22 @@ func (m *Manager) Change(expected *uint64, edit func(*Intent) error) (uint64, er
 	default:
 	}
 	return i.Revision, nil
+}
+
+// hotLocked queues an in-place reload when the core keeps running in a proxy
+// mode on both sides of the change.
+func (m *Manager) hotLocked(old, next Intent) bool {
+	if _, ok := m.backend.(Reloader); !ok || m.state.Phase != "running" || m.cancel == nil {
+		return false
+	}
+	if !old.Enabled || !next.Enabled || old.Mode == "direct" || next.Mode == "direct" {
+		return false
+	}
+	select {
+	case m.hot <- struct{}{}:
+	default:
+	}
+	return true
 }
 func (m *Manager) phase(p string, fail bool, e error) {
 	m.mu.Lock()
@@ -246,42 +275,12 @@ func (m *Manager) Run(ctx context.Context) {
 			}
 		}
 		if e == nil && attempt.Err() == nil {
-			m.mu.Lock()
-			if i.Revision == m.state.Intent.Revision {
-				m.groups = map[string]GroupResult{}
-				for group, node := range i.Choices[i.Source] {
-					if (group == Global && i.Mode == "global") || (group != Global && i.Mode == "smart") {
-						r := GroupResult{Saved: node, State: "saved", Revision: i.Revision}
-						if seen, ok := actual[group]; ok {
-							r.Applied = seen
-							if seen == node {
-								r.State = "applied"
-							} else {
-								r.State = "failed"
-								r.Error = "core returned another member"
-							}
-						}
-						m.groups[i.Source+"\x00"+group] = r
-					}
-				}
-				if recorder, ok := m.backend.(interface{ Records() *Records }); ok {
-					recorder.Records().Log("service", "info", "running")
-				}
-				m.state.Phase = "running"
-				m.state.RunningSince = time.Now().UnixMilli()
-				m.state.FailOpen = false
-				m.state.Applied = i.Revision
-				m.state.Problem = ""
-			}
-			m.mu.Unlock()
-			if i.Policy.AutoFailover {
-				if sys, ok := m.backend.(interface{ Client() control.Client }); ok {
-					go m.failoverLoop(attempt, sys.Client(), i.Source, i.Mode)
-				}
-			}
+			m.publish(i, actual)
+			m.startFailover(attempt, i)
 			e = m.watch(attempt)
 		}
-		interrupted := attempt.Err() != nil
+		interrupted := attempt.Err() != nil || errors.Is(e, errHotFallback)
+		m.stopFailover()
 		cancel()
 		m.mu.Lock()
 		m.cancel = nil
@@ -311,6 +310,100 @@ func (m *Manager) Run(ctx context.Context) {
 		}
 	}
 }
+
+// publish records the running revision and the group selections the core reports.
+func (m *Manager) publish(i Intent, actual map[string]string) {
+	m.mu.Lock()
+	if i.Revision == m.state.Intent.Revision {
+		m.groups = map[string]GroupResult{}
+		for group, node := range i.Choices[i.Source] {
+			if (group == Global && i.Mode == "global") || (group != Global && i.Mode == "smart") {
+				r := GroupResult{Saved: node, State: "saved", Revision: i.Revision}
+				if seen, ok := actual[group]; ok {
+					r.Applied = seen
+					if seen == node {
+						r.State = "applied"
+					} else {
+						r.State = "failed"
+						r.Error = "core returned another member"
+					}
+				}
+				m.groups[i.Source+"\x00"+group] = r
+			}
+		}
+		if recorder, ok := m.backend.(interface{ Records() *Records }); ok {
+			if m.state.Phase != "running" {
+				recorder.Records().Log("service", "info", "running")
+			}
+		}
+		// A hot reload keeps the takeover, so the uptime carries on.
+		if m.state.Phase != "running" || m.state.RunningSince == 0 {
+			m.state.RunningSince = time.Now().UnixMilli()
+		}
+		m.state.Phase = "running"
+		m.state.FailOpen = false
+		m.state.Applied = i.Revision
+		m.state.Problem = ""
+	}
+	m.mu.Unlock()
+}
+
+func (m *Manager) startFailover(parent context.Context, i Intent) {
+	if !i.Policy.AutoFailover {
+		return
+	}
+	sys, ok := m.backend.(interface{ Client() control.Client })
+	if !ok {
+		return
+	}
+	ctx, cancel := context.WithCancel(parent)
+	m.mu.Lock()
+	m.failCancel = cancel
+	m.mu.Unlock()
+	go m.failoverLoop(ctx, sys.Client(), i.Source, i.Mode)
+}
+func (m *Manager) stopFailover() {
+	m.mu.Lock()
+	if m.failCancel != nil {
+		m.failCancel()
+		m.failCancel = nil
+	}
+	m.mu.Unlock()
+}
+
+// reload applies the latest intent in place; any failure restarts the core.
+func (m *Manager) reload(ctx context.Context) error {
+	m.mu.Lock()
+	i := m.state.Intent.clone()
+	m.mu.Unlock()
+	r := m.backend.(Reloader)
+	c, end := context.WithTimeout(ctx, m.timing.Start)
+	e := r.Reload(c, i)
+	end()
+	if e != nil {
+		if ctx.Err() == nil {
+			if recorder, ok := m.backend.(interface{ Records() *Records }); ok {
+				recorder.Records().Log("service", "info", "reload fallback "+e.Error())
+			}
+		}
+		return errHotFallback
+	}
+	var actual map[string]string
+	if reader, ok := m.backend.(interface {
+		Selected(context.Context) (map[string]string, error)
+	}); ok {
+		read, finish := context.WithTimeout(ctx, 3*time.Second)
+		actual, _ = reader.Selected(read)
+		finish()
+	}
+	m.mu.Lock()
+	m.generation++
+	m.mu.Unlock()
+	m.stopFailover()
+	m.publish(i, actual)
+	m.startFailover(ctx, i)
+	return nil
+}
 func (m *Manager) watch(ctx context.Context) error {
 	ticker := time.NewTicker(m.timing.Heartbeat)
 	defer ticker.Stop()
@@ -319,6 +412,10 @@ func (m *Manager) watch(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case <-m.hot:
+			if e := m.reload(ctx); e != nil {
+				return e
+			}
 		case <-ticker.C:
 			pulse, end := context.WithTimeout(ctx, m.timing.Heartbeat)
 			e := m.backend.Healthy(pulse)
