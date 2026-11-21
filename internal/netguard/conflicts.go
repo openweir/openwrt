@@ -426,8 +426,9 @@ func (c *collector) dns() {
 			if who := owner(p); who != "" {
 				c.add("dnsmasq", who, who)
 			}
-			switch key {
-			case "conf-dir", "conf-file":
+			// Upstreams are not conflicts, even a local resolver (SmartDNS, AdGuard Home): DNS
+			// protection sets LuCI's forwardings aside and dns-directories refuses the rest.
+			if key == "conf-dir" || key == "conf-file" {
 				next, _, _ := strings.Cut(value, ",")
 				if who := owner(next); who != "" {
 					c.add("dnsmasq", who, who)
@@ -437,10 +438,6 @@ func (c *collector) dns() {
 						next = filepath.Join(filepath.Dir(p), next)
 					}
 					todo = append(todo, next)
-				}
-			case "server":
-				if strings.HasPrefix(value, "127.") || strings.HasPrefix(value, "::1#") || strings.HasPrefix(value, "[::1]#") {
-					c.add("dnsmasq", "default upstream uses local resolver", owner(p))
 				}
 			}
 		}

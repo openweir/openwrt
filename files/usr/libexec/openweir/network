@@ -78,12 +78,16 @@ valid_dir() {
  case "$1" in */../*|*/..|*' '*) return 1 ;; esac
  [ -d "$1" ] && [ ! -L "$1" ]
 }
-# As in OpenClash, dnsmasq caches nothing while it forwards to the core: a cached fake-ip
-# answer outliving the core's mapping would point devices at an address nothing serves.
-# The original size is kept in the same dnsmasq section, so whatever keeps the change (a
-# reboot, a sysupgrade that keeps settings) also keeps the way back. Our own save directory
-# leaves anyone else's pending dhcp changes uncommitted.
+# As in OpenClash, dnsmasq caches nothing and forwards nowhere else while it forwards to the
+# core: a cached fake-ip answer outliving the core's mapping would point devices at an address
+# nothing serves, and dnsmasq would keep asking the DNS forwardings set in LuCI (a public
+# resolver, or SmartDNS at 127.0.0.1#5335) around the core. The originals are kept in the same
+# dnsmasq section, so whatever keeps the change (a reboot, a sysupgrade that keeps settings)
+# also keeps the way back. Our own save directory leaves anyone else's pending dhcp changes
+# uncommitted.
 dhcp_uci() { mkdir -p "$state/uci" && uci -q -t "$state/uci" "$@"; }
+nl='
+'
 dns_section() {
  case "$1" in
   /tmp/dnsmasq.d) echo '@dnsmasq[0]' ;;
@@ -94,39 +98,64 @@ dns_section() {
   *) return 1 ;;
  esac
 }
-cache_off() {
+# Matches defaultServer in netguard: no domain, or the catch-all domain #.
+default_server() {
+ case "$1" in /*) case "${1%/*}/" in */#/*) ;; *) return 1 ;; esac ;; esac
+}
+dhcp_takeover() {
  while IFS= read -r dir; do
   sec=$(dns_section "$dir") || continue
   # A takeover that never restored (a crash) already saved the size the user chose.
   dhcp_uci get "dhcp.$sec.openweir_cachesize" >/dev/null ||
    dhcp_uci set "dhcp.$sec.openweir_cachesize=$(dhcp_uci get "dhcp.$sec.cachesize" || echo -)" || return 1
   dhcp_uci set "dhcp.$sec.cachesize=0" || return 1
+  # Forwardings for single domains stay. Each default one is saved before it is removed,
+  # so even a helper killed halfway leaves nothing that the next release cannot put back.
+  servers=$(dhcp_uci -d "$nl" get "dhcp.$sec.server") || continue
+  while IFS= read -r server; do
+   [ -n "$server" ] && default_server "$server" || continue
+   dhcp_uci add_list "dhcp.$sec.openweir_server=$server" && dhcp_uci del_list "dhcp.$sec.server=$server" || return 1
+  done <<EOF
+$servers
+EOF
  done <"$state/dns"
  dhcp_uci commit dhcp
 }
-cache_saved() { dhcp_uci -X show dhcp | grep -q '^dhcp\.[A-Za-z0-9_]*\.openweir_cachesize='; }
-cache_restore() {
+dhcp_saved() { dhcp_uci -X show dhcp | grep -Eq '^dhcp\.[A-Za-z0-9_]*\.openweir_(cachesize|server)='; }
+dhcp_restore() {
  for entry in $(dhcp_uci -X show dhcp | sed -n "s/^dhcp\.\([A-Za-z0-9_]*\)\.openweir_cachesize='\([0-9-]*\)'$/\1=\2/p"); do
   sec=${entry%%=*}; old=${entry#*=}
   case "$old" in ''|*[!0-9]*) dhcp_uci delete "dhcp.$sec.cachesize" || : ;;
    *) dhcp_uci set "dhcp.$sec.cachesize=$old" || return 1 ;; esac
   dhcp_uci delete "dhcp.$sec.openweir_cachesize" || return 1
  done
+ for sec in $(dhcp_uci -X show dhcp | sed -n 's/^dhcp\.\([A-Za-z0-9_]*\)\.openweir_server=.*/\1/p'); do
+  servers=$(dhcp_uci -d "$nl" get "dhcp.$sec.openweir_server") || return 1
+  while IFS= read -r server; do
+   [ -n "$server" ] || continue
+   # One the user added again in LuCI meanwhile stays listed once.
+   dhcp_uci del_list "dhcp.$sec.server=$server" && dhcp_uci add_list "dhcp.$sec.server=$server" || return 1
+  done <<EOF
+$servers
+EOF
+  dhcp_uci delete "dhcp.$sec.openweir_server" || return 1
+ done
  dhcp_uci commit dhcp
 }
 dns_restore() {
  if [ ! -e "$state/dns" ]; then
   # Nothing is recorded, yet a crash or an interrupted upgrade may have left an OpenWeir include
-  # or the cache turned off. Every release, including the one at manager start, clears them.
+  # or the cache and forwardings set aside. Every release, including the one at manager start,
+  # puts them back.
   changed=0
   for f in /tmp/dnsmasq.d/$dnsfile /tmp/dnsmasq.*.d/$dnsfile; do
    if [ -f "$f" ] && grep -Fqx '# OpenWeir managed upstream' "$f"; then rm -f "$f"; changed=1; fi
   done
-  if cache_saved; then cache_restore || return 1; changed=1; fi
+  if dhcp_saved; then dhcp_restore || return 1; changed=1; fi
   [ "$changed" = 0 ] || /etc/init.d/dnsmasq restart || return 1
   return 0
  fi
- cache_restore || return 1
+ dhcp_restore || return 1
  while IFS= read -r dir; do
   [ -d "$dir" ] || continue
   valid_dir "$dir" || return 1
@@ -167,7 +196,7 @@ dns_setup() {
   } >"$tmp"
   chmod 0644 "$tmp"; mv -f "$tmp" "$dir/$dnsfile"
  done <"$state/dns"
- if [ "$dns" = 1 ]; then cache_off || return 1; fi
+ if [ "$dns" = 1 ]; then dhcp_takeover || return 1; fi
  /etc/init.d/dnsmasq restart
 }
 # Append elements to one of our sets in the pending batch, one per line.

@@ -64,3 +64,43 @@ func TestDNSTakeoverUsesEffectiveInstanceConfiguration(t *testing.T) {
 	}
 	check(dir, ownership{dnsDirs: map[string]bool{real: true}})
 }
+
+func TestDNSTakeoverSetsAsideOnlyLuCIForwardings(t *testing.T) {
+	// The network helper maps only the init script's default include directories back to a section.
+	dir, err := os.MkdirTemp("/tmp", "dnsmasq.*.d")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	id := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(dir), "dnsmasq."), ".d")
+	base := t.TempDir()
+	custom := filepath.Join(base, "custom")
+	if err := os.Mkdir(custom, 0700); err != nil {
+		t.Fatal(err)
+	}
+	check := func(main, include, want string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(base, "dnsmasq.conf."+id), []byte("interface=br-lan\n"+main+"conf-dir="+include+"\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		var output bytes.Buffer
+		err := dnsDirectories(filepath.Join(base, "dnsmasq.conf.*"), ownership{}, []string{"br-lan"}, &output)
+		if (err != nil) != strings.HasPrefix(want, "missing ") || strings.TrimSpace(output.String()) != want {
+			t.Fatalf("%q in %s: result %q, error %v, want %q", main, include, output.String(), err, want)
+		}
+	}
+	forwardings := "server=223.5.5.5\nserver=127.0.0.1#5335\nserver=/#/192.0.2.1\nserver=/lan/192.168.1.1\n"
+	check(forwardings, dir, dir)
+	conflict := "missing dns_default_upstream " + id
+	// The takeover moves only the server list; these stay and would answer instead of the core.
+	check("address=/#/192.0.2.1\n", dir, conflict)
+	check("local=/#/\n", dir, conflict)
+	// Forwardings beside a custom include directory would stay beside the core.
+	check(forwardings, custom, conflict)
+	check("server=/lan/192.168.1.1\n", custom, custom)
+	// Another plugin's default upstream cannot be set aside.
+	if err := os.WriteFile(filepath.Join(dir, "plugin.conf"), []byte("server=127.0.0.1#5335\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	check("", dir, conflict)
+}

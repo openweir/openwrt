@@ -12,6 +12,8 @@ uci add_list 'dhcp.@dnsmasq[0].interface=lan'
 uci set 'dhcp.@dnsmasq[0].resolvfile=/tmp/qualification-resolv'
 uci set 'dhcp.@dnsmasq[0].nonwildcard=1'
 uci add_list 'dhcp.@dnsmasq[0].address=/printer.lan/192.168.41.200'
+# A LuCI DNS forwarding, which the takeover sets aside and the release puts back.
+uci add_list 'dhcp.@dnsmasq[0].server=198.18.0.53'
 uci commit dhcp
 /etc/init.d/dnsmasq restart || exit 1
 dnsmasq --interface=eth1 --except-interface=lo --bind-interfaces --conf-file=/dev/null --no-resolv --address=/wire-check.example.org/93.184.216.34 --pid-file=/tmp/wan-dns.pid || exit 1
@@ -60,7 +62,7 @@ for method in tproxy tun; do
  fi
  if /bin/sh -x "$net" release >/tmp/qual-release 2>&1 && check_clean && ! ip -4 rule show | grep -q '^21998:' && ! ip -6 rule show | grep -q '^21998:' && nslookup localhost 192.168.41.1 >/dev/null; then
   report "${method}_release" pass
-  check_dns 93.184.216.34 && report "${method}_dns_restored" pass || report "${method}_dns_restored" failed
+  check_dns 93.184.216.34 && [ "$(uci -q get 'dhcp.@dnsmasq[0].server')" = 198.18.0.53 ] && report "${method}_dns_restored" pass || report "${method}_dns_restored" failed
  else report "${method}_release" failed;tail -65 /tmp/qual-release;nslookup localhost 192.168.41.1;fi
  [ "$method" != tun ] || ip link del owtun0 || true
 done

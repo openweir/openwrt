@@ -226,7 +226,7 @@ try {
 		});
 		await inspect.click();
 		await firewall.getByText('需要处理', {exact:true}).waitFor();
-		assert.match(await firewall.innerText(), /dnsmasq 实例 lan · 已配置默认上游/);
+		assert.match(await firewall.innerText(), /dnsmasq 实例 lan · 存在 OpenWeir 无法自动接管的默认上游/);
 		assert.match(await firewall.innerText(), /fw4 缺少 TProxy 透明代理支持[\s\S]+缺少用于检查 DNS 解析的命令[\s\S]+按流量标记查询路由[\s\S]+kmod-nft-tproxy、nslookup、ip-tiny \/ ip-full/);
 		await page.keyboard.press('Escape');
 		await page.evaluate(() => delete window.model.controls.environment);

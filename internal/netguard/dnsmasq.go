@@ -18,7 +18,7 @@ const upstreamFile = "99-openweir-upstream.conf"
 type dnsInstance struct {
 	includes, excludes, dirs []string
 	seen                     map[string]bool
-	disabled                 bool
+	disabled, forwardings    bool
 	issue                    string
 }
 
@@ -87,7 +87,8 @@ func (d *dnsInstance) readFile(name string, own ownership, depth int) bool {
 		if quoted, ok := strings.CutPrefix(value, "\""); ok && strings.HasSuffix(quoted, "\"") {
 			value = strings.TrimSuffix(quoted, "\"")
 		}
-		switch strings.TrimSpace(key) {
+		key = strings.TrimSpace(key)
+		switch key {
 		case "port":
 			d.disabled = value == "0"
 		case "interface":
@@ -95,7 +96,14 @@ func (d *dnsInstance) readFile(name string, own ownership, depth int) bool {
 		case "except-interface":
 			d.excludes = append(d.excludes, strings.Split(value, ",")...)
 		case "server", "local", "address":
-			if defaultServer(value) {
+			switch {
+			case !defaultServer(value):
+			case depth == 0 && key == "server":
+				// LuCI's DNS forwardings: the init script writes the section's server list only
+				// into the main file, and the takeover sets them aside like OpenClash does.
+				d.forwardings = true
+			default:
+				// Other plugins and hand edits, which the takeover cannot set aside.
 				d.issue = "dns_default_upstream"
 			}
 		case "servers-file":
@@ -178,8 +186,9 @@ func dnsDirectories(pattern string, own ownership, managed []string, out io.Writ
 		return dnsIssue(out, "dns_no_instance", "")
 	}
 	type instance struct {
-		id   string
-		dirs []string
+		id          string
+		dirs        []string
+		forwardings bool
 	}
 	var selected []instance
 	unmanaged := map[string]bool{}
@@ -208,7 +217,7 @@ func dnsDirectories(pattern string, own ownership, managed []string, out io.Writ
 		if d.issue != "" {
 			return dnsIssue(out, d.issue, id)
 		}
-		selected = append(selected, instance{id, d.dirs})
+		selected = append(selected, instance{id, d.dirs, d.forwardings})
 	}
 	if len(selected) == 0 {
 		return dnsIssue(out, "dns_no_instance", "")
@@ -232,6 +241,11 @@ func dnsDirectories(pattern string, own ownership, managed []string, out io.Writ
 		}
 		if chosen == "" {
 			return dnsIssue(out, "dns_include_directory", inst.id)
+		}
+		// The network helper finds the dnsmasq section to set forwardings aside in only from
+		// the default directories (dns_section); elsewhere they would stay beside the core.
+		if inst.forwardings && chosen != "/tmp/dnsmasq.d" && chosen != "/tmp/dnsmasq."+inst.id+".d" {
+			return dnsIssue(out, "dns_default_upstream", inst.id)
 		}
 		if !slices.Contains(dirs, chosen) {
 			dirs = append(dirs, chosen)

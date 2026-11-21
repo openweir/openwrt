@@ -145,9 +145,12 @@ if openweir-net conflicts >/tmp/conflicts; then echo 'foreign rule was ignored';
 jsonfilter -i /tmp/conflicts -e '@.resources[*].kind' | grep -Fxq route
 ip -4 rule del pref 21998 from 192.0.2.41/32 lookup 123
 dnsdir=$(head -1 /var/run/openweir/network/dns)
-printf '%s\n' 'server=127.0.0.1#19764' >"$dnsdir/98-other.conf"
-if openweir-net conflicts >/tmp/conflicts; then echo 'foreign DNS upstream was ignored'; exit 1; fi
-jsonfilter -i /tmp/conflicts -e '@.resources[*].kind' | grep -Fxq dnsmasq
+# A default upstream that another plugin wrote, even to a local resolver, does not stop a start.
+# DNS protection cannot set it aside, so its prerequisites refuse it instead.
+printf '%s\n' 'server=127.0.0.1#5335' >"$dnsdir/98-other.conf"
+openweir-net conflicts
+if /usr/libexec/openweir/network prerequisites >/tmp/requirements; then echo 'foreign DNS upstream was ignored'; exit 1; fi
+grep -q '^missing dns_default_upstream ' /tmp/requirements
 rm "$dnsdir/98-other.conf"
 openweir-net conflicts
 report concurrent_conflict_scan pass

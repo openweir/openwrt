@@ -154,7 +154,7 @@ const diagnosticText = {
     core_file_permission: '内核没有权限访问某个文件',
     handshake_failed: '连接握手失败',
     invalid_configuration: '内核拒绝了配置',
-    dns_default_upstream: '已配置默认上游或全域 DNS 规则。请将它改为按域名转发，或关闭 OpenWeir 的 DNS 保护',
+    dns_default_upstream: '存在 OpenWeir 无法自动接管的默认上游或全域 DNS 规则，通常来自其他插件的配置文件。请将它改为按域名转发，或关闭 OpenWeir 的 DNS 保护',
     dns_servers_file: 'servers-file 可在运行时更换上游，请检查该文件或关闭 OpenWeir 的 DNS 保护',
     dns_dynamic_config: 'conf-script 动态生成 DNS 配置，无法确认上游。可关闭 OpenWeir 的 DNS 保护',
     dns_no_instance: '找不到为所选局域网接口提供解析的 dnsmasq 实例',
