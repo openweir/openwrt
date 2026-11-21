@@ -21,6 +21,8 @@ type Event struct {
 }
 type Records struct {
 	minTime     int64
+	routeSince  int64  // the current core started; earlier routes name another configuration
+	source      string // the subscription the running core uses
 	mu          sync.Mutex
 	events      []Event
 	connections []control.Connection
@@ -303,6 +305,20 @@ func (r *Records) Page(kind string, offset, limit int) any {
 	}
 	return out
 }
+
+// CoreStarted scopes the overview's routes to the core that just started. A different
+// subscription also drops the rule set hit counts: its sets are other lists even when
+// a name repeats. The connection history stays.
+func (r *Records) CoreStarted(source string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.routeSince = time.Now().UnixMilli()
+	if source != r.source {
+		r.ruleHits = map[string]*RuleHit{}
+		r.source = source
+	}
+}
+
 func (r *Records) Clear(kind string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

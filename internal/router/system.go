@@ -374,6 +374,7 @@ func (s *System) Start(ctx context.Context, i Intent) (err error) {
 	processDeath(cmd, n.Method == "tun")
 	// No raw node config or free-form core error can enter diagnostics.
 	coreLog := &logSink{r: s.records}
+	s.records.CoreStarted(i.Source)
 	cmd.Stderr = coreLog
 	cmd.Stdout = coreLog
 	if e = ctx.Err(); e != nil {

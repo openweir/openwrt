@@ -1,6 +1,10 @@
 package router
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/openweir/openwrt/internal/control"
+)
 
 func TestDeniedOperation(t *testing.T) {
 	for in, want := range map[string]string{
@@ -12,5 +16,27 @@ func TestDeniedOperation(t *testing.T) {
 		if got := deniedOperation(in); got != want {
 			t.Errorf("%s\n got %q\nwant %q", in, got, want)
 		}
+	}
+}
+
+func TestRoutesFollowTheRunningCore(t *testing.T) {
+	r := NewRecords()
+	r.connections = append(r.connections, control.Connection{ID: "a", Outbound: "node:old", Chain: []string{"node:old", "group:old"}, Created: 1})
+	if len(r.Routes(6)) != 1 {
+		t.Fatal("route before restart")
+	}
+	r.ruleHits["Streaming"] = &RuleHit{Count: 1}
+	r.CoreStarted("a")
+	if got := r.Routes(6); len(got) != 0 {
+		t.Fatalf("an earlier configuration's route survived: %+v", got)
+	}
+	r.ruleHits["Streaming"] = &RuleHit{Count: 1}
+	r.CoreStarted("a")
+	if len(r.ruleHits) != 1 {
+		t.Fatal("a restart of the same subscription keeps its rule set hits")
+	}
+	r.CoreStarted("b")
+	if len(r.ruleHits) != 0 || len(r.connections) != 1 {
+		t.Fatal("a switch drops rule set hits and keeps the connection history")
 	}
 }
