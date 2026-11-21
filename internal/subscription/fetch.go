@@ -683,11 +683,10 @@ func templateWarningSummary(headers http.Header) string {
 
 func (f Fetcher) Refresh(ctx context.Context, store *Store, id string, file []byte, policy Policy) (candidate Candidate, failure error) {
 	f = f.withEgress()
-	t, r, e := store.begin(ctx, id, policy.ClockRetryGeneration)
+	t, r, e := store.begin(ctx, id, policy.ClockRetryGeneration, policy.Scheduled)
 	if e != nil {
 		return Candidate{}, e
 	}
-	var downloadScope string
 	// Keep only a stable diagnostic code. A newer refresh, logout or account
 	// change always wins and a transport error cannot overwrite its history.
 	defer func() {
@@ -716,6 +715,7 @@ func (f Fetcher) Refresh(ctx context.Context, store *Store, id string, file []by
 			if e := check(r, t); e != nil {
 				return e
 			}
+			before := failureDigest(r)
 			r.LastFailure = reason
 			r.LastTLS = tlsdiag.From(failure)
 			r.ClockRetryGeneration = 0
@@ -723,7 +723,11 @@ func (f Fetcher) Refresh(ctx context.Context, store *Store, id string, file []by
 				r.ClockRetryGeneration = t.Generation
 			}
 			r.LastProvider = FailureProvider(failure)
-			r.LastProviderScope = downloadScope
+			r.LastProviderScope = ""
+			// A retry that fails the same way leaves the record as it was.
+			if failureDigest(r) == before {
+				return errUnchanged
+			}
 			return nil
 		})
 	}()

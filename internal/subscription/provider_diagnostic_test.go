@@ -173,10 +173,10 @@ func TestCertificateFailurePersistsClockRecoveryOnlyForOriginalSource(t *testing
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.begin(ctx, src.ID, first.Generation); err != nil {
+	if _, _, err := store.begin(ctx, src.ID, first.Generation, true); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := store.begin(ctx, src.ID, first.Generation); !errors.Is(err, ErrSuperseded) {
+	if _, _, err := store.begin(ctx, src.ID, first.Generation, true); !errors.Is(err, ErrSuperseded) {
 		t.Fatal("duplicate clock retry", err)
 	}
 	f.ReplacementURL = "https://replacement.test/private"

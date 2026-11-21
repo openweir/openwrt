@@ -58,9 +58,21 @@ type record struct {
 	Current              *Profile            `json:"current,omitempty"`
 	Config               *Source             `json:"config,omitempty"`
 	Previous             *Profile            `json:"previous,omitempty"`
+	// Attempts counts refreshes begun since the last success. With the latest start they
+	// space out the scheduler's retries; begin writes the record anyway.
+	Attempts    int    `json:"attempts,omitempty"`
+	AttemptedAt string `json:"attempted_at,omitempty"`
 }
 
 const maxRecord = 64 << 20
+
+// errUnchanged lets an update leave the record as it is: records hold whole profiles and
+// rule sets, and every write is synced to flash.
+var errUnchanged = errors.New("record unchanged")
+
+func failureDigest(r *record) string {
+	return digest([]any{r.LastFailure, r.LastTLS, r.ClockRetryGeneration, r.LastProvider, r.LastProviderScope})
+}
 
 // A single writer lock covers read, authorization check and publication. All
 // authorization generations and the only two usable snapshots share one commit.
@@ -96,7 +108,9 @@ func (s *Store) updateContext(ctx context.Context, id string, fn func(*record) e
 	} else if e != nil {
 		return e
 	}
-	if e = fn(r); e != nil {
+	if e = fn(r); errors.Is(e, errUnchanged) {
+		return nil
+	} else if e != nil {
 		return e
 	}
 	path := s.path(id)
@@ -198,11 +212,11 @@ func (s *Store) decode(path string, checksum io.Writer) (*record, error) {
 	return &r, nil
 }
 func (s *Store) Begin(id string) (Ticket, error) {
-	t, _, err := s.begin(context.Background(), id, 0)
+	t, _, err := s.begin(context.Background(), id, 0, false)
 	return t, err
 }
 
-func (s *Store) begin(ctx context.Context, id string, retryGeneration uint64) (Ticket, *record, error) {
+func (s *Store) begin(ctx context.Context, id string, retryGeneration uint64, scheduled bool) (Ticket, *record, error) {
 	var t Ticket
 	var snapshot *record
 	e := s.updateContext(ctx, id, func(r *record) error {
@@ -216,6 +230,12 @@ func (s *Store) begin(ctx context.Context, id string, retryGeneration uint64) (T
 			return ErrLoginRequired
 		}
 		r.Generation++
+		// An administrator's refresh starts the retry sequence over.
+		if !scheduled {
+			r.Attempts = 0
+		}
+		r.Attempts++
+		r.AttemptedAt = time.Now().UTC().Format(time.RFC3339)
 		t = Ticket{id, r.Epoch, r.Generation}
 		snapshot = r
 		return nil
@@ -271,6 +291,7 @@ func (s *Store) commit(ctx context.Context, t Ticket, c Candidate, recheck func(
 		r.LastChange = &ChangeCounts{len(c.Changes.Added), len(c.Changes.Removed), len(c.Changes.Groups)}
 		r.Suspended = false
 		r.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+		r.Attempts, r.AttemptedAt = 0, ""
 		r.Generation++
 		return nil
 	})
@@ -497,6 +518,8 @@ func (s *Store) configure(src Source, authenticated bool) error {
 		}
 		r.Generation++
 		r.Config = &src
+		// A changed source deserves a prompt retry.
+		r.Attempts, r.AttemptedAt = 0, ""
 		return nil
 	})
 }
@@ -610,6 +633,7 @@ func (s *Store) Preferences(id string, p Preferences) error {
 		if p.MainlandFallback != nil {
 			return nil
 		}
+		r.Attempts, r.AttemptedAt = 0, ""
 		if p.DownloadChoice != nil {
 			return saveDownloadChoice(r, *p.DownloadChoice)
 		}
@@ -645,6 +669,8 @@ type Status struct {
 	NeedsRefresh     bool                `json:"needs_refresh,omitempty"`
 	LastTLS          *tlsdiag.Diagnostic `json:"last_tls,omitempty"`
 	RetryAfterClock  bool                `json:"-"`
+	Attempts         int                 `json:"-"`
+	AttemptedAt      string              `json:"-"`
 	DownloadOverride bool                `json:"download_override,omitempty"`
 	Usage            *Usage              `json:"usage,omitempty"`
 	LastFailure      string              `json:"last_failure,omitempty"`
@@ -674,7 +700,7 @@ type Status struct {
 }
 
 func statusOf(r *record) Status {
-	st := Status{NeedsRefresh: r.NeedsRefresh, LastTLS: r.LastTLS, RetryAfterClock: r.ClockRetryGeneration != 0 && r.ClockRetryGeneration == r.Generation, LastFailure: r.LastFailure, LastProvider: r.LastProvider, LastChange: r.LastChange, UpdatedAt: r.UpdatedAt, Source: r.Source, Epoch: r.Epoch, Generation: r.Generation, Suspended: r.Suspended, Revoked: r.Revoked, LoginRequired: r.LoginRequired, Ready: r.Current != nil && !r.Revoked && !r.Suspended}
+	st := Status{NeedsRefresh: r.NeedsRefresh, LastTLS: r.LastTLS, RetryAfterClock: r.ClockRetryGeneration != 0 && r.ClockRetryGeneration == r.Generation, Attempts: r.Attempts, AttemptedAt: r.AttemptedAt, LastFailure: r.LastFailure, LastProvider: r.LastProvider, LastChange: r.LastChange, UpdatedAt: r.UpdatedAt, Source: r.Source, Epoch: r.Epoch, Generation: r.Generation, Suspended: r.Suspended, Revoked: r.Revoked, LoginRequired: r.LoginRequired, Ready: r.Current != nil && !r.Revoked && !r.Suspended}
 	if r.Config != nil {
 		st.DownloadOverride = len(r.DownloadMembers) > 0
 		st.Name = publicLabel(r.Config.Name, "Subscription")

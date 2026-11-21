@@ -145,8 +145,23 @@ func (s *app) runRefresh(body json.RawMessage, scheduled bool) (any, error) {
 	return job, err
 }
 
+// retryDelay spaces out a refresh that keeps failing: 15 minutes, doubling up to 6 hours or
+// the update interval if that is shorter. Each attempt rewrites the whole record on flash.
+func retryDelay(attempts int, interval time.Duration) time.Duration {
+	limit := 6 * time.Hour
+	if interval > 0 {
+		limit = min(limit, interval)
+	}
+	return min(15*time.Minute<<min(max(attempts-1, 0), 5), limit)
+}
+
 func dueForRefresh(src subscription.Status, now, attempt time.Time, interval time.Duration) bool {
 	if src.Kind == "file" || src.LoginRequired || src.Revoked || src.Suspended || now.Sub(attempt) < 15*time.Minute {
+		return false
+	}
+	// The record's start date also covers manual attempts and daemon restarts. A date after
+	// now (the clock was set back) leaves only the in-process spacing above.
+	if last, err := time.Parse(time.RFC3339, src.AttemptedAt); err == nil && src.Attempts > 0 && !last.After(now) && now.Sub(last) < retryDelay(src.Attempts, interval) {
 		return false
 	}
 	if src.NeedsRefresh {

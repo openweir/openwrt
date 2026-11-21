@@ -37,6 +37,38 @@ func TestMigrateRemoteSourceEvenWithAutomaticUpdatesDisabled(t *testing.T) {
 	}
 }
 
+func TestFailingRefreshBacksOff(t *testing.T) {
+	for attempts, want := range []time.Duration{0: 15 * time.Minute, 1: 15 * time.Minute, 2: 30 * time.Minute, 3: time.Hour, 4: 2 * time.Hour, 5: 4 * time.Hour, 6: 6 * time.Hour, 7: 6 * time.Hour} {
+		if got := retryDelay(attempts, 24*time.Hour); got != want {
+			t.Fatal(attempts, got)
+		}
+	}
+	if retryDelay(100, 0) != 6*time.Hour || retryDelay(4, time.Hour) != time.Hour || retryDelay(1, time.Hour) != 15*time.Minute {
+		t.Fatal("cap must be six hours or the update interval")
+	}
+	now := time.Now().UTC()
+	src := subscription.Status{Kind: "external", Ready: true, UpdatedAt: now.Add(-48 * time.Hour).Format(time.RFC3339), Attempts: 3, AttemptedAt: now.Add(-50 * time.Minute).Format(time.RFC3339)}
+	if dueForRefresh(src, now, time.Time{}, 24*time.Hour) {
+		t.Fatal("third failure retried before an hour")
+	}
+	if !dueForRefresh(src, now.Add(11*time.Minute), time.Time{}, 24*time.Hour) {
+		t.Fatal("backoff never ends")
+	}
+	src.NeedsRefresh, src.Ready = true, false
+	if dueForRefresh(src, now, time.Time{}, 0) {
+		t.Fatal("migration retries skip the backoff")
+	}
+	// A start date after now means the clock was set back: only the in-process spacing applies.
+	src.AttemptedAt = now.Add(time.Hour).Format(time.RFC3339)
+	if !dueForRefresh(src, now, time.Time{}, 0) || dueForRefresh(src, now, now.Add(-time.Minute), 0) {
+		t.Fatal("future start date not handled")
+	}
+	src.Attempts, src.AttemptedAt = 0, ""
+	if !dueForRefresh(src, now, now.Add(-16*time.Minute), 0) {
+		t.Fatal("successful source delayed")
+	}
+}
+
 func TestManualRefreshPreemptsOnlySameSource(t *testing.T) {
 	var work refreshWork
 	parent := context.Background()
