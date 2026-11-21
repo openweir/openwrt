@@ -264,7 +264,7 @@ firewall_capabilities() {
  purpose=${1:-all}
  info=$(firewall_status); echo "$info"; kind=${info%% *}
  selected=$(uci -q get openweir.main.method || echo tproxy)
- v6=$(uci -q get openweir.main.ipv6 || echo 1); echo "ipv6 $v6"
+ v6=$(uci -q get openweir.main.ipv6 || echo 0); echo "ipv6 $v6"
  dns=$(uci -q get openweir.main.dns || echo 0)
  dns_intercept=0
  if [ "$dns" = 1 ] && [ "$(uci -q get openweir.main.dns_intercept)" = 1 ]; then dns_intercept=1; fi

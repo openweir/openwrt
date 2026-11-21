@@ -1,7 +1,7 @@
 config router 'main'
  option enabled '0'
  option method 'tproxy'
- option ipv6 '1'
+ option ipv6 '0'
  option dns '1'
  option dns_intercept '0'
  option dns_mode 'dnsmasq'

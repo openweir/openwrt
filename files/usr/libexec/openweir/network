@@ -393,7 +393,7 @@ apply() {
  openweir-net management-record
  names="";for dev in $interfaces; do names="$names, \"$dev\""; done
  names=${names#, }
- v6=$(uci -q get openweir.main.ipv6 || echo 1)
+ v6=$(uci -q get openweir.main.ipv6 || echo 0)
  dns=$(uci -q get openweir.main.dns || echo 0)
  dns_intercept=0
  if [ "$dns" = 1 ]; then dns_intercept=$(uci -q get openweir.main.dns_intercept || echo 0); fi

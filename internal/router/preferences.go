@@ -112,7 +112,7 @@ func sameList(a, b []string) bool { return a == nil || b == nil || slices.Equal(
 // An omitted switch keeps its saved value.
 func sameBit(a, b *bool) bool { return a == nil || b == nil || *a == *b }
 func ReadPreferences(ctx context.Context) (Preferences, error) {
-	p := Preferences{Enabled: uci(ctx, "enabled") == "1", Method: uci(ctx, "method"), DNS: uci(ctx, "dns") == "1", IPv6: uci(ctx, "ipv6") != "0", Networks: strings.Fields(uci(ctx, "network"))}
+	p := Preferences{Enabled: uci(ctx, "enabled") == "1", Method: uci(ctx, "method"), DNS: uci(ctx, "dns") == "1", IPv6: uci(ctx, "ipv6") == "1", Networks: strings.Fields(uci(ctx, "network"))}
 	p.UpdateHours, _ = strconv.Atoi(uci(ctx, "update_hours"))
 	p.DNSIntercept = uci(ctx, "dns_intercept") == "1"
 	p.DNSMode = dnsMode(uci(ctx, "dns_mode"))
