@@ -212,7 +212,23 @@ func chinaShortcut(i Intent, n Network) bool { return n.ChinaDirect && i.Mode ==
 
 // fw4Active matches the network helper, which captures the router's own traffic only on fw4.
 func fw4Active(ctx context.Context) bool {
-	return exec.CommandContext(ctx, "nft", "list", "chain", "inet", "fw4", "input").Run() == nil
+	return heldOnFW4(RunDir+"/network", nftTableGone) ||
+		exec.CommandContext(ctx, "nft", "list", "chain", "inet", "fw4", "input").Run() == nil
+}
+
+// heldOnFW4 reports a takeover the helper applied on fw4 whose table is still in place. A
+// stopped fw4 (fw4 flush) leaves that table running alone until fw4 starts and replays it, so
+// it still counts as fw4: otherwise Fake-IP and the China shortcut would flip and restart
+// into a takeover that cannot start without fw4.
+func heldOnFW4(state string, gone func(string) bool) bool {
+	backend, e := os.ReadFile(state + "/backend")
+	if e != nil || strings.TrimSpace(string(backend)) != "fw4" {
+		return false
+	}
+	if _, e = os.Stat(state + "/owned"); e != nil {
+		return false
+	}
+	return !gone("openweir")
 }
 
 // sideRouter reports a side router (旁路由): the preferred IPv4 default route of the main table

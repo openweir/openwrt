@@ -3,6 +3,8 @@ package router
 import (
 	"context"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -43,5 +45,41 @@ func TestBecomingASideRouterNeedsANewTakeover(t *testing.T) {
 	s.observe(ctx, n, nil)
 	if changed, takeover := s.observe(ctx, side, nil); !changed || !takeover {
 		t.Fatal("a notice missed the new side router", changed, takeover)
+	}
+}
+
+func TestStoppedFW4KeepsATakeoverAppliedOnFW4(t *testing.T) {
+	state := t.TempDir()
+	gone := false
+	table := func(name string) bool {
+		if name != "openweir" {
+			t.Fatal(name)
+		}
+		return gone
+	}
+	write := func(name, body string) {
+		if e := os.WriteFile(filepath.Join(state, name), []byte(body), 0600); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if heldOnFW4(state, table) {
+		t.Fatal("no takeover yet")
+	}
+	write("backend", "fw4\n")
+	if heldOnFW4(state, table) {
+		t.Fatal("a backend without ownership")
+	}
+	write("owned", "")
+	if !heldOnFW4(state, table) {
+		t.Fatal("the running takeover on fw4 was not kept")
+	}
+	gone = true
+	if heldOnFW4(state, table) {
+		t.Fatal("a wiped table still counted")
+	}
+	gone = false
+	write("backend", "fw3\n")
+	if heldOnFW4(state, table) {
+		t.Fatal("fw3 counted as fw4")
 	}
 }
