@@ -588,7 +588,9 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 			if _, exists := providers[name]; exists {
 				return nil, errors.New("rule provider name collision")
 			}
-			moved[set.Tag] = name != set.Tag
+			if name != set.Tag {
+				moved[set.Tag] = true
+			}
 			behavior[set.Tag] = set.Behavior
 			providers[name] = obj{"type": "file", "format": format, "behavior": set.Behavior, "path": "./rulesets/" + set.Filename()}
 		}
@@ -601,15 +603,18 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 				routedNames, routedRules = append(routedNames, names...), append(routedRules, filters...)
 			}
 			line, err := nativeRule(r.Match, coreTarget(r.Target))
-			if err == nil {
+			if err == nil && len(moved) > 0 {
 				// References follow the sets that moved, inside logical rules too.
-				rules = append(rules, ruleSetRef.ReplaceAllStringFunc(line, func(ref string) string {
+				line = ruleSetRef.ReplaceAllStringFunc(line, func(ref string) string {
 					m := ruleSetRef.FindStringSubmatch(ref)
 					if tag := strings.TrimSpace(m[2]); moved[tag] {
 						return m[1] + profileSet(tag)
 					}
 					return ref
-				}))
+				})
+			}
+			if err == nil {
+				rules = append(rules, line)
 			}
 			return err
 		}
