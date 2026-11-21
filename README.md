@@ -28,6 +28,10 @@ plan=$(local_apk --simulate "$file") && (
 )
 ```
 
+### Removing and reinstalling
+
+Removing the package (including `opkg install --force-reinstall`) restores direct networking and stops the service, but keeps downloaded kernels, subscriptions, provider accounts and rule sets for the next installation. To delete them as well, run `openweird purge` before removing the package.
+
 ## Build and test
 
 From the repository root, run the following commands with Go and Docker installed.

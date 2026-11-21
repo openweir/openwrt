@@ -146,7 +146,9 @@ stop_service() {
 case "${PKG_UPGRADE:-0}:${1:-remove}" in 1:*|*:upgrade) [ -n "$root" ] || stop_service; exit 0;; esac
 if [ -n "$root" ]; then remove_manager; exit 0; fi
 if [ ! -e "$manager" ] && [ ! -d /var/run/openweir/network ]; then remove_manager; exit 0; fi
-if ! /usr/sbin/openweird uninstall || ! stop_service || ! /usr/sbin/openweird purge; then
+# Removal (also opkg --force-reinstall) restores direct networking only. Kernels, subscriptions,
+# accounts and rule sets stay for the next installation; `openweird purge` removes them by hand.
+if ! /usr/sbin/openweird uninstall || ! stop_service; then
  if command -v apk >/dev/null; then
   /usr/libexec/openweir/package-recovery arm
   echo 'OpenWeir removal recovery is active in /tmp/openweir-recovery' >&2

@@ -28,6 +28,10 @@ plan=$(local_apk --simulate "$file") && (
 )
 ```
 
+### 卸载与重装
+
+卸载插件（包括 `opkg install --force-reinstall`）会恢复直连并停止服务，但保留已下载的内核、订阅、服务商账户和规则集，重新安装后可直接使用。如需一并删除，请在卸载前运行 `openweird purge`。
+
 ## 构建与回归
 
 在仓库根目录使用 Go 和 Docker 执行以下命令。

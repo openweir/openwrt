@@ -170,15 +170,18 @@ FETCH
   for _ in $(seq 1 65); do [ -e /tmp/openweir-recovery/pending ] || break; sleep 1; done
   test ! -e /tmp/openweir-recovery/pending
   test ! -e /tmp/test-dns/99-openweir-upstream.conf && test -f /tmp/test-dns/foreign.conf
-  test ! -e /etc/openweir/kernel/package-upgrade-test
+  # Removal keeps the user's kernels and subscriptions.
+  test "$(cat /etc/openweir/kernel/package-upgrade-test)" = upgrade-state-preserved
   nft list table inet foreign_test >/dev/null
   if nft list table inet openweir >/dev/null 2>&1; then echo 'Owned firewall table survived recovery' >&2; exit 1; fi
   echo 'Verified detached recovery removed the owned DNS upstream and nft table after APK removed the package'
   ;;
  uninstall)
   if command -v apk >/dev/null; then apk del "$name"; else opkg remove "$name"; fi
-  test ! -e /usr/sbin/openweird && test ! -e /usr/libexec/openweir/network && test ! -e /etc/openweir/kernel/package-upgrade-test
+  test ! -e /usr/sbin/openweird && test ! -e /usr/libexec/openweir/network
   test ! -e /usr/libexec/openweir/manager
+  # Removal keeps the user's kernels and subscriptions; only a manual purge deletes them.
+  [ "${2:-}" != preserved ] || test "$(cat /etc/openweir/kernel/package-upgrade-test)" = upgrade-state-preserved
   ;;
  *) exit 2 ;;
 esac

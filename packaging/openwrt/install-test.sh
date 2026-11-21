@@ -89,6 +89,6 @@ if [ "$release" = 25.12.6 ]; then
  docker exec -d "$target" sh -ec 'exec 8>/var/run/openweir/network/lock; flock -x 8; touch /tmp/block-release; while [ -f /tmp/block-release ]; do sleep 1; done'
  docker exec "$target" sh /tmp/check-installed uninstall-with-recovery
 else
- docker exec "$target" sh /tmp/check-installed uninstall
+ docker exec "$target" sh /tmp/check-installed uninstall preserved
 fi
 echo "Verified native package installation, GitHub digest/identity checks, upgrade and removal on OpenWrt $release ($arch)"

@@ -78,7 +78,7 @@ case "${1:-}" in
    fi
    if "$dir/network" release && stop_supervised; then
     if [ ! -e /usr/sbin/openweird ] && [ ! -L /usr/sbin/openweird ] && ! pidof openweird >/dev/null; then
-     rm -rf /etc/openweir/kernel /tmp/openweir/kernel /etc/openweir/mihomo-kernel /etc/openweir/sources /etc/openweir/private /tmp/openweir/mihomo-kernel
+     # Kernels, subscriptions and accounts stay for a later installation.
      rm -f "$manager" "${manager%/*}/.manager.next" "${manager%/*}/.manager.previous" "${manager%/*}/.activate.lock"
      rmdir /usr/libexec/openweir 2>/dev/null || :
      logger -t openweir 'Package removal recovery restored direct networking'
