@@ -238,6 +238,18 @@ direct_rules() {
   echo '  ether saddr @direct_mac meta nfproto ipv6 return'
  else echo '  ether saddr @direct_mac return'; fi
 }
+# fw4 loads this copy of our live table with each start, restart and reload of its ruleset
+# (the ruleset-post include), so the takeover survives them inside fw4's own transaction, and
+# repair puts a wiped table back from it. It is taken from the table after every change, under
+# the fw4 lock. A copy nft rejected would stop fw4 from loading anything, the LAN's NAT
+# included, so one that fails the check is dropped instead: the next change tries again, and
+# a wiped table then waits for the manager's release and restart.
+replay_save() {
+ { echo 'table inet openweir'; echo 'delete table inet openweir'; nft -s list table inet openweir; } >"$state/replay.new" &&
+  nft -c -f "$state/replay.new" && mkdir -p "$state/replay" && mv -f "$state/replay.new" "$state/replay/openweir.nft" && return
+ echo 'OpenWeir: the table copy for fw4 failed its check and is not replayed' >&2
+ rm -rf "$state/replay" "$state/replay.new"
+}
 # Interface changes (PPPoE redial, a new IPv6 prefix) only replace the attached-network sets.
 refresh() {
  [ -f "$state/owned" ] && [ "$(cat "$state/backend" 2>/dev/null)" = fw4 ] && owned_table || return 0
@@ -246,10 +258,11 @@ refresh() {
  { echo 'flush set inet openweir local4'; echo 'flush set inet openweir local6'; } >"$batch"
  set_elements local4 "$(local_prefixes 4)"
  if [ "$v6" = 1 ]; then set_elements local6 "$(local_prefixes 6)"; fi
- # The copy fw4 replays (see apply) follows the live sets; its lock keeps a reload out between.
+ # The fw4 lock keeps a reload out until the replayed copy matches.
  lock_firewall fw4
  nft -f "$batch"
- if [ -d "$state/replay" ]; then mv -f "$batch" "$state/replay/2-local.nft"; fi
+ rm -f "$batch"
+ replay_save
  unlock_firewall
 }
 # An updated China address list replaces the shortcut sets in one transaction. They only
@@ -268,7 +281,8 @@ refresh_cn() {
  # Like refresh: the copy fw4 replays must carry the new lists too.
  lock_firewall fw4
  nft -f "$batch"
- if [ -d "$state/replay" ]; then mv -f "$batch" "$state/replay/3-cn.nft"; fi
+ rm -f "$batch"
+ replay_save
  unlock_firewall
 }
 clean_routes() {
@@ -292,8 +306,8 @@ release_active() {
  failure=0
  if [ -e "$state/fw4" ] || [ "$(cat "$state/backend" 2>/dev/null)" = fw4 ] || { command -v nft >/dev/null && owned_table; }; then
   if lock_firewall fw4; then
-   # fw4 must stop replaying the table (see apply) before it goes.
-   rm -rf "$state/replay" "$state/table.nft"
+   # fw4 must stop replaying the table (see replay_save) before it goes.
+   rm -rf "$state/replay" "$state/replay.new"
    if [ -e "$state/fw4" ]; then remove_fw4 || { failure=1; fail_stage fw4_restore; }; fi
    if ! tables=$(nft list tables); then failure=1; fail_stage firewall_inspection
    elif printf '%s\n' "$tables" | grep -Fqx 'table inet openweir'; then
@@ -657,9 +671,6 @@ EOF
  stage=firewall_prepare
  nft -j list table inet fw4 >/dev/null
  nft -c -f "$batch"
- # The copy fw4 replays each time it loads its ruleset (ruleset-post include): a fw4 restart,
- # reload or stop and start then keeps or brings back the takeover in the same transaction.
- { echo 'table inet openweir'; echo 'delete table inet openweir'; cat "$batch"; } >"$state/table.nft"
  fi
  fail_open=$(uci -q get openweir.main.fail_open || echo 1)
  if [ "$fail_open" = 0 ]; then
@@ -684,9 +695,8 @@ EOF
   lock_firewall fw4
   prepare_fw4
   nft -f "$batch"
-  rm -rf "$state/replay" "$batch"
-  mkdir "$state/replay"
-  mv "$state/table.nft" "$state/replay/1-table.nft"
+  rm -f "$batch"
+  replay_save
  fi
  unlock_firewall
  stage=managed_lan_probe
@@ -725,8 +735,8 @@ repair_fw4() {
  : >"$batch"
  if ! owned_table; then
   # A table of that name we do not own is not ours to replace.
-  ! nft list table inet openweir >/dev/null 2>&1 && [ -s "$state/replay/1-table.nft" ] || return 1
-  cat "$state/replay/"*.nft >>"$batch" || return 1
+  ! nft list table inet openweir >/dev/null 2>&1 && [ -s "$state/replay/openweir.nft" ] || return 1
+  cat "$state/replay/openweir.nft" >>"$batch" || return 1
  fi
  # fw4 replays the allowances itself; this covers rules deleted by hand.
  if [ "$current" = fw4 ] && ! verify_fw4; then
