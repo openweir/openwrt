@@ -529,3 +529,36 @@ func TestGooglePlayNamesTakeTheProxy(t *testing.T) {
 		}
 	}
 }
+
+func TestGooglePlayRuleKeepsTheProfilesOwnRules(t *testing.T) {
+	p := baseProfile(t, "p")
+	p.Local = false
+	const proxy, google = "group:proxy", "group:google"
+	p.Groups = []subscription.Group{{ID: proxy, Kind: "selector", Members: []string{p.Nodes[0].ID}}, {ID: google, Kind: "selector", Members: []string{p.Nodes[1].ID}}}
+	p.Final = proxy
+	p.Rules = []subscription.Rule{
+		{Match: obj{"clash": "GEOSITE,google"}, Target: google},
+		{Match: obj{"clash": "RULE-SET," + subscription.DomesticDomainSet}, RuleSet: subscription.DomesticDomainSet, Target: subscription.Direct},
+		{Match: obj{"clash": "DOMAIN-SUFFIX,example.cn"}, Target: subscription.Direct},
+	}
+	i := initial()
+	i.Source = p.Source
+	n := Network{Method: "tproxy", Resolver: "192.0.2.53"}
+	play := "RULE-SET," + proxiedCNSet + "," + proxy
+	// After the profile's Google group, ahead of its mainland list.
+	rules := configForTest(t, i, p, n)["rules"].([]any)
+	if at := slices.Index(rules, any(play)); at < 1 || rules[at-1] != "GEOSITE,google,"+google || rules[at+1] != "RULE-SET,"+subscription.DomesticDomainSet+",DIRECT" {
+		t.Fatal(rules)
+	}
+	// Without mainland rules, just ahead of the default route.
+	p.Rules = p.Rules[:1]
+	if rules = configForTest(t, i, p, n)["rules"].([]any); rules[len(rules)-2] != play {
+		t.Fatal(rules)
+	}
+	for line, want := range map[string]bool{"GEOSITE,geolocation-cn": true, "GEOSITE,category-games@cn": true, "GEOSITE,geolocation-!cn": false, "GEOIP,CN": true, "GEOIP,US": false,
+		"RULE-SET,geoip-cn": true, "RULE-SET,cncidr": false, "DOMAIN-SUFFIX,cn": false} {
+		if mainlandRule(subscription.Rule{Match: obj{"clash": line}}) != want {
+			t.Fatal(line)
+		}
+	}
+}

@@ -161,6 +161,25 @@ func profileSet(tag string) string {
 
 var ruleSetRef = regexp.MustCompile(`(?i)(RULE-SET\s*,\s*)([^,()]+)`)
 
+// mainlandRule reports whether a profile rule matches by the mainland lists: the bundled
+// sets, a set or GEOSITE category named as a cn one, or GEOIP,CN.
+func mainlandRule(r subscription.Rule) bool {
+	if r.RuleSet == subscription.DomesticDomainSet || r.RuleSet == subscription.DomesticIPSet {
+		return true
+	}
+	line, _ := r.Match["clash"].(string)
+	kind, payload, _ := strings.Cut(line, ",")
+	payload = strings.ToLower(strings.TrimSpace(payload))
+	switch strings.ToUpper(strings.TrimSpace(kind)) {
+	case "GEOIP":
+		return payload == "cn"
+	case "GEOSITE", "RULE-SET":
+		// cn, geosite-cn, geolocation-cn, category-games@cn; not geolocation-!cn.
+		return slices.Contains(strings.FieldsFunc(payload, func(c rune) bool { return c == '-' || c == '_' || c == '@' }), "cn")
+	}
+	return false
+}
+
 // Mainland names whose mainland servers refuse traffic that leaves through a foreign exit,
 // which breaks Google Play downloads and updates (OpenClash #5074). They come from OpenClash's
 // default China route pass list and are handled as foreign names: they resolve abroad, keep
@@ -549,18 +568,30 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 				return nil, err
 			}
 		}
-		// Ahead of the profile's mainland rules, mainland names the proxy must carry take the
-		// default route like foreign names. A direct default leaves them to the profile's rules.
+		// Mainland names the proxy must carry take the default route like foreign names, just
+		// ahead of the first profile rule that would send them out as mainland names, or of the
+		// default route; the profile's own rules before that still decide. A direct default
+		// leaves them to the profile's rules.
+		play := ""
 		if end != subscription.Direct && end != subscription.Reject && targets[end] {
-			rules = append(rules, "RULE-SET,"+proxiedCNSet+","+coreTarget(end))
+			play = "RULE-SET," + proxiedCNSet + "," + coreTarget(end)
+		}
+		placePlay := func() {
+			if play != "" {
+				rules, play = append(rules, play), ""
+			}
 		}
 		if p.Local {
+			placePlay()
 			for _, v := range []struct{ tag, behavior string }{{"geosite-cn", "domain"}, {"geoip-cn", "ipcidr"}} {
 				providers[v.tag] = obj{"type": "file", "format": "mrs", "behavior": v.behavior, "path": chinaList(v.tag)}
 				rules = append(rules, "RULE-SET,"+v.tag+",DIRECT")
 			}
 		} else {
 			for _, r := range p.Rules {
+				if mainlandRule(r) {
+					placePlay()
+				}
 				if _, provided := providers[r.RuleSet]; !provided {
 					switch r.RuleSet {
 					case subscription.DomesticIPSet:
@@ -574,6 +605,7 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 				}
 			}
 		}
+		placePlay()
 	}
 	if !targets[end] {
 		return nil, errors.New("default route has no available group")
