@@ -62,7 +62,15 @@ func TestMihomoController(t *testing.T) {
 	if _, err = (Client{"invalid-credential"}).Version(ctx); !errors.Is(err, statusError(401)) {
 		t.Fatal("missing auth enforcement", err)
 	}
-	groups, err := c.Groups(ctx)
+	// The controller can answer before the configuration's groups are loaded.
+	var groups []Group
+	for {
+		groups, err = c.Groups(ctx)
+		if err != nil || len(groups) != 0 || ctx.Err() != nil {
+			break
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
 	if err != nil || len(groups) != 1 || groups[0].Tag != "Test/A" || groups[0].Selected != "@reject" {
 		t.Fatal(groups, err)
 	}
