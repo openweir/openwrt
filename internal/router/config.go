@@ -83,6 +83,13 @@ var digestName = regexp.MustCompile("^[a-f0-9]{64}$")
 const dnsDomesticSet = "openweir-dns-cn"
 const domesticIPSet = "openweir-ip-cn"
 const realIPSet = "openweir-real-ip"
+const proxiedCNSet = "openweir-cn-proxied"
+
+// Mainland names whose mainland servers refuse traffic that leaves through a foreign exit,
+// which breaks Google Play downloads and updates (OpenClash #5074). They come from OpenClash's
+// default China route pass list and are handled as foreign names: they resolve abroad, keep
+// fake addresses under the China shortcut and, in smart mode, take the default route.
+var proxiedCN = []string{"+.googleapis.cn", "+.xn--ngstr-lra8j.com"}
 
 // Mainland names and addresses keep QUIC. The address check uses no-resolve: a connection
 // that only names its host matches by name, without a lookup for the rule.
@@ -120,8 +127,9 @@ var fakeIPFilter = slices.Concat([]string{
 
 // dnsPolicy lists nameserver-policy entries in the order the core tries them, which a map
 // would lose to sorting. Time sync names come first and query plain resolvers through
-// DIRECT, which also keeps them off respect-rules and the proxy.
-func dnsPolicy(resolver string, domestic []string) *yaml.Node {
+// DIRECT, which also keeps them off respect-rules and the proxy. Mainland names the proxy
+// must carry resolve abroad, ahead of the mainland set that may list them.
+func dnsPolicy(resolver string, domestic, foreign []string) *yaml.Node {
 	var plain []string
 	for _, s := range []string{resolver, "223.5.5.5", "119.29.29.29"} {
 		if a, err := netip.ParseAddr(s); err == nil && !a.IsLoopback() && !a.IsUnspecified() {
@@ -133,7 +141,7 @@ func dnsPolicy(resolver string, domestic []string) *yaml.Node {
 	for _, e := range []struct {
 		match   string
 		servers []string
-	}{{strings.Join(ntpNames, ","), plain}, {"rule-set:" + dnsDomesticSet, domestic}} {
+	}{{strings.Join(ntpNames, ","), plain}, {"rule-set:" + proxiedCNSet, foreign}, {"rule-set:" + dnsDomesticSet, domestic}} {
 		list := &yaml.Node{Kind: yaml.SequenceNode}
 		for _, s := range e.servers {
 			list.Content = append(list.Content, str(s))
@@ -185,7 +193,7 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 			// Foreign names resolve over encrypted DNS through the proxy; mainland
 			// names and node hostnames use domestic resolvers so CDNs stay local.
 			"nameserver": foreignDNS, "proxy-server-nameserver": domesticDNS, "direct-nameserver": domesticDNS, "respect-rules": true,
-			"nameserver-policy": dnsPolicy(n.Resolver, domesticDNS), "fake-ip-range": "172.30.254.1/30"},
+			"nameserver-policy": dnsPolicy(n.Resolver, domesticDNS, foreignDNS), "fake-ip-range": "172.30.254.1/30"},
 		"find-process-mode": "off", "tcp-concurrent": true, "unified-delay": true, "keep-alive-interval": 15, "keep-alive-idle": 600}
 	// Dial the sniffed domain, not the address the device chose. Devices may still hold
 	// poisoned answers (IPv6 resolvers from router advertisements, hard-coded DNS, cached
@@ -399,17 +407,20 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 	}
 	// As in OpenClash, QUIC that may be proxied is refused so browsers fall back to TCP, where
 	// sniffing and routing are reliable. Direct devices and mainland destinations keep QUIC,
-	// and so does other UDP on port 443 to the mainland (WireGuard, DTLS).
-	rules = append(rules, quicBlock)
+	// and so does other UDP on port 443 to the mainland (WireGuard, DTLS). Mainland names the
+	// proxy must carry count as foreign.
+	rules = append(rules, "AND,((NETWORK,UDP),(DST-PORT,443),(RULE-SET,"+proxiedCNSet+")),REJECT", quicBlock)
 	providers[domesticIPSet] = obj{"type": "file", "format": "mrs", "behavior": "ipcidr", "path": "./builtin/geoip-cn.mrs"}
+	providers[proxiedCNSet] = obj{"type": "inline", "behavior": "domain", "payload": proxiedCN}
 	// With the China shortcut the firewall sends mainland addresses straight out. As with
 	// OpenClash's China route, mainland names then get real addresses from the domestic
 	// resolvers, so their traffic also leaves in the kernel instead of through the core.
+	// Names the proxy must carry keep fake addresses so they still reach the core.
 	if n.DNS && n.FakeIP && chinaShortcut(i, n) {
 		providers[realIPSet] = obj{"type": "inline", "behavior": "domain", "payload": fakeIPFilter}
 		dns := config["dns"].(obj)
 		dns["fake-ip-filter-mode"] = "rule"
-		dns["fake-ip-filter"] = []string{"RULE-SET," + realIPSet + ",real-ip", "RULE-SET," + dnsDomesticSet + ",real-ip", "MATCH,fake-ip"}
+		dns["fake-ip-filter"] = []string{"RULE-SET," + realIPSet + ",real-ip", "RULE-SET," + proxiedCNSet + ",fake-ip", "RULE-SET," + dnsDomesticSet + ",real-ip", "MATCH,fake-ip"}
 	}
 	if i.Mode == "smart" {
 		for _, set := range p.BinarySets {
@@ -442,6 +453,11 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 			if err := addRule(r.Rule); err != nil {
 				return nil, err
 			}
+		}
+		// Ahead of the profile's mainland rules, mainland names the proxy must carry take the
+		// default route like foreign names. A direct default leaves them to the profile's rules.
+		if end != subscription.Direct && end != subscription.Reject && targets[end] {
+			rules = append(rules, "RULE-SET,"+proxiedCNSet+","+coreTarget(end))
 		}
 		if p.Local {
 			for _, v := range []struct{ tag, behavior string }{{"geosite-cn", "domain"}, {"geoip-cn", "ipcidr"}} {

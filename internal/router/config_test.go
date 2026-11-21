@@ -234,6 +234,7 @@ func TestDeclaredDomesticRuleSetDoesNotDuplicateBundledDefinition(t *testing.T) 
 	def := cfg.Providers[subscription.DomesticIPSet]
 	delete(cfg.Providers, dnsDomesticSet)
 	delete(cfg.Providers, domesticIPSet)
+	delete(cfg.Providers, proxiedCNSet)
 	if len(cfg.Providers) != 1 || def.Path != "./rulesets/"+p.BinarySets[0].Filename() || def.Format != "mrs" || def.Behavior != "ipcidr" {
 		t.Fatal(cfg.Providers)
 	}
@@ -381,7 +382,7 @@ func TestChinaShortcutGivesMainlandNamesRealAddresses(t *testing.T) {
 	n := Network{Method: "tproxy", DNS: true, FakeIP: true, ChinaDirect: true, Resolver: "192.0.2.53"}
 	c := configForTest(t, i, p, n)
 	dns := c["dns"].(map[string]any)
-	filter := []any{"RULE-SET," + realIPSet + ",real-ip", "RULE-SET," + dnsDomesticSet + ",real-ip", "MATCH,fake-ip"}
+	filter := []any{"RULE-SET," + realIPSet + ",real-ip", "RULE-SET," + proxiedCNSet + ",fake-ip", "RULE-SET," + dnsDomesticSet + ",real-ip", "MATCH,fake-ip"}
 	fixed := c["rule-providers"].(map[string]any)[realIPSet].(map[string]any)
 	if dns["fake-ip-filter-mode"] != "rule" || !slices.Equal(dns["fake-ip-filter"].([]any), filter) ||
 		fixed["type"] != "inline" || fixed["behavior"] != "domain" || len(fixed["payload"].([]any)) != len(fakeIPFilter) {
@@ -431,8 +432,9 @@ func TestTimeSyncNamesUsePlainDNS(t *testing.T) {
 	}
 	// Time sync names come before the mainland set, which may list them, and skip the proxy.
 	keys, servers := dnsPolicyEntries(t, data)
-	if len(keys) != 2 || keys[0] != strings.Join(ntpNames, ",") || keys[1] != "rule-set:"+dnsDomesticSet ||
-		!slices.Equal(servers[0], []string{"udp://[2001:db8::53]:53#DIRECT", "udp://223.5.5.5:53#DIRECT", "udp://119.29.29.29:53#DIRECT"}) || !slices.Equal(servers[1], DomesticDNS) {
+	last := len(keys) - 1
+	if keys[0] != strings.Join(ntpNames, ",") || keys[last] != "rule-set:"+dnsDomesticSet ||
+		!slices.Equal(servers[0], []string{"udp://[2001:db8::53]:53#DIRECT", "udp://223.5.5.5:53#DIRECT", "udp://119.29.29.29:53#DIRECT"}) || !slices.Equal(servers[last], DomesticDNS) {
 		t.Fatal(keys, servers)
 	}
 	for _, name := range ntpNames {
@@ -441,8 +443,56 @@ func TestTimeSyncNamesUsePlainDNS(t *testing.T) {
 		}
 	}
 	// Without a WAN resolver the public ones remain.
-	b, _ := yaml.Marshal(obj{"dns": obj{"nameserver-policy": dnsPolicy("", DomesticDNS)}})
+	b, _ := yaml.Marshal(obj{"dns": obj{"nameserver-policy": dnsPolicy("", DomesticDNS, ForeignDNS)}})
 	if _, servers = dnsPolicyEntries(t, b); !slices.Equal(servers[0], []string{"udp://223.5.5.5:53#DIRECT", "udp://119.29.29.29:53#DIRECT"}) {
 		t.Fatal(servers)
+	}
+}
+
+func TestGooglePlayNamesTakeTheProxy(t *testing.T) {
+	p := baseProfile(t, "p")
+	i := initial()
+	i.Source = p.Source
+	i.Policy.Rules = []CustomRule{{ID: "mine", Rule: subscription.Rule{Match: obj{"domain": "play.googleapis.cn"}, Target: subscription.Direct}}}
+	n := Network{Method: "tproxy", DNS: true, FakeIP: true, ChinaDirect: true, Resolver: "192.0.2.53", Foreign: []string{"tls://9.9.9.9"}}
+	cap := kernel.TargetCapabilities{Control: kernel.Controller, TProxy: true}
+	data, err := Compile(i, p, cap, n, strings.Repeat("x", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// They resolve abroad, ahead of the mainland set that may list them.
+	keys, servers := dnsPolicyEntries(t, data)
+	if !slices.Equal(keys, []string{strings.Join(ntpNames, ","), "rule-set:" + proxiedCNSet, "rule-set:" + dnsDomesticSet}) || !slices.Equal(servers[1], n.Foreign) {
+		t.Fatal(keys, servers)
+	}
+	var cfg struct {
+		Providers map[string]obj `yaml:"rule-providers"`
+		Rules     []string
+	}
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	set := cfg.Providers[proxiedCNSet]
+	if set["type"] != "inline" || set["behavior"] != "domain" || !slices.Equal(set["payload"].([]any), []any{"+.googleapis.cn", "+.xn--ngstr-lra8j.com"}) {
+		t.Fatal(set)
+	}
+	// Their QUIC is refused like foreign QUIC, and they take the default route after the
+	// user's rules but ahead of the mainland ones.
+	quic := slices.Index(cfg.Rules, "AND,((NETWORK,UDP),(DST-PORT,443),(RULE-SET,"+proxiedCNSet+")),REJECT")
+	user, route := slices.Index(cfg.Rules, "DOMAIN,play.googleapis.cn,DIRECT"), slices.Index(cfg.Rules, "RULE-SET,"+proxiedCNSet+","+Local)
+	if quic < 0 || quic > slices.Index(cfg.Rules, quicBlock) || user < 0 || route < user || route > slices.Index(cfg.Rules, "RULE-SET,geosite-cn,DIRECT") {
+		t.Fatal(cfg.Rules)
+	}
+	// Global mode proxies everything anyway, and a direct default leaves them to the profile.
+	i.Mode = "global"
+	global := configForTest(t, i, p, n)
+	p.Local, p.Final = false, subscription.Direct
+	i.Mode = "smart"
+	for _, c := range []map[string]any{global, configForTest(t, i, p, n)} {
+		for _, r := range c["rules"].([]any) {
+			if strings.HasPrefix(r.(string), "RULE-SET,"+proxiedCNSet+",") {
+				t.Fatal(r)
+			}
+		}
 	}
 }
