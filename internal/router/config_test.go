@@ -331,6 +331,10 @@ func TestDNSSplitsDomesticAndProxiedUpstreams(t *testing.T) {
 	if c["experimental"].(map[string]any)["quic-go-disable-gso"] != true {
 		t.Fatal("quic-go GSO left on")
 	}
+	// A checked address the router's own programs send through the mixed port stays pinned.
+	if skip := c["sniffer"].(map[string]any)["skip-src-address"]; !slices.Equal(skip.([]any), []any{"127.0.0.0/8", "::1/128"}) {
+		t.Fatal("loopback clients are sniffed", skip)
+	}
 	off, on := false, true
 	a, b := Preferences{BypassCN: &on}, Preferences{BypassCN: &off}
 	if a.SameNetwork(b) || !a.SameNetwork(Preferences{}) {

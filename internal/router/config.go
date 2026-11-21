@@ -267,7 +267,11 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 	config["sniffer"] = obj{"enable": true, "override-destination": true, "parse-pure-ip": true, "force-dns-mapping": true,
 		// Push and smart-home services break when their destination is rewritten.
 		"skip-domain": []string{"+.push.apple.com", "Mijia Cloud", "+.mi.com", "+.xiaomi.net", "dlg.io.mi.com", "+.oray.com", "+.sunlogin.net"},
-		"sniff":       obj{"TLS": obj{"ports": []string{"443", "8443"}}, "HTTP": obj{"ports": []string{"80", "8080-8880"}}, "QUIC": obj{"ports": []string{"443"}}}}
+		// The router's own programs on the mixed port name their destination or pin a checked
+		// address (the subscription fallback); rewriting that to the sniffed name would have
+		// the core resolve it again, open to DNS rebinding onto an internal host.
+		"skip-src-address": []string{"127.0.0.0/8", "::1/128"},
+		"sniff":            obj{"TLS": obj{"ports": []string{"443", "8443"}}, "HTTP": obj{"ports": []string{"80", "8080-8880"}}, "QUIC": obj{"ports": []string{"443"}}}}
 	// quic-go's UDP segmentation offload breaks Hysteria2 and TUIC nodes on OpenWrt 24.10
 	// kernels (apernet/hysteria#1233); OpenClash turns it off as well.
 	config["experimental"] = obj{"quic-go-disable-gso": true}
