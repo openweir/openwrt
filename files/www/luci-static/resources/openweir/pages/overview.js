@@ -624,7 +624,7 @@ export async function overview(ui) {
 		),
 		updateRow('IPv6 代理', toggle('IPv6 代理', prefs.ipv6, (v) => saveP({ ipv6: v })),
 			h('small', { class: 'ow-muted' }, prefs.ipv6 ? 'IPv6 也走代理' : '关闭时设备改走 IPv4')),
-		updateRow('代理路由器自身', toggle('代理路由器自身', !!prefs.local_proxy, (v) => saveP({ local_proxy: v })),
+		updateRow('代理路由器自身', toggle('代理路由器自身', prefs.local_proxy !== false, (v) => saveP({ local_proxy: v })),
 			h('small', { class: 'ow-muted' }, '路由器本机流量也分流')),
 		updateRow('屏蔽 QUIC', toggle('屏蔽 QUIC', prefs.block_quic !== false, (v) => saveP({ block_quic: v })),
 			h('small', { class: 'ow-muted' }, '改用 TCP，分流更准')),

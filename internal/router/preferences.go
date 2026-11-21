@@ -81,7 +81,7 @@ func ReadPreferences(ctx context.Context) (Preferences, error) {
 	p.DNSIntercept = uci(ctx, "dns_intercept") == "1"
 	failOpen := uci(ctx, "fail_open") != "0"
 	p.FailOpen = &failOpen
-	local := uci(ctx, "local_proxy") == "1"
+	local := uci(ctx, "local_proxy") != "0"
 	p.LocalProxy = &local
 	quic := uci(ctx, "block_quic") != "0"
 	p.BlockQUIC = &quic

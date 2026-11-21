@@ -327,7 +327,7 @@ apply() {
  if [ "$dns" = 1 ]; then dns_intercept=$(uci -q get openweir.main.dns_intercept || echo 0); fi
  if [ "$v6" = 1 ]; then touch "$state/ipv6"; families='ipv4, ipv6';else rm -f "$state/ipv6"; families=ipv4;fi
  # Proxying the router itself needs nftables and the core's group id.
- local_proxy=$(uci -q get openweir.main.local_proxy || echo 0)
+ local_proxy=$(uci -q get openweir.main.local_proxy || echo 1)
  core_gid=$(awk -F: '$1 == "openweir-core" { print $3 }' /etc/group)
  # With fake-ip the router's own lookups also return fake addresses, which only
  # the core can serve, so router traffic to that range is always captured.
