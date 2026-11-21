@@ -167,6 +167,14 @@ func (d *dnsInstance) scope(managed []string) (active, shared bool) {
 }
 
 var dnsInstanceID = regexp.MustCompile("^[A-Za-z0-9_-]{1,48}$")
+var uciSection = regexp.MustCompile("^[A-Za-z0-9_]+$")
+
+// The network helper sets forwardings aside only in a section it can tell from the directory,
+// exactly like this (dns_section): the instance's own default one, or the default up to
+// OpenWrt 23.05, which every instance shares, while no other instance exists.
+func forwardingsMovable(dir, id string, instances int) bool {
+	return uciSection.MatchString(id) && (dir == "/tmp/dnsmasq."+id+".d" || dir == "/tmp/dnsmasq.d" && instances == 1)
+}
 
 func dnsIssue(out io.Writer, code, id string) error {
 	if !dnsInstanceID.MatchString(id) {
@@ -242,9 +250,8 @@ func dnsDirectories(pattern string, own ownership, managed []string, out io.Writ
 		if chosen == "" {
 			return dnsIssue(out, "dns_include_directory", inst.id)
 		}
-		// The network helper finds the dnsmasq section to set forwardings aside in only from
-		// the default directories (dns_section); elsewhere they would stay beside the core.
-		if inst.forwardings && chosen != "/tmp/dnsmasq.d" && chosen != "/tmp/dnsmasq."+inst.id+".d" {
+		// Forwardings the helper cannot set aside would stay beside the core.
+		if inst.forwardings && !forwardingsMovable(chosen, inst.id, len(configs)) {
 			return dnsIssue(out, "dns_default_upstream", inst.id)
 		}
 		if !slices.Contains(dirs, chosen) {

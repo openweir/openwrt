@@ -12,7 +12,8 @@ uci add_list 'dhcp.@dnsmasq[0].interface=lan'
 uci set 'dhcp.@dnsmasq[0].resolvfile=/tmp/qualification-resolv'
 uci set 'dhcp.@dnsmasq[0].nonwildcard=1'
 uci add_list 'dhcp.@dnsmasq[0].address=/printer.lan/192.168.41.200'
-# A LuCI DNS forwarding, which the takeover sets aside and the release puts back.
+# A LuCI DNS forwarding. The takeover sets it aside in uci state only: dnsmasq's generated
+# config drops it while /etc/config keeps it.
 uci add_list 'dhcp.@dnsmasq[0].server=198.18.0.53'
 uci commit dhcp
 /etc/init.d/dnsmasq restart || exit 1
@@ -54,7 +55,7 @@ for method in tproxy tun; do
  uci commit openweir
  if /bin/sh -x "$net" apply > /tmp/qual-apply 2>&1; then
   report "${method}_apply" pass
-  check_dns 93.184.216.35 && report "${method}_dns_takeover" pass || report "${method}_dns_takeover" failed
+  check_dns 93.184.216.35 && [ "$(uci -q get 'dhcp.@dnsmasq[0].server')" = 198.18.0.53 ] && ! grep -qx 'server=198.18.0.53' /var/etc/dnsmasq.conf.* && report "${method}_dns_takeover" pass || report "${method}_dns_takeover" failed
   "$net" verify && report "${method}_verify" pass || report "${method}_verify" failed
   "$fw" reload && "$net" verify && check_dns 93.184.216.35 && report "${method}_${fw}_reload" pass || report "${method}_${fw}_reload" failed
  else
@@ -62,7 +63,7 @@ for method in tproxy tun; do
  fi
  if /bin/sh -x "$net" release >/tmp/qual-release 2>&1 && check_clean && ! ip -4 rule show | grep -q '^21998:' && ! ip -6 rule show | grep -q '^21998:' && nslookup localhost 192.168.41.1 >/dev/null; then
   report "${method}_release" pass
-  check_dns 93.184.216.34 && [ "$(uci -q get 'dhcp.@dnsmasq[0].server')" = 198.18.0.53 ] && report "${method}_dns_restored" pass || report "${method}_dns_restored" failed
+  check_dns 93.184.216.34 && grep -qx 'server=198.18.0.53' /var/etc/dnsmasq.conf.* && report "${method}_dns_restored" pass || report "${method}_dns_restored" failed
  else report "${method}_release" failed;tail -65 /tmp/qual-release;nslookup localhost 192.168.41.1;fi
  [ "$method" != tun ] || ip link del owtun0 || true
 done

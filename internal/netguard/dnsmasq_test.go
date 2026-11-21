@@ -104,3 +104,25 @@ func TestDNSTakeoverSetsAsideOnlyLuCIForwardings(t *testing.T) {
 	}
 	check("", dir, conflict)
 }
+
+func TestForwardingsMovableOnlyFromADirectoryThatNamesTheSection(t *testing.T) {
+	for _, test := range []struct {
+		dir, id   string
+		instances int
+		want      bool
+	}{
+		{"/tmp/dnsmasq.cfg01411c.d", "cfg01411c", 2, true},
+		{"/tmp/dnsmasq.d", "cfg01411c", 1, true},
+		// Shared by several instances, it names none of them.
+		{"/tmp/dnsmasq.d", "cfg01411c", 2, false},
+		{"/tmp/dnsmasq.guest.d", "cfg01411c", 1, false},
+		{"/tmp/custom", "cfg01411c", 1, false},
+		// Not a UCI section name.
+		{"/tmp/dnsmasq.lan-2.d", "lan-2", 1, false},
+		{"/tmp/dnsmasq.d", "lan-2", 1, false},
+	} {
+		if got := forwardingsMovable(test.dir, test.id, test.instances); got != test.want {
+			t.Errorf("%s for %s among %d: %v, want %v", test.dir, test.id, test.instances, got, test.want)
+		}
+	}
+}

@@ -81,22 +81,22 @@ valid_dir() {
 # As in OpenClash, dnsmasq caches nothing and forwards nowhere else while it forwards to the
 # core: a cached fake-ip answer outliving the core's mapping would point devices at an address
 # nothing serves, and dnsmasq would keep asking the DNS forwardings set in LuCI (a public
-# resolver, or SmartDNS at 127.0.0.1#5335) around the core. The originals are kept in the same
-# dnsmasq section, so whatever keeps the change (a reboot, a sysupgrade that keeps settings)
-# also keeps the way back. Our own save directory leaves anyone else's pending dhcp changes
-# uncommitted.
-dhcp_uci() { mkdir -p "$state/uci" && uci -q -t "$state/uci" "$@"; }
+# resolver, or SmartDNS at 127.0.0.1#5335) around the core. The changes are uci state: every
+# config_load, the dnsmasq init script's too, reads /var/state over /etc/config, yet nothing
+# commits it. A power loss or a sysupgrade loses them, and LuCI keeps showing the user's own.
+state_uci() { uci -q -P /var/state "$@"; }
 nl='
 '
 dns_section() {
  case "$1" in
-  /tmp/dnsmasq.d) echo '@dnsmasq[0]' ;;
-  /tmp/dnsmasq.*.d) sec=${1#/tmp/dnsmasq.}; sec=${sec%.d}
-   case "$sec" in ''|*[!a-zA-Z0-9_]*) return 1 ;; esac
-   dhcp_uci get "dhcp.$sec" >/dev/null || return 1
-   echo "$sec" ;;
+  # The default up to OpenWrt 23.05, shared by every instance: it names a section only alone.
+  /tmp/dnsmasq.d) set -- /var/etc/dnsmasq.conf.*; [ "$#" = 1 ] && [ -f "$1" ] || return 1
+   sec=${1#/var/etc/dnsmasq.conf.} ;;
+  /tmp/dnsmasq.*.d) sec=${1#/tmp/dnsmasq.}; sec=${sec%.d} ;;
   *) return 1 ;;
  esac
+ case "$sec" in ''|*[!a-zA-Z0-9_]*) return 1 ;; esac
+ [ "$(uci -q get "dhcp.$sec")" = dnsmasq ] && echo "$sec"
 }
 # Matches defaultServer in netguard: no domain, or the catch-all domain #.
 default_server() {
@@ -105,24 +105,39 @@ default_server() {
 dhcp_takeover() {
  while IFS= read -r dir; do
   sec=$(dns_section "$dir") || continue
-  # A takeover that never restored (a crash) already saved the size the user chose.
-  dhcp_uci get "dhcp.$sec.openweir_cachesize" >/dev/null ||
-   dhcp_uci set "dhcp.$sec.openweir_cachesize=$(dhcp_uci get "dhcp.$sec.cachesize" || echo -)" || return 1
-  dhcp_uci set "dhcp.$sec.cachesize=0" || return 1
-  # Forwardings for single domains stay. Each default one is saved before it is removed,
-  # so even a helper killed halfway leaves nothing that the next release cannot put back.
-  servers=$(dhcp_uci -d "$nl" get "dhcp.$sec.server") || continue
+  state_uci set "dhcp.$sec.cachesize=0" || return 1
+  # Forwardings for single domains stay. The option is rewritten whole, list or plain value.
+  servers=$(state_uci -d "$nl" get "dhcp.$sec.server") || continue
+  kept=; aside=0
   while IFS= read -r server; do
-   [ -n "$server" ] && default_server "$server" || continue
-   dhcp_uci add_list "dhcp.$sec.openweir_server=$server" && dhcp_uci del_list "dhcp.$sec.server=$server" || return 1
+   if [ -z "$server" ]; then continue; fi
+   if default_server "$server"; then aside=1; else kept="$kept$server$nl"; fi
   done <<EOF
 $servers
 EOF
+  [ "$aside" = 1 ] || continue
+  state_uci delete "dhcp.$sec.server" || return 1
+  while IFS= read -r server; do
+   [ -z "$server" ] || state_uci add_list "dhcp.$sec.server=$server" || return 1
+  done <<EOF
+$kept
+EOF
  done <"$state/dns"
- dhcp_uci commit dhcp
 }
-dhcp_saved() { dhcp_uci -X show dhcp | grep -Eq '^dhcp\.[A-Za-z0-9_]*\.openweir_(cachesize|server)='; }
+# Sets reload_dns=1 when dnsmasq has to load its settings again.
 dhcp_restore() {
+ before=$(state_uci -X show dhcp) || return 0
+ for sec in $(printf '%s\n' "$before" | sed -n 's/^dhcp\.\([A-Za-z0-9_]*\)=dnsmasq$/\1/p'); do
+  state_uci revert "dhcp.$sec.cachesize" && state_uci revert "dhcp.$sec.server" || return 1
+ done
+ [ "$before" = "$(state_uci -X show dhcp)" ] || reload_dns=1
+ legacy_restore
+}
+# Older versions kept the originals in /etc/config next to the changed values, committed from
+# a save directory of their own.
+dhcp_uci() { mkdir -p "$state/uci" && uci -q -t "$state/uci" "$@"; }
+legacy_restore() {
+ dhcp_uci -X show dhcp | grep -Eq '^dhcp\.[A-Za-z0-9_]*\.openweir_(cachesize|server)=' || return 0
  for entry in $(dhcp_uci -X show dhcp | sed -n "s/^dhcp\.\([A-Za-z0-9_]*\)\.openweir_cachesize='\([0-9-]*\)'$/\1=\2/p"); do
   sec=${entry%%=*}; old=${entry#*=}
   case "$old" in ''|*[!0-9]*) dhcp_uci delete "dhcp.$sec.cachesize" || : ;;
@@ -131,28 +146,29 @@ dhcp_restore() {
  done
  for sec in $(dhcp_uci -X show dhcp | sed -n 's/^dhcp\.\([A-Za-z0-9_]*\)\.openweir_server=.*/\1/p'); do
   servers=$(dhcp_uci -d "$nl" get "dhcp.$sec.openweir_server") || return 1
+  # Those versions copied a plain value without removing it; nothing is listed twice.
+  current=$(dhcp_uci -d "$nl" get "dhcp.$sec.server") || current=
   while IFS= read -r server; do
    [ -n "$server" ] || continue
-   # One the user added again in LuCI meanwhile stays listed once.
-   dhcp_uci del_list "dhcp.$sec.server=$server" && dhcp_uci add_list "dhcp.$sec.server=$server" || return 1
+   printf '%s\n' "$current" | grep -Fqx -- "$server" || dhcp_uci add_list "dhcp.$sec.server=$server" || return 1
   done <<EOF
 $servers
 EOF
   dhcp_uci delete "dhcp.$sec.openweir_server" || return 1
  done
- dhcp_uci commit dhcp
+ dhcp_uci commit dhcp && reload_dns=1
 }
 dns_restore() {
  if [ ! -e "$state/dns" ]; then
   # Nothing is recorded, yet a crash or an interrupted upgrade may have left an OpenWeir include
   # or the cache and forwardings set aside. Every release, including the one at manager start,
   # puts them back.
-  changed=0
+  reload_dns=0
   for f in /tmp/dnsmasq.d/$dnsfile /tmp/dnsmasq.*.d/$dnsfile; do
-   if [ -f "$f" ] && grep -Fqx '# OpenWeir managed upstream' "$f"; then rm -f "$f"; changed=1; fi
+   if [ -f "$f" ] && grep -Fqx '# OpenWeir managed upstream' "$f"; then rm -f "$f"; reload_dns=1; fi
   done
-  if dhcp_saved; then dhcp_restore || return 1; changed=1; fi
-  [ "$changed" = 0 ] || /etc/init.d/dnsmasq restart || return 1
+  dhcp_restore || return 1
+  [ "$reload_dns" = 0 ] || /etc/init.d/dnsmasq restart || return 1
   return 0
  fi
  dhcp_restore || return 1
