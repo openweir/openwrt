@@ -406,7 +406,7 @@
 }
 .ow .ow-modes {
 	display: grid;
-	grid-template-columns: 3fr 2fr;
+	grid-template-columns: 3fr 2fr 2fr;
 	gap: 10px;
 }
 .ow .ow-segment {
@@ -1166,3 +1166,7 @@
 .ow .ow-chip { border: 1px solid var(--ow-line); border-radius: 999px; padding: 4px 12px; background: transparent; font-size: 12px; }
 .ow .ow-chip-on { border-color: var(--ow-accent); color: var(--ow-accent); background: color-mix(in srgb, var(--ow-accent) 10%, transparent); }
 .ow .ow-modal .ow-row > input { flex: 1; min-width: 0; }
+@container (max-width: 1100px) {
+	.ow .ow-modes { grid-template-columns: 1fr 1fr; }
+	.ow .ow-modes > :first-child { grid-column: 1 / -1; }
+}

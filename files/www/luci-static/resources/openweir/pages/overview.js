@@ -477,6 +477,20 @@ export async function overview(ui) {
 					(v) => saveP({ method: v }),
 				),
 			),
+			field(
+				'DNS 模式',
+				segment(
+					ui,
+					'DNS 模式',
+					[
+						['real', '真实 IP'],
+						['fake', 'Fake-IP'],
+					],
+					prefs.dns && prefs.fake_ip ? 'fake' : 'real',
+					// Fake-IP answers come from the core, so it turns DNS protection on.
+					(v) => saveP(v === 'fake' ? { fake_ip: true, dns: true } : { fake_ip: false }),
+				),
+			),
 		),
 	);
 	if (intent.mode === 'global') {
@@ -627,8 +641,6 @@ export async function overview(ui) {
 			h('small', { class: 'ow-muted' }, '由内核解析，防污染')),
 		prefs.dns ? h('div', { class: 'ow-row' }, '接管设备 DNS（端口 53）',
 			toggle('接管设备 DNS（端口 53）', !!prefs.dns_intercept, (v) => saveP({ dns_intercept: v }))) : null,
-		prefs.dns ? updateRow('Fake-IP 模式', toggle('Fake-IP 模式', !!prefs.fake_ip, (v) => saveP({ fake_ip: v })),
-			h('small', { class: 'ow-muted' }, '虚拟地址，连接更快')) : null,
 		upstreamRow(ui, '国内域名', '直连解析', 'domestic', prefs.dns_domestic, (v) => saveP({ dns_domestic: v })),
 		upstreamRow(ui, '其他域名', '经代理加密解析', 'foreign', prefs.dns_foreign, (v) => saveP({ dns_foreign: v })),
 		updateRow('域名嗅探', toggle('域名嗅探', prefs.sniff !== false, (v) => saveP({ sniff: v })),
