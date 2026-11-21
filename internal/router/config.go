@@ -36,6 +36,9 @@ type Network struct {
 	// Compile reads ChinaDirect for the fake-ip filter. ChinaDirect needs nftables sets, so it
 	// is off on fw3; chinaShortcut adds the mode.
 	FailOpen, ChinaDirect bool
+	// SideRouter (旁路由): the IPv4 default route leaves through a managed LAN; the network
+	// helper then masquerades the flows it forwards direct.
+	SideRouter bool
 	// Empty lists mean the built-in upstreams.
 	Domestic, Foreign []string
 }

@@ -486,6 +486,11 @@ func (s *System) Start(ctx context.Context, i Intent) (err error) {
 	if chinaShortcut(i, n) {
 		apply = append(apply, "china")
 	}
+	if n.SideRouter {
+		apply = append(apply, "side-router")
+	} else {
+		apply = append(apply, "main-router")
+	}
 	go func() { _, ae := command(applyCtx, networkHelper, apply...); applied <- ae }()
 	tick := time.NewTicker(2 * time.Second)
 applyLoop:

@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net/netip"
 	"os"
 	"os/exec"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -212,6 +214,29 @@ func chinaShortcut(i Intent, n Network) bool { return n.ChinaDirect && i.Mode ==
 func fw4Active(ctx context.Context) bool {
 	return exec.CommandContext(ctx, "nft", "list", "chain", "inet", "fw4", "input").Run() == nil
 }
+
+// sideRouter reports a side router (旁路由): the preferred IPv4 default route of the main table
+// (/proc/net/route) leaves through a managed LAN, so the main router sits on that LAN. The
+// network helper is told the result, so the takeover and networkKey agree.
+func sideRouter(lan map[string][]netip.Prefix, route []byte) bool {
+	device, best := "", uint64(math.MaxUint64)
+	for _, line := range strings.Split(string(route), "\n") {
+		// Iface Destination Gateway Flags RefCnt Use Metric Mask ...
+		f := strings.Fields(line)
+		if len(f) < 8 || f[1] != "00000000" || f[7] != "00000000" {
+			continue
+		}
+		// Like the helper's "ip route show default", skip unreachable, prohibit and blackhole.
+		flags, e := strconv.ParseUint(f[3], 16, 16)
+		metric, e2 := strconv.ParseUint(f[6], 10, 64)
+		if e != nil || e2 != nil || flags&0x0200 != 0 || f[0] == "*" || metric >= best {
+			continue
+		}
+		device, best = f[0], metric
+	}
+	_, managed := lan[device]
+	return managed
+}
 func networkOptions(ctx context.Context) (Network, error) {
 	n := Network{Method: uci(ctx, "method"), DNS: uci(ctx, "dns") == "1", Family6: ipv6Uplink(ctx),
 		Domestic: upstreams(uci(ctx, "dns_domestic"), DomesticDNS), Foreign: upstreams(uci(ctx, "dns_foreign"), ForeignDNS)}
@@ -227,6 +252,8 @@ func networkOptions(ctx context.Context) (Network, error) {
 	if e != nil {
 		return n, e
 	}
+	route, _ := os.ReadFile("/proc/net/route")
+	n.SideRouter = sideRouter(n.LAN, route)
 	// No WAN resolver is published while PPPoE redials, with peerdns off and no custom DNS, or on
 	// a side router; the core then bootstraps from the public default nameservers alone.
 	b, _ := os.ReadFile("/tmp/resolv.conf.d/resolv.conf.auto")

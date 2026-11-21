@@ -47,7 +47,7 @@ func routingKey(i Intent) string {
 // networkKey covers what the network helper applied: a change needs a new takeover.
 func networkKey(i Intent, n Network) string {
 	direct, _ := directDevices(i) // an invalid device rule already fails in takeover
-	return fmt.Sprint(n.Method, n.DNS, n.FakeIP, n.Family6, takenLAN(n), n.FailOpen, chinaShortcut(i, n), direct)
+	return fmt.Sprint(n.Method, n.DNS, n.FakeIP, n.Family6, takenLAN(n), n.FailOpen, chinaShortcut(i, n), direct, n.SideRouter)
 }
 
 // takenLAN keeps the LAN prefixes of the families the helper takes over. Without IPv6 takeover,

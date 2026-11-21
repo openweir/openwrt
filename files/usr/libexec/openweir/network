@@ -511,10 +511,16 @@ apply() {
  names="";for dev in $interfaces; do names="$names, \"$dev\""; done
  names=${names#, }
  # A side router (旁路由) reaches the internet through its main router on a managed LAN: the
- # IPv4 default route leaves through that LAN and there is no WAN of its own.
+ # IPv4 default route leaves through that LAN and there is no WAN of its own. The manager
+ # decides (sideRouter in network.go) so its network key agrees; a manual run checks the same
+ # route: the first, lowest-metric default of the main table.
  side_router=0
- uplink=$(ip -4 route show default 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "dev") {print $(i+1); exit}}')
- case " $interfaces " in *" $uplink "*) [ -z "$uplink" ] || side_router=1 ;; esac
+ case "$router_arg" in
+  side-router) side_router=1 ;;
+  main-router) ;;
+  *) uplink=$(ip -4 route show default table main 2>/dev/null | awk '$1 == "default" {for (i = 2; i < NF; i++) if ($i == "dev") {print $(i+1); exit}}')
+   case " $interfaces " in *" $uplink "*) [ -z "$uplink" ] || side_router=1 ;; esac ;;
+ esac
  dns=$(uci -q get openweir.main.dns || echo 0)
  # As in OpenClash, DNS protection also takes over lookups devices send to other resolvers.
  dns_intercept=$dns
@@ -770,7 +776,12 @@ finish_apply() {
  fail_stage "$failed_step"
 }
 case "${1:-}" in
- apply) family_arg=${2:-}; china_arg=${3:-}; trap 'finish_apply "$?"' EXIT; apply ;;
+ apply)
+  family_arg=; china_arg=; router_arg=; shift
+  for arg in "$@"; do
+   case "$arg" in ipv4|ipv6) family_arg=$arg ;; china) china_arg=$arg ;; side-router|main-router) router_arg=$arg ;; *) exit 2 ;; esac
+  done
+  trap 'finish_apply "$?"' EXIT; apply ;;
  verify) verify || { fail_stage managed_lan_probe; exit 1; } ;;
  repair) repair ;;
  release) release ;;
