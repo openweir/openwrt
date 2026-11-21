@@ -296,10 +296,15 @@ func (s *app) handle(ctx context.Context, method string, r request) (any, error)
 			return nil, errors.New("invalid network preferences")
 		}
 		return s.runJob("uci", "save_network", func(ctx context.Context) (json.RawMessage, error) {
+			old, oldErr := router.ReadPreferences(ctx)
 			if e := router.SavePreferences(ctx, prefs); e != nil {
 				return nil, e
 			}
-			s.m.Refresh("")
+			// Refresh period, fail-open and boot autostart are read when used;
+			// only settings that shape the takeover need a new start.
+			if oldErr != nil || !old.SameNetwork(prefs) {
+				s.m.Refresh("")
+			}
 			return nil, nil
 		})
 	case "mode", "source", "policy", "save_rules":

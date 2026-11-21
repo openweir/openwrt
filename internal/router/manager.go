@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"reflect"
 	"sync"
 	"time"
 
@@ -103,6 +104,9 @@ func (m *Manager) Change(expected *uint64, edit func(*Intent) error) (uint64, er
 	}
 	if !validMode(i.Mode) {
 		return 0, errors.New("unknown routing mode")
+	}
+	if reflect.DeepEqual(i, m.state.Intent.clone()) {
+		return i.Revision, nil // nothing changed: keep the running core
 	}
 	i.Revision++
 	if e := m.store.Save(i); e != nil {

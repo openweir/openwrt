@@ -336,3 +336,20 @@ func TestCoreLogsKeepNetworkErrorsSeparateFromInformationalEvents(t *testing.T) 
 		t.Fatal(entries)
 	}
 }
+
+func TestChangeWithoutDifferenceKeepsRevision(t *testing.T) {
+	m := New(&memStoreNoop{}, nil, DefaultTiming)
+	r1, e := m.Change(nil, func(i *Intent) error { i.Mode = "global"; return nil })
+	if e != nil {
+		t.Fatal(e)
+	}
+	r2, e := m.Change(nil, func(i *Intent) error { i.Mode = "global"; return nil })
+	if e != nil || r2 != r1 {
+		t.Fatalf("no-op change bumped revision %d -> %d (%v)", r1, r2, e)
+	}
+}
+
+type memStoreNoop struct{ v Intent }
+
+func (s *memStoreNoop) Load() (Intent, error) { return initial(), nil }
+func (s *memStoreNoop) Save(i Intent) error   { s.v = i; return nil }
