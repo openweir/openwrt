@@ -123,18 +123,30 @@ func (s Source) validate() error {
 
 type Validator func(context.Context, Profile) (func() error, error)
 type Fetcher struct {
-	providerHeaders http.Header
 	previous        *record
 	providerReceipt *providerReceipt
+	egress          *egress
 	reuseProviders  bool
-	// ProviderChoices returns the saved selector members for a single subscription.
-	ProviderChoices func(string) (map[string]string, error)
-	sourceID        string
-	ruleImportRoot  string
-	ReplacementURL  string
-	Client          *http.Client
-	BeforeCommit    Validator
+	// embedded marks URLs a document chose (providers): every path checks their addresses.
+	embedded       bool
+	sourceID       string
+	ruleImportRoot string
+	ReplacementURL string
+	Client         *http.Client
+	BeforeCommit   Validator
+	// Fallback retries a request that failed in transit once over the router's other way
+	// out (fallback.go).
+	Fallback bool
 }
+
+// withEgress lets the requests of one operation share what they learn about the way out.
+func (f Fetcher) withEgress() Fetcher {
+	if f.Fallback && f.egress == nil {
+		f.egress = new(egress)
+	}
+	return f
+}
+
 type response struct {
 	body   []byte
 	header http.Header
@@ -175,39 +187,43 @@ func (f Fetcher) request(ctx context.Context, method, raw string, payload []byte
 		next.Header.Del("Referer")
 		return nil
 	}
-	r, e := http.NewRequestWithContext(ctx, method, u.String(), bytes.NewReader(payload))
-	if e != nil {
-		return response{}, errors.New("invalid_request")
-	}
-	if token != "" {
-		r.Header.Set("Authorization", "Bearer "+token)
-	}
 	if ua == "" {
 		ua = "OpenWeir"
 	}
-	r.Header.Set("User-Agent", ua)
-	for k, values := range f.providerHeaders {
-		r.Header[k] = append([]string(nil), values...)
+	send := func(c *http.Client) (response, error) {
+		r, e := http.NewRequestWithContext(ctx, method, u.String(), bytes.NewReader(payload))
+		if e != nil {
+			return response{}, errors.New("invalid_request")
+		}
+		if token != "" {
+			r.Header.Set("Authorization", "Bearer "+token)
+		}
+		r.Header.Set("User-Agent", ua)
+		if payload != nil {
+			r.Header.Set("Content-Type", "application/json")
+		}
+		res, e := c.Do(r)
+		if e != nil {
+			return response{}, classifyRequestFailure(e, "subscription_request_failed")
+		}
+		defer res.Body.Close()
+		limit := limit
+		if res.StatusCode != 200 {
+			limit = 32 << 10
+		}
+		body, e := io.ReadAll(io.LimitReader(res.Body, limit+1))
+		if e != nil {
+			return response{}, classifyRequestFailure(e, "invalid_response_size")
+		}
+		if int64(len(body)) > limit {
+			return response{}, errors.New("invalid_response_size")
+		}
+		return response{body, res.Header, res.StatusCode}, nil
 	}
-	if payload != nil {
-		r.Header.Set("Content-Type", "application/json")
+	if !f.Fallback {
+		return send(&c)
 	}
-	res, e := c.Do(r)
-	if e != nil {
-		return response{}, classifyRequestFailure(e, "subscription_request_failed")
-	}
-	defer res.Body.Close()
-	if res.StatusCode != 200 {
-		limit = 32 << 10
-	}
-	body, e := io.ReadAll(io.LimitReader(res.Body, limit+1))
-	if e != nil {
-		return response{}, classifyRequestFailure(e, "invalid_response_size")
-	}
-	if int64(len(body)) > limit {
-		return response{}, errors.New("invalid_response_size")
-	}
-	return response{body, res.Header, res.StatusCode}, nil
+	return f.egress.send(ctx, &c, f.embedded, send)
 }
 func statusErr(r response) error {
 	switch r.status {
@@ -303,6 +319,7 @@ type Account struct {
 }
 
 func (f Fetcher) Login(ctx context.Context, origin, email, password string) (Account, error) {
+	f = f.withEgress()
 	site, e := f.Site(ctx, origin)
 	if e != nil {
 		return Account{}, e
@@ -665,8 +682,7 @@ func templateWarningSummary(headers http.Header) string {
 }
 
 func (f Fetcher) Refresh(ctx context.Context, store *Store, id string, file []byte, policy Policy) (candidate Candidate, failure error) {
-	if !policy.Scheduled && policy.Confirm == "" {
-	}
+	f = f.withEgress()
 	t, r, e := store.begin(ctx, id, policy.ClockRetryGeneration)
 	if e != nil {
 		return Candidate{}, e

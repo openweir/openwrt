@@ -24,39 +24,45 @@ const maxProviders = 96
 // Embedded URLs are selected by the document, unlike an administrator's
 // subscription URL. Resolve and dial the inspected IP, including after redirects.
 func publicProviderTransport() *http.Transport {
-	return providerTransport((&net.Dialer{Timeout: 5 * time.Second}).DialContext)
+	return providerTransport(net.DefaultResolver.LookupIPAddr, (&net.Dialer{Timeout: 5 * time.Second}).DialContext)
 }
 
-func providerTransport(dial func(context.Context, string, string) (net.Conn, error)) *http.Transport {
+func providerTransport(lookup lookupFunc, dial dialFunc) *http.Transport {
 	tr := http.DefaultTransport.(*http.Transport).Clone()
 	tr.Proxy = nil
 	tr.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
-		h, p, e := net.SplitHostPort(address)
-		if e != nil {
-			return nil, e
-		}
-		ips, e := net.DefaultResolver.LookupIPAddr(ctx, h)
-		if e != nil {
-			return nil, e
-		}
-		for _, ip := range ips {
-			if !ip.IP.IsGlobalUnicast() || ip.IP.IsPrivate() || ip.IP.IsLoopback() || ip.IP.IsLinkLocalUnicast() || ip.IP.IsLinkLocalMulticast() || ip.IP.IsUnspecified() || ip.IP.To4() != nil && ip.IP.To4()[0] == 100 && (ip.IP.To4()[1]&192) == 64 {
-				return nil, errors.New("private_provider_address")
-			}
-		}
-		for _, ip := range ips {
-			c, err := dial(ctx, network, net.JoinHostPort(ip.IP.String(), p))
-			e = err
-			if err == nil {
-				return c, nil
-			}
-		}
-		if e != nil {
-			return nil, e
-		}
-		return nil, errors.New("provider_unreachable")
+		return dialResolved(ctx, network, address, lookup, dial, true)
 	}
 	return tr
+}
+
+// dialResolved dials the addresses it resolved itself. With public, a host with any
+// address outside the public internet is refused before anything is dialed.
+func dialResolved(ctx context.Context, network, address string, lookup lookupFunc, dial dialFunc, public bool) (net.Conn, error) {
+	h, p, e := net.SplitHostPort(address)
+	if e != nil {
+		return nil, e
+	}
+	ips, e := lookup(ctx, h)
+	if e != nil {
+		return nil, e
+	}
+	for _, ip := range ips {
+		if public && (!ip.IP.IsGlobalUnicast() || ip.IP.IsPrivate() || ip.IP.IsLoopback() || ip.IP.IsLinkLocalUnicast() || ip.IP.IsLinkLocalMulticast() || ip.IP.IsUnspecified() || ip.IP.To4() != nil && ip.IP.To4()[0] == 100 && (ip.IP.To4()[1]&192) == 64) {
+			return nil, errors.New("private_provider_address")
+		}
+	}
+	for _, ip := range ips {
+		c, err := dial(ctx, network, net.JoinHostPort(ip.IP.String(), p))
+		e = err
+		if err == nil {
+			return c, nil
+		}
+	}
+	if e != nil {
+		return nil, e
+	}
+	return nil, errors.New("provider_unreachable")
 }
 
 type providers struct {
@@ -179,6 +185,7 @@ func (f Fetcher) expandSourceProviders(ctx context.Context, b []byte, origin str
 	tr := publicProviderTransport()
 	defer tr.CloseIdleConnections()
 	s.f.Client = &http.Client{Transport: tr, Timeout: 15 * time.Second}
+	s.f.Fallback, s.f.egress, s.f.embedded = f.Fallback, f.egress, true
 	trimmed := bytes.TrimSpace(b)
 	if len(trimmed) > 0 && trimmed[0] == '{' {
 		d := json.NewDecoder(bytes.NewReader(b))

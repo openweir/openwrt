@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"github.com/openweir/openwrt/internal/cnlist"
-	"github.com/openweir/openwrt/internal/router"
 	sub "github.com/openweir/openwrt/internal/subscription"
 	"github.com/openweir/openwrt/internal/tlsdiag"
 )
@@ -279,16 +278,9 @@ func Main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 	store := sub.OpenStore(*state)
-	f := sub.Fetcher{}
+	f := sub.Fetcher{Fallback: true}
 	if *state == storeDir {
 		f.BeforeCommit = validate
-		f.ProviderChoices = func(id string) (map[string]string, error) {
-			intent, err := (router.Disk{Path: router.Root + "/private/intent.json"}).Load()
-			if errors.Is(err, os.ErrNotExist) {
-				return nil, nil
-			}
-			return intent.Choices[id], err
-		}
 	}
 	data, changed, e := run(ctx, store, flag.Arg(0), in, f)
 	pending := false
