@@ -150,6 +150,17 @@ const domesticIPSet = "openweir-ip-cn"
 const realIPSet = "openweir-real-ip"
 const proxiedCNSet = "openweir-cn-proxied"
 
+// profileSet moves a subscription's rule set out of the openweir- names, which belong to the
+// built-in and device sets, so that no subscription can replace or collide with them.
+func profileSet(tag string) string {
+	if strings.HasPrefix(tag, "openweir-") {
+		return "openweir-sub-" + tag
+	}
+	return tag
+}
+
+var ruleSetRef = regexp.MustCompile(`(?i)(RULE-SET\s*,\s*)([^,()]+)`)
+
 // Mainland names whose mainland servers refuse traffic that leaves through a foreign exit,
 // which breaks Google Play downloads and updates (OpenClash #5074). They come from OpenClash's
 // default China route pass list and are handled as foreign names: they resolve abroad, keep
@@ -483,6 +494,7 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 	// and so does other UDP on port 443 to the mainland (WireGuard, DTLS). Mainland names the
 	// proxy must carry count as foreign.
 	rules = append(rules, "AND,((NETWORK,UDP),(DST-PORT,443),(RULE-SET,"+proxiedCNSet+")),REJECT", quicBlock)
+	providers[dnsDomesticSet] = obj{"type": "file", "format": "mrs", "behavior": "domain", "path": chinaList(cnlist.Domains)}
 	providers[domesticIPSet] = obj{"type": "file", "format": "mrs", "behavior": "ipcidr", "path": chinaList(cnlist.Addresses)}
 	providers[proxiedCNSet] = obj{"type": "inline", "behavior": "domain", "payload": proxiedCN}
 	// With the China shortcut the firewall sends mainland addresses straight out. As with
@@ -496,6 +508,7 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 		dns["fake-ip-filter"] = []string{"RULE-SET," + realIPSet + ",real-ip", "RULE-SET," + proxiedCNSet + ",fake-ip", "RULE-SET," + dnsDomesticSet + ",real-ip", "MATCH,fake-ip"}
 	}
 	if i.Mode == "smart" {
+		moved := map[string]bool{}
 		for _, set := range p.BinarySets {
 			if !digestName.MatchString(set.SHA256) || filepath.Base(set.Filename()) != set.Filename() {
 				return nil, errors.New("invalid rule provider digest")
@@ -504,10 +517,12 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 			if !slices.Contains([]string{"yaml", "mrs", "text"}, format) {
 				return nil, errors.New("unsupported rule provider format")
 			}
-			if _, exists := providers[set.Tag]; exists {
+			name := profileSet(set.Tag)
+			if _, exists := providers[name]; exists {
 				return nil, errors.New("rule provider name collision")
 			}
-			providers[set.Tag] = obj{"type": "file", "format": format, "behavior": set.Behavior, "path": "./rulesets/" + set.Filename()}
+			moved[set.Tag] = name != set.Tag
+			providers[name] = obj{"type": "file", "format": format, "behavior": set.Behavior, "path": "./rulesets/" + set.Filename()}
 		}
 		addRule := func(r subscription.Rule) error {
 			if !targets[r.Target] {
@@ -515,7 +530,14 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 			}
 			line, err := nativeRule(r.Match, coreTarget(r.Target))
 			if err == nil {
-				rules = append(rules, line)
+				// References follow the sets that moved, inside logical rules too.
+				rules = append(rules, ruleSetRef.ReplaceAllStringFunc(line, func(ref string) string {
+					m := ruleSetRef.FindStringSubmatch(ref)
+					if tag := strings.TrimSpace(m[2]); moved[tag] {
+						return m[1] + profileSet(tag)
+					}
+					return ref
+				}))
 			}
 			return err
 		}
@@ -555,9 +577,6 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 	}
 	if !targets[end] {
 		return nil, errors.New("default route has no available group")
-	}
-	if _, taken := providers[dnsDomesticSet]; !taken {
-		providers[dnsDomesticSet] = obj{"type": "file", "format": "mrs", "behavior": "domain", "path": chinaList(cnlist.Domains)}
 	}
 	config["rule-providers"] = providers
 	config["rules"] = append(rules, "MATCH,"+coreTarget(end))

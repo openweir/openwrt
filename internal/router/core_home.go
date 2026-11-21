@@ -80,7 +80,7 @@ func prepareGeo(ctx context.Context, config []byte, p subscription.Profile) erro
 	active := p
 	active.BinarySets = nil
 	for _, set := range p.BinarySets {
-		if _, ok := cfg.Providers[set.Tag]; ok {
+		if _, ok := cfg.Providers[profileSet(set.Tag)]; ok {
 			active.BinarySets = append(active.BinarySets, set)
 		}
 	}

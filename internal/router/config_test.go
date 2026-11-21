@@ -213,6 +213,35 @@ func TestRejectSelectableInImportedPolicyGroup(t *testing.T) {
 	}
 }
 
+func TestSubscriptionSetsCannotTakeBuiltInNames(t *testing.T) {
+	p := baseProfile(t, "fixture")
+	p.Local = false
+	const group = "group:main"
+	p.Groups = []subscription.Group{{ID: group, Kind: "selector", Members: []string{p.Nodes[0].ID}}}
+	p.Final = group
+	p.BinarySets = []subscription.BinarySet{
+		{Tag: domesticIPSet, Format: "mrs", Behavior: "domain", SHA256: strings.Repeat("c", 64)},
+		{Tag: dnsDomesticSet, Format: "mrs", Behavior: "domain", SHA256: strings.Repeat("d", 64)},
+	}
+	p.Rules = []subscription.Rule{
+		{Match: obj{"clash": "RULE-SET," + domesticIPSet}, RuleSet: domesticIPSet, Target: group},
+		{Match: obj{"clash": "AND,((RULE-SET," + dnsDomesticSet + "),(NETWORK,TCP))"}, Target: group},
+	}
+	i := initial()
+	i.Source = p.Source
+	c := configForTest(t, i, p, Network{Method: "tproxy", Resolver: "192.0.2.53"})
+	providers := c["rule-providers"].(map[string]any)
+	own := func(name string) string { return providers[name].(map[string]any)["path"].(string) }
+	if own(domesticIPSet) != "./builtin/geoip-cn.mrs" || own(dnsDomesticSet) != "./builtin/geosite-cn.mrs" ||
+		own("openweir-sub-"+domesticIPSet) != "./rulesets/"+p.BinarySets[0].Filename() || own("openweir-sub-"+dnsDomesticSet) != "./rulesets/"+p.BinarySets[1].Filename() {
+		t.Fatal(providers)
+	}
+	rules := c["rules"].([]any)
+	if !slices.Contains(rules, any("RULE-SET,openweir-sub-"+domesticIPSet+","+group)) || !slices.Contains(rules, any("AND,((RULE-SET,openweir-sub-"+dnsDomesticSet+"),(NETWORK,TCP)),"+group)) {
+		t.Fatal(rules)
+	}
+}
+
 func TestDeclaredDomesticRuleSetDoesNotDuplicateBundledDefinition(t *testing.T) {
 	p := baseProfile(t, "fixture")
 	p.BinarySets = []subscription.BinarySet{{Tag: subscription.DomesticIPSet, Format: "mrs", Behavior: "ipcidr", SHA256: strings.Repeat("b", 64)}}
