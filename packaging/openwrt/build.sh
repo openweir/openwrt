@@ -19,6 +19,12 @@ trap 'exit 1' INT TERM
 mkdir -p "$tmp/pkg/usr/sbin" "$output"
 [ -z "$(ls -A "$output")" ] || { echo 'Package output directory must be empty' >&2; exit 1; }
 cp -R "$root/files/." "$tmp/pkg"
+# Browsers cache LuCI's ES modules by URL, so each build versions them to load the new interface.
+stamp="$version-${OPENWEIR_PACKAGE_REVISION:-1}${OPENWEIR_PACKAGE_PRERELEASE:+-p$OPENWEIR_PACKAGE_PRERELEASE}"
+luci="$tmp/pkg/www/luci-static/resources"
+find "$luci/openweir" -name '*.js' -exec sed -i -E "s#((from|import\\() *')(\\.\\.?/[^'?]+\\.js)'#\\1\\3?v=$stamp'#g" {} +
+find "$luci/openweir" -name '*.css' -exec sed -i -E "s#url\\('(\\.\\.?/[^'?]+\\.css)'\\)#url('\\1?v=$stamp')#g" {} +
+sed -i -E "s#'openweir/(app\\.js|style\\.css)'#'openweir/\\1?v=$stamp'#g" "$luci/view/openweir/router.js"
 (cd "$tmp/pkg/usr/share/openweir/rules" && sha256sum -c SHA256SUMS)
 (cd "$root" && go run ./cmd/openweir-release rules --check-package "$tmp/pkg/usr/share/openweir/rules")
 mkdir -p "$tmp/pkg/usr/share/licenses/luci-app-openweir"
