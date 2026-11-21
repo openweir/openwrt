@@ -31,7 +31,7 @@ type proxyProvider struct {
 }
 
 func (s *providers) notice(code, provider, option string) {
-	n := Notice{Code: code, At: publicLabel(provider+" · "+option, "proxy provider")}
+	n := Notice{Code: code, At: publicLabel(provider+" · "+option, "provider")}
 	if !slices.Contains(s.notices, n) {
 		s.notices = append(s.notices, n)
 	}
@@ -44,6 +44,26 @@ func optionLabel(k string) string {
 	return "option"
 }
 
+// httpInput reads the download options mihomo gives an http provider of either kind.
+func (s *providers) httpInput(name string, v map[string]any, kind string, limit int64) providerInput {
+	in := providerInput{raw: field(v, "url"), kind: kind, limit: limit}
+	if x, ok := v["header"]; ok {
+		in.header = s.providerHeader(name, x)
+	}
+	if x, ok := v["size-limit"]; ok {
+		if n, ok := integer(x); !ok || n < 0 {
+			s.notice("provider_option_ignored", name, "size-limit")
+		} else if n > 0 {
+			in.limit = min(limit, int64(n))
+		}
+	}
+	if _, ok := v["proxy"]; ok {
+		// The router downloads over its own way out, not through a group of the document.
+		s.notice("provider_option_ignored", name, "proxy")
+	}
+	return in
+}
+
 // proxyProvider reads a provider the router can expand: one it downloads or one written
 // inline, but not a local file nor content encrypted for the core (age-secret-key).
 func (s *providers) proxyProvider(name string, v map[string]any) (proxyProvider, bool) {
@@ -53,24 +73,14 @@ func (s *providers) proxyProvider(name string, v map[string]any) (proxyProvider,
 	}
 	p := proxyProvider{}
 	if kind == "http" {
-		p.input = providerInput{raw: field(v, "url"), kind: "node", limit: maxProviderBody}
+		p.input = s.httpInput(name, v, "node", maxProviderBody)
 	}
 	var dialer string
 	var types []string
 	for _, k := range sortedKeys(v) {
 		x := v[k]
 		switch k {
-		case "proxy":
-			// The router downloads over its own way out, not through a group of the document.
-			s.notice("provider_option_ignored", name, k)
-		case "header":
-			p.input.header = s.providerHeader(name, x)
-		case "size-limit":
-			if n, ok := integer(x); !ok || n < 0 {
-				s.notice("provider_option_ignored", name, k)
-			} else if n > 0 {
-				p.input.limit = min(p.input.limit, int64(n))
-			}
+		case "proxy", "header", "size-limit":
 		case "exclude-type":
 			if t, ok := x.(string); ok {
 				types = strings.Split(t, "|")

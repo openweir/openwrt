@@ -1,50 +1,147 @@
 package subscription
 
 import (
+	"bufio"
+	"bytes"
+	"errors"
 	"strings"
 
 	"github.com/openweir/subconv"
+	"gopkg.in/yaml.v3"
 )
 
-// foreignFormat converts sing-box JSON and share links to OpenWeir mihomo YAML with the shared
-// converter, so every source reaches the Clash path. Clash YAML and Surge/Quantumult X line
-// configs pass through. format names the original format and is empty when nothing changed.
-func foreignFormat(body []byte) (out []byte, format string, notices []Notice, err error) {
-	s := strings.TrimSpace(strings.TrimPrefix(string(body), "\uFEFF"))
-	if hasLineConfig(s) || hasYAMLRoot(s) {
-		return body, "", nil, nil
+// conversion is a subscription in the OpenWeir format: the Clash document subconv makes of a
+// body in any format. The router checks and compiles nothing else.
+type conversion struct {
+	doc     map[string]any
+	format  string
+	notices []Notice
+	// stats count the subscription's own rules (subconv.Result.RuleStats): what a built-in
+	// routing template (subconv.Build) will judge them by, when the router offers one instead.
+	stats struct {
+		Total, Dropped int
+		Match          bool
 	}
-	kind, err := subconv.Detect(body)
-	if err != nil {
-		if b, ok := decoded(s); ok && !hasLineConfig(string(b)) {
-			kind, err = subconv.Detect(b)
-		}
-		if err != nil {
-			return body, "", nil, nil
-		}
+}
+
+var (
+	errEmptySubscription = errors.New("subscription_empty")
+	errWebPage           = errors.New("subscription_web_page")
+	errMessage           = errors.New("subscription_message")
+	errUnknownFormat     = errors.New("unsupported_format")
+)
+
+// convert runs a subscription body through subconv. Rule sets whose content only the router
+// can convert stay, since it downloads them itself (ruleSet).
+func convert(body []byte) (conversion, error) {
+	if len(body) > MaxBody {
+		return conversion{}, errors.New("subscription_size_limit")
 	}
-	if kind == subconv.FormatClash {
-		return body, "", nil, nil
+	result, err := subconv.ConvertWith(body, subconv.Options{ConvertsRuleSets: true})
+	switch {
+	case errors.Is(err, subconv.ErrEmpty):
+		return conversion{}, errEmptySubscription
+	case errors.Is(err, subconv.ErrWebPage):
+		return conversion{}, errWebPage
+	case errors.Is(err, subconv.ErrMessage):
+		return conversion{}, errMessage
+	case errors.Is(err, subconv.ErrUnknownFormat):
+		return conversion{}, errUnknownFormat
+	case err != nil:
+		return conversion{}, errors.New("invalid_subscription")
 	}
-	result, err := subconv.Convert(body)
-	if err != nil {
-		return nil, "", nil, err
-	}
+	c := conversion{format: formatName(result.Format)}
+	c.stats.Total, c.stats.Dropped, c.stats.Match = result.RuleStats.Total, result.RuleStats.Dropped, result.RuleStats.Match
 	for _, w := range result.Warnings {
-		// A dropped rule or rule set changes where traffic goes, so the user confirms it.
-		dangerous := w.Code == subconv.WarnUnsupportedRule || w.Code == subconv.WarnUnsupportedRuleSet
-		notices = append(notices, Notice{Code: "subconv_" + w.Code, At: publicLabel(w.Detail, ""), Dangerous: dangerous})
+		c.notices = append(c.notices, warningNotice(w))
 	}
-	if len(result.Proxies) == 0 {
-		return nil, "", notices, errNoUsableNodes
+	if len(result.Proxies) == 0 && len(result.ProxyProviders) == 0 {
+		return c, errNoUsableNodes
 	}
-	out, err = result.YAML()
+	if c.doc, err = document(result); err != nil {
+		return c, err
+	}
+	if result.Format == subconv.FormatClash || result.Format == subconv.FormatStash {
+		c.notices = append(c.notices, clashFields(body, c.doc)...)
+	}
+	return c, nil
+}
+
+// document decodes subconv's output as the router's YAML reads any Clash document.
+func document(r *subconv.Result) (map[string]any, error) {
+	b, err := r.YAML()
 	if err != nil {
-		return nil, "", notices, err
+		return nil, errors.New("invalid_subscription")
 	}
-	format = string(kind)
-	if kind == subconv.FormatLinks {
-		format = "uri"
+	var doc map[string]any
+	if yaml.Unmarshal(b, &doc) != nil {
+		return nil, errors.New("invalid_subscription")
 	}
-	return out, format, notices, nil
+	return doc, nil
+}
+
+// formatName is the LuCI name of a subconv format.
+func formatName(f subconv.Format) string {
+	if f == subconv.FormatLinks {
+		return "uri"
+	}
+	return string(f)
+}
+
+// warningNotice turns a subconv warning into a notice. A dropped rule or rule set changes where
+// traffic goes, so the user confirms it. A Snell node without its psk blocks an update that
+// would lose it (credentialIssue), as other missing credentials do not. The rest inform.
+func warningNotice(w subconv.Warning) Notice {
+	n := Notice{Code: "subconv_" + w.Code, At: publicLabel(w.Detail, "")}
+	switch w.Code {
+	case subconv.WarnUnsupportedRule, subconv.WarnUnsupportedRuleSet:
+		n.Dangerous = true
+	case "invalid_credential":
+		name, problem := w.Detail, ""
+		if i := strings.LastIndex(w.Detail, ": "); i >= 0 {
+			name, problem = w.Detail[:i], w.Detail[i+2:]
+		}
+		n.At = publicLabel(name, "")
+		switch problem {
+		case "a password but no psk":
+			n.Code = errSnellCredential.Error()
+		case "no psk":
+			n.Code = errInvalidCredential.Error()
+		default:
+			n.Code = "node_missing_credential"
+		}
+	}
+	return n
+}
+
+// Top-level Clash fields the router decides itself.
+var routerFields = set("external-controller external-controller-tls external-controller-unix external-controller-pipe external-ui external-ui-url secret tun listeners iptables ebpf tunnels")
+
+// clashFields reports top-level fields of a Clash body that subconv leaves out without a word:
+// the router's own settings, a Clash Premium script, which routed by code, and custom geodata,
+// whose GEOIP and GEOSITE names the router cannot honor (clashDefaultGeo).
+func clashFields(body []byte, doc map[string]any) []Notice {
+	var notices []Notice
+	lines := bufio.NewScanner(bytes.NewReader(body))
+	lines.Buffer(nil, MaxBody)
+	for lines.Scan() {
+		key, _, ok := strings.Cut(lines.Text(), ":")
+		switch {
+		case !ok || key != strings.TrimSpace(key):
+		case routerFields[key]:
+			notices = append(notices, Notice{Code: "mihomo_router_field_ignored", At: key})
+		case key == "script":
+			notices = append(notices, Notice{Code: "script", At: key, Dangerous: true})
+		case key == "geox-url":
+			var raw struct {
+				Geo map[string]any `yaml:"geox-url"`
+			}
+			if yaml.Unmarshal(body, &raw) != nil || raw.Geo == nil {
+				// Unreadable: no GEO rule may assume the default data.
+				raw.Geo = map[string]any{"geoip": "", "geosite": "", "mmdb": "", "asn": ""}
+			}
+			doc["geox-url"] = raw.Geo
+		}
+	}
+	return notices
 }

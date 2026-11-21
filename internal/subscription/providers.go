@@ -1,12 +1,10 @@
 package subscription
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"regexp"
@@ -15,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/openweir/subconv"
 	"gopkg.in/yaml.v3"
 )
 
@@ -174,43 +173,14 @@ func (s *providers) prefetchInputs(inputs []providerInput, budget int) error {
 	return s.ctx.Err()
 }
 
-func clashRuleHTTP(v map[string]any) bool {
-	format, behavior := field(v, "format"), field(v, "behavior")
-	return field(v, "type") == "http" && providerKeys(v, "type url path interval format behavior") &&
-		(format == "" || format == "yaml" || format == "text" || format == "mrs") &&
-		(behavior == "classical" || behavior == "domain" || behavior == "ipcidr")
-}
-
-// expandSourceProviders downloads a document's providers into it. It also returns the rule
-// sets the document gained and notices about provider options the router did not follow.
-func (f Fetcher) expandSourceProviders(ctx context.Context, b []byte, origin string) ([]byte, []BinarySet, []Notice, error) {
-	if len(b) > MaxBody {
-		return nil, nil, nil, errors.New("subscription_size_limit")
-	}
-	if !bytes.Contains(b, []byte("proxy-providers")) && !bytes.Contains(b, []byte("rule-providers")) && !hasYAMLRoot(string(b)) && !bytes.Contains(b, []byte(`"proxies"`)) {
-		return b, nil, nil, nil
-	}
-	var m map[string]any
+// expandSourceProviders downloads a converted document's providers into it. It returns the rule
+// sets the document gained and notices about provider content and options.
+func (f Fetcher) expandSourceProviders(ctx context.Context, m map[string]any, origin string) ([]BinarySet, []Notice, error) {
 	s := &providers{trustedOrigin: strings.TrimSuffix(providerAddress(origin), "/"), trusted: f, ctx: ctx, cache: map[string][]byte{}}
 	tr := publicProviderTransport()
 	defer tr.CloseIdleConnections()
 	s.f.Client = &http.Client{Transport: tr, Timeout: 15 * time.Second}
 	s.f.Fallback, s.f.egress, s.f.embedded = f.Fallback, f.egress, true
-	trimmed := bytes.TrimSpace(b)
-	if len(trimmed) > 0 && trimmed[0] == '{' {
-		d := json.NewDecoder(bytes.NewReader(b))
-		d.UseNumber()
-		if d.Decode(&m) != nil || d.Decode(new(any)) != io.EOF {
-			return nil, nil, nil, errors.New("invalid_json")
-		}
-	} else if hasYAMLRoot(string(trimmed)) {
-		d := yaml.NewDecoder(bytes.NewReader(b))
-		if d.Decode(&m) != nil || d.Decode(new(any)) != io.EOF {
-			return nil, nil, nil, errors.New("invalid_yaml")
-		}
-	} else {
-		return b, nil, nil, nil
-	}
 	normalizeProviderAddresses(m)
 	if r := f.providerReceipt; r != nil && r.Key != "" {
 		if ttl := providerLifetime(m); ttl > 0 {
@@ -218,20 +188,19 @@ func (f Fetcher) expandSourceProviders(ctx context.Context, b []byte, origin str
 		}
 	}
 	if e := s.clash(m); e != nil {
-		return nil, nil, nil, e
+		return nil, nil, e
 	}
 	total := 0
 	for _, rs := range s.binary {
 		total += len(rs.Data)
 		if total > MaxBody {
-			return nil, nil, nil, errors.New("provider_size_limit")
+			return nil, nil, errors.New("provider_size_limit")
 		}
 	}
-	out, e := json.Marshal(m)
-	if e != nil || len(out) > MaxBody {
-		return nil, nil, nil, errors.New("expanded_subscription_limit")
+	if out, e := json.Marshal(m); e != nil || len(out) > MaxBody {
+		return nil, nil, errors.New("expanded_subscription_limit")
 	}
-	return out, s.binary, s.notices, nil
+	return s.binary, s.notices, nil
 }
 func sortedKeys(m map[string]any) []string {
 	ks := make([]string, 0, len(m))
@@ -257,9 +226,11 @@ func (s *providers) clash(m map[string]any) error {
 			}
 		}
 	}
-	for _, entry := range rp {
-		if v := object(entry); clashRuleHTTP(v) {
-			inputs = append(inputs, providerInput{raw: field(v, "url"), kind: "rule", limit: MaxBody})
+	rules := map[string]providerInput{}
+	for _, k := range sortedKeys(rp) {
+		if v := object(rp[k]); field(v, "type") == "http" && field(v, "url") != "" {
+			rules[k] = s.httpInput(k, v, "rule", MaxBody)
+			inputs = append(inputs, rules[k])
 		}
 	}
 	if err := s.prefetchInputs(inputs, maxSetMaterialization); err != nil {
@@ -281,26 +252,27 @@ func (s *providers) clash(m map[string]any) error {
 		if !ok {
 			continue
 		}
-		var doc struct {
-			Proxies []map[string]any `yaml:"proxies"`
-		}
-		if p.input.raw == "" {
-			for _, elem := range list(object(pp[k])["payload"]) {
-				n := object(elem)
-				if n == nil {
-					return errors.New("invalid_proxy_provider")
-				}
-				doc.Proxies = append(doc.Proxies, n)
+		// subconv checked an inline payload with the document; downloaded content may be in any
+		// format a provider serves.
+		payload := list(object(pp[k])["payload"])
+		if p.input.raw != "" {
+			var err error
+			if payload, err = s.providerProxies(s.cache[p.input.key()]); err != nil {
+				return providerFailure("node", p.input.raw, err)
 			}
-		} else if yaml.Unmarshal(s.cache[p.input.key()], &doc) != nil || doc.Proxies == nil {
-			return providerFailure("node", p.input.raw, errors.New("invalid_proxy_provider"))
 		}
-		doc.Proxies = p.shape(doc.Proxies)
-		if len(nodes)+len(doc.Proxies) > maxNodes {
+		var proxies []map[string]any
+		for _, elem := range payload {
+			if n := object(elem); n != nil {
+				proxies = append(proxies, n)
+			}
+		}
+		proxies = p.shape(proxies)
+		if len(nodes)+len(proxies) > maxNodes {
 			return errors.New("node_limit")
 		}
 		members := []any{}
-		for _, n := range doc.Proxies {
+		for _, n := range proxies {
 			members = append(members, n["name"])
 			nodes = append(nodes, n)
 		}
@@ -372,29 +344,21 @@ func (s *providers) clash(m map[string]any) error {
 			g["proxies"] = members
 		}
 	}
-	// Provider names only address rules: template paths never become local paths.
+	// Provider names only address rules: template paths never become local paths. A file is one
+	// the administrator imported beside the subscription (localClashSet).
 	for _, name := range sortedKeys(rp) {
 		v := object(rp[name])
-		format := field(v, "format")
-		behavior := field(v, "behavior")
 		var raw []byte
-		switch {
-		case clashRuleHTTP(v):
-			raw = s.cache[field(v, "url")]
-		case field(v, "type") == "file" && providerKeys(v, "type path behavior format"):
-			var e error
-			raw, e = s.trusted.localClashSet(field(v, "path"))
-			if e != nil {
+		var err error
+		switch field(v, "type") {
+		case "http":
+			raw = s.cache[rules[name].key()]
+		case "file":
+			if raw, err = s.trusted.localClashSet(field(v, "path")); err != nil {
 				continue
 			}
-
-		case field(v, "type") == "inline" && providerKeys(v, "type behavior payload format"):
-			if format != "" && format != "yaml" {
-				continue
-			}
-			var e error
-			raw, e = yaml.Marshal(map[string]any{"payload": v["payload"]})
-			if e != nil {
+		case "inline":
+			if raw, err = yaml.Marshal(map[string]any{"payload": v["payload"]}); err != nil {
 				return errRulePayload
 			}
 		default:
@@ -403,24 +367,35 @@ func (s *providers) clash(m map[string]any) error {
 		if name == DomesticIPSet || name == DomesticDomainSet {
 			return errRulePayload
 		}
-		set, err := mihomoSet(name, format, behavior, raw)
+		set, err := ruleSet(name, field(v, "format"), field(v, "behavior"), raw)
+		if errors.Is(err, subconv.ErrNoRules) {
+			// Nothing to match: the rules that use it go, as for any set the router lacks.
+			continue
+		}
 		if err != nil {
 			return providerFailure("rule", field(v, "url"), err)
 		}
 		s.binary = append(s.binary, set)
 		delete(rp, name)
 	}
-
 	return nil
 }
-func providerKeys(m map[string]any, keys string) bool {
-	allowed := set(keys)
-	for k := range m {
-		if !allowed[k] {
-			return false
-		}
+
+// providerProxies converts a downloaded proxy provider: subconv reads the formats mihomo's
+// providers accept and more, and repairs or leaves out each proxy on its own.
+func (s *providers) providerProxies(b []byte) ([]any, error) {
+	r, err := subconv.ConvertProxies(b)
+	if err != nil {
+		return nil, errors.New("invalid_proxy_provider")
 	}
-	return true
+	for _, w := range r.Warnings {
+		s.notices = append(s.notices, warningNotice(w))
+	}
+	doc, err := document(r)
+	if err != nil {
+		return nil, errors.New("invalid_proxy_provider")
+	}
+	return list(doc["proxies"]), nil
 }
 func groupFilter(g map[string]any) (func(string) bool, bool) {
 	compile := func(k string) ([]*regexp.Regexp, bool) {

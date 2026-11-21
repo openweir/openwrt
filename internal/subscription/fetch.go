@@ -612,12 +612,15 @@ func (f Fetcher) readProfile(ctx context.Context, s Source, file []byte, usage *
 		}
 		*f.providerReceipt = providerReceipt{Key: key, Checked: now}
 	}
-	body, format, converted, err := foreignFormat(body)
+	c, err := convert(body)
 	if err != nil {
-		return Profile{}, err
+		// The notices tell a subscription of Snell nodes without a psk apart (credentialIssue).
+		p := Profile{SchemaVersion: SchemaVersion, Source: s.ID}
+		p.converted(c)
+		return p, err
 	}
 	f.sourceID = s.ID
-	body, sets, expansion, err := f.expandSourceProviders(ctx, body, origin)
+	sets, expansion, err := f.expandSourceProviders(ctx, c.doc, origin)
 	if err != nil {
 		if provider := FailureProvider(err); provider != nil {
 			provider.Warnings = templateWarningSummary(headers)
@@ -627,8 +630,7 @@ func (f Fetcher) readProfile(ctx context.Context, s Source, file []byte, usage *
 	if err := ctx.Err(); err != nil {
 		return Profile{}, err
 	}
-	p, err := parseVerified(s.ID, body, sets)
-	p.converted(format, append(converted, expansion...))
+	p, err := parseVerified(s.ID, c, sets, expansion...)
 	p.Title = subscriptionTitle(headers)
 	if s.Kind == "platform" {
 		_, params, _ := mime.ParseMediaType(headers.Get("Content-Disposition"))

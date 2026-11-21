@@ -52,8 +52,9 @@ func TestProxyProviderOptionsApplyWithinRouterSafety(t *testing.T) {
 			t.Fatal("override not applied", n)
 		}
 	}
-	// Each filter picks in turn; names are overridden after filtering and counted once.
-	if !slices.Equal(names, []string{"Front", "[air] JP-1", "[air] HK-1", "B", "A"}) {
+	// Each filter picks in turn and names are overridden after filtering. subconv gives a
+	// downloaded duplicate a name of its own, where mihomo would drop it.
+	if !slices.Equal(names, []string{"Front", "[air] JP-1", "[air] HK-1", "[air] HK-1-2", "B", "A"}) {
 		t.Fatal(names)
 	}
 	want := []Notice{
@@ -63,17 +64,17 @@ func TestProxyProviderOptionsApplyWithinRouterSafety(t *testing.T) {
 		{Code: "provider_option_ignored", At: "air · override override-expr"},
 		{Code: "provider_option_unsafe", At: "air · override routing-mark"},
 		{Code: "provider_option_ignored", At: "inline · exclude-filter"},
+		{Code: "subconv_renamed", At: "HK 1: renamed HK 1 2"},
 	}
 	if !slices.Equal(s.notices, want) {
 		t.Fatal(s.notices)
 	}
-	b, _ := json.Marshal(m)
-	p, err := parseVerified("source", b, nil)
+	p, err := parseVerified("source", conversion{doc: m}, nil)
 	if err != nil {
 		t.Fatal(err, p.Notices)
 	}
 	front := p.Nodes[0].ID
-	if len(p.Nodes) != 5 || p.Nodes[1].Dialer() != front || len(p.Groups[0].Members) != 2 || len(p.Notices) != 0 {
+	if len(p.Nodes) != 6 || p.Nodes[1].Dialer() != front || len(p.Groups[0].Members) != 3 || len(p.Notices) != 0 {
 		t.Fatal(p.Nodes, p.Groups, p.Notices)
 	}
 	p.Notices = s.notices
@@ -95,8 +96,7 @@ func TestProviderNodesPassTheSameSafetyPolicy(t *testing.T) {
 	if err := s.clash(m); err != nil {
 		t.Fatal(err)
 	}
-	b, _ := json.Marshal(m)
-	p, err := parseVerified("source", b, nil)
+	p, err := parseVerified("source", conversion{doc: m}, nil)
 	if err != nil || len(p.Nodes) != 1 || p.Nodes[0].Name != "Fine" || !slices.Contains(p.Notices, Notice{Code: "unsupported_node", At: "Marked"}) || !slices.Contains(p.Notices, Notice{Code: "unsupported_node", At: "Plugin"}) {
 		t.Fatal(err, p.Nodes, p.Notices)
 	}

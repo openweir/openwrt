@@ -5,9 +5,14 @@ import (
 	"strings"
 )
 
+// The router's mainland lists, which GEOSITE,CN and GEOIP,CN rules use.
+const (
+	DomesticDomainSet = "@openweir-geosite-cn"
+	DomesticIPSet     = "@openweir-geoip-cn"
+)
+
 // Only the final policy changes during compilation. Preserve compound matchers
 // intact, including commas within AND, OR and NOT expressions.
-const DomesticDomainSet = "@openweir-geosite-cn"
 
 func parseMihomoRule(p *Profile, raw string, index int) {
 	line := strings.TrimSpace(raw)

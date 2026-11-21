@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/klauspost/compress/zstd"
+	"github.com/openweir/subconv"
 )
 
 // ErrSetQuery reports a lookup that is neither a domain name nor an IP address.
@@ -26,14 +27,20 @@ func SetMatch(set BinarySet, query string) (bool, error) {
 	if set.Format == "mrs" {
 		return mrsMatch(set.Data, set.Behavior, q)
 	}
-	matched := false
-	err = readRulePayload(set.Data, set.Format, func(line string) error {
-		if !matched && lineMatch(set.Behavior, line, q) {
-			matched = true
+	// Sets stored before subconv converted them may still be YAML payloads.
+	content, err := subconv.ConvertRuleSet(set.Data, set.Behavior, set.Format)
+	if errors.Is(err, subconv.ErrNoRules) {
+		return false, nil
+	}
+	if err != nil {
+		return false, errRulePayload
+	}
+	for line := range strings.Lines(string(content.Body)) {
+		if lineMatch(content.Behavior, line, q) {
+			return true, nil
 		}
-		return nil
-	})
-	return matched, err
+	}
+	return false, nil
 }
 
 type setQuery struct {

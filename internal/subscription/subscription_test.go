@@ -20,6 +20,15 @@ import (
 const basic = "http://demo:fixture-only-password@edge.example:8080#Edge"
 const primary = `{"outbounds":[{"type":"http","tag":"Edge","server":"edge.example","server_port":8080,"username":"demo","password":"fixture-only-password"},{"type":"direct","tag":"direct"},{"type":"selector","tag":"Streaming","outbounds":["Edge","direct"]}],"route":{"rules":[{"domain":["media.example"],"outbound":"Streaming"},{"domain":"blocked.example","action":"reject"}],"final":"direct"}}`
 
+func mustConvert(t *testing.T, body string) conversion {
+	t.Helper()
+	c, err := convert([]byte(body))
+	if err != nil {
+		t.Fatal(err, c.notices)
+	}
+	return c
+}
+
 func mustParse(t *testing.T, s string) Profile {
 	t.Helper()
 	p, e := Parse("source", []byte(s))
@@ -353,11 +362,7 @@ func TestProviderExpansionAndIndependentCredentials(t *testing.T) {
 	if e := s.clash(m); e != nil {
 		t.Fatal(e)
 	}
-	b, e := json.Marshal(m)
-	if e != nil {
-		t.Fatal(e)
-	}
-	p, parseErr := parseVerified("source", b, s.binary)
+	p, parseErr := parseVerified("source", conversion{doc: m}, s.binary)
 	if parseErr != nil || len(p.BinarySets) != 1 {
 		t.Fatal(parseErr)
 	}
@@ -369,7 +374,7 @@ func TestProviderExpansionAndIndependentCredentials(t *testing.T) {
 		t.Fatal(p)
 	}
 	f := Fetcher{}
-	if _, _, _, e = f.expandSourceProviders(context.Background(), []byte(fmt.Sprintf(`{"proxies":[],"proxy-providers":{"id":{"type":"http","url":%q}}}`, srv.URL)), ""); e == nil {
+	if _, _, e := f.expandSourceProviders(context.Background(), map[string]any{"proxy-providers": map[string]any{"id": map[string]any{"type": "http", "url": srv.URL}}}, ""); e == nil {
 		t.Fatal("untrusted nested provider reached router loopback")
 	}
 }

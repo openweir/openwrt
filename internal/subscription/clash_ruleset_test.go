@@ -39,9 +39,10 @@ rules:
  - MATCH,DIRECT
 `
 
-func TestMihomoProviderPreservesRemoteBytesAndRouting(t *testing.T) {
+func TestMihomoProviderConvertsRemoteSetsAndKeepsRouting(t *testing.T) {
 	data := []byte("payload:\n  - DOMAIN-SUFFIX,example.org\n  - IP-ASN,132203,no-resolve\n")
-	h := sha256.Sum256(data)
+	converted := []byte("DOMAIN-SUFFIX,example.org\nIP-ASN,132203,no-resolve\n")
+	h := sha256.Sum256(converted)
 	const name = "Streaming"
 	doc := []byte(`proxies:
  - {name: edge, type: http, server: edge.example, port: 443, tls: true}
@@ -55,21 +56,17 @@ rules:
  - GEOSITE,CN,DIRECT
  - MATCH,Download
 `)
-	var raw map[string]any
-	if err := yaml.Unmarshal(doc, &raw); err != nil {
-		t.Fatal(err)
-	}
+	c := mustConvert(t, string(doc))
 	s := providers{ctx: t.Context(), cache: map[string][]byte{}, f: Fetcher{Client: &http.Client{Transport: setFixtureTransport(func(r *http.Request) (*http.Response, error) {
 		if r.URL.RequestURI() != "/Media.YAML?Case=Sensitive" || r.Header.Get("Authorization") != "" {
 			t.Fatal("request modified or credential leaked")
 		}
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(data)), Header: http.Header{}}, nil
 	})}}}
-	if err := s.clash(raw); err != nil {
+	if err := s.clash(c.doc); err != nil {
 		t.Fatal(err)
 	}
-	encoded, _ := json.Marshal(raw)
-	p, e := parseVerified("account", encoded, s.binary)
+	p, e := parseVerified("account", c, s.binary)
 	if e != nil || len(p.Notices) > 0 || len(p.Rules) != 3 || len(p.Groups) != 1 || p.Groups[0].Kind != "fallback" || p.Final != p.Groups[0].ID {
 		t.Fatal(e, p.Notices)
 	}
@@ -77,8 +74,8 @@ rules:
 		t.Fatal("provider order or target changed")
 	}
 	set := p.BinarySets[0]
-	if set.Filename() != hex.EncodeToString(h[:])+".yaml" || !bytes.Equal(set.Data, data) || set.Entries != 2 || set.Behavior != "classical" {
-		t.Fatal("provider bytes or path changed")
+	if set.Filename() != hex.EncodeToString(h[:])+".list" || !bytes.Equal(set.Data, converted) || set.Entries != 2 || set.Behavior != "classical" {
+		t.Fatal("provider content or path changed", string(set.Data))
 	}
 	if !slices.Contains(GeoRules(p), "IP-ASN,_") {
 		t.Fatal("rule-provider ASN dependency omitted")
@@ -99,7 +96,7 @@ func TestOfflineCNAndMRSFraming(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
-		set, e := mihomoSet("cn", "mrs", tt.behavior, data)
+		set, e := ruleSet("cn", "mrs", tt.behavior, data)
 		if e != nil || set.Entries < 500 {
 			t.Fatal(tt.family, set.Entries, e)
 		}
@@ -108,11 +105,11 @@ func TestOfflineCNAndMRSFraming(t *testing.T) {
 			other = "ipcidr"
 		}
 		for _, bad := range [][]byte{data[:len(data)/2], []byte("SRS\x02")} {
-			if _, e := mihomoSet("bad", "mrs", tt.behavior, bad); e == nil {
+			if _, e := ruleSet("bad", "mrs", tt.behavior, bad); e == nil {
 				t.Fatal("bad MRS accepted")
 			}
 		}
-		if _, e := mihomoSet("bad", "mrs", other, data); e == nil {
+		if _, e := ruleSet("bad", "mrs", other, data); e == nil {
 			t.Fatal("wrong MRS behavior accepted")
 		}
 	}
@@ -215,12 +212,7 @@ func TestGeodataPinnedOfflineAndInterruptedDownload(t *testing.T) {
 
 func TestMihomoDropsUnsupportedSRSAndPreservesNeighborRules(t *testing.T) {
 	body := []byte(`{"outbounds":[{"type":"http","tag":"n","server":"n.example","server_port":80}],"route":{"rule_set":[{"tag":"unavailable","type":"remote","format":"binary","url":"https://127.0.0.1/private.srs"}],"rules":[{"domain":"kept.example","outbound":"n"},{"rule_set":"unavailable","action":"reject"}],"final":"n"}}`)
-	f := Fetcher{}
-	expanded, _, _, e := f.expandSourceProviders(t.Context(), body, "")
-	if e != nil {
-		t.Fatal(e)
-	}
-	p, e := Parse("s", expanded)
+	p, e := Parse("s", body)
 	if e != nil || len(p.Rules) != 1 || len(p.BinarySets) != 0 {
 		t.Fatal(e, p.Rules)
 	}

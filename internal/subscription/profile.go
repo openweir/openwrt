@@ -3,7 +3,6 @@ package subscription
 
 import (
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -188,13 +187,6 @@ func (p Profile) credentialIssue() string {
 	}
 	return ""
 }
-func (p *Profile) add(name, kind string, out map[string]any) error {
-	native, err := proxyspec.SingBox(out)
-	if err != nil {
-		return err
-	}
-	return p.addProxy(name, kind, native)
-}
 func (p *Profile) addProxy(name, kind string, out map[string]any) error {
 	host := field(out, "server")
 	port, ok := proxyspec.Port(out["port"])
@@ -210,55 +202,35 @@ func (p *Profile) addProxy(name, kind string, out map[string]any) error {
 	p.Nodes = append(p.Nodes, Node{id, name, kind, host, port, out, kind == "mtproxy"})
 	return nil
 }
-func decoded(s string) ([]byte, bool) {
-	for _, e := range []*base64.Encoding{base64.StdEncoding, base64.RawStdEncoding, base64.URLEncoding, base64.RawURLEncoding} {
-		if b, err := e.DecodeString(s); err == nil && utf8.Valid(b) {
-			return b, true
-		}
-	}
-	return nil, false
-}
+
+// Parse converts a subscription body without downloading its providers.
 func Parse(sourceID string, body []byte) (Profile, error) {
-	body, format, notices, err := foreignFormat(body)
+	c, err := convert(body)
 	if err != nil {
-		return Profile{SchemaVersion: SchemaVersion, Source: sourceID}, err
+		p := Profile{SchemaVersion: SchemaVersion, Source: sourceID}
+		p.converted(c)
+		return p, err
 	}
-	p, err := parseVerified(sourceID, body, nil)
-	p.converted(format, notices)
-	return p, err
+	return parseVerified(sourceID, c, nil)
 }
 
-// converted records the original format and the shared converter's warnings.
-func (p *Profile) converted(format string, notices []Notice) {
-	if format != "" {
-		p.Format = format
+// converted records the original format and the converter's and providers' notices.
+func (p *Profile) converted(c conversion, notices ...Notice) {
+	if c.format != "" {
+		p.Format = c.format
 	}
-	p.Notices = append(notices, p.Notices...)
+	p.Notices = slices.Concat(c.notices, notices, p.Notices)
 }
-func parseVerified(sourceID string, body []byte, sets []BinarySet) (Profile, error) {
-	p := Profile{SchemaVersion: SchemaVersion, Source: sourceID, BinarySets: sets}
-	if !safeLabel(sourceID) || len(body) == 0 || len(body) > MaxBody || !utf8.Valid(body) {
+
+// parseVerified reads a converted subscription whose providers were expanded into it (sets).
+func parseVerified(sourceID string, c conversion, sets []BinarySet, notices ...Notice) (p Profile, err error) {
+	p = Profile{SchemaVersion: SchemaVersion, Source: sourceID, BinarySets: sets}
+	defer func() { p.converted(c, notices...) }()
+	if !safeLabel(sourceID) {
 		return p, errors.New("invalid_subscription")
 	}
-	s := strings.TrimSpace(strings.TrimPrefix(string(body), "\uFEFF"))
-	if b, ok := decoded(s); ok {
-		s = strings.TrimSpace(string(b))
-	}
-	switch {
-	case strings.HasPrefix(s, "{"):
-		if err := parseJSON(&p, []byte(s)); err != nil {
-			return p, err
-		}
-	case hasYAMLRoot(s):
-		if err := parseYAML(&p, []byte(s)); err != nil {
-			return p, err
-		}
-	case hasLineConfig(s):
-		if err := parseLines(&p, s); err != nil {
-			return p, err
-		}
-	default:
-		return p, errNoUsableNodes
+	if err := parseClash(&p, c.doc); err != nil {
+		return p, err
 	}
 	if len(p.Nodes) == 0 {
 		return p, errNoUsableNodes
@@ -270,6 +242,10 @@ func parseVerified(sourceID string, body []byte, sets []BinarySet) (Profile, err
 	}
 	return p, nil
 }
+
+// Notices of rules a profile goes without while keeping the rest of its routing.
+var partialNotices = set("mihomo_unsupported_rule mihomo_unsupported_rule_set subconv_unsupported_rule subconv_unsupported_rule_set rule_provider_reference_unavailable rule_provider_custom_geo rejection_removed")
+
 func Assess(p Profile, previous *Profile, policy Policy) Candidate {
 	if previous != nil && previous.Source != p.Source {
 		return Candidate{Decision: "blocked", Notices: []Notice{{Code: "source_mismatch"}}}
@@ -327,15 +303,18 @@ func Assess(p Profile, previous *Profile, policy Policy) Candidate {
 	fallback, partial, danger := false, false, false
 	for _, n := range p.Notices {
 		switch n.Code {
-		case "nonstandard_snell_field", "nonstandard_snell_credential", "invalid_credential":
+		case "nonstandard_snell_credential", "invalid_credential":
 			continue
-		case "mihomo_router_field_ignored", "mihomo_protocol_unsupported", "mihomo_unavailable_member", "invalid_node", "unsupported_node", "invalid_endpoint", "node_missing_credential", "platform_routing_warnings", "unavailable_inventory", "subconv_unsupported_proxy", "subconv_unsupported_option",
+		case "mihomo_router_field_ignored", "mihomo_protocol_unsupported", "mihomo_unavailable_member", "unsupported_node", "invalid_endpoint", "node_missing_credential", "platform_routing_warnings", "unavailable_inventory",
 			"dialer_proxy_unavailable", "dialer_proxy_cycle", "provider_option_ignored", "provider_option_unsafe":
 			continue
 		}
-		switch n.Code {
-		case "mihomo_unsupported_rule", "mihomo_unsupported_rule_set", "subconv_unsupported_rule", "subconv_unsupported_rule_set", "rule_provider_reference_unavailable", "rule_provider_custom_geo", "rejection_removed":
+		switch {
+		case partialNotices[n.Code]:
 			partial = true
+		case strings.HasPrefix(n.Code, "subconv_"):
+			// The converter's other warnings cost a node, group or option, not the routing.
+			continue
 		default:
 			fallback = true
 		}

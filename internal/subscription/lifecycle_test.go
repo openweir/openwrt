@@ -17,15 +17,16 @@ import (
 
 func TestRevocationRetainsSharedRuleProviderUntilLastSourceRemoved(t *testing.T) {
 	raw := []byte("example.test\n")
-	set, e := mihomoSet("region", "text", "domain", raw)
-	if e != nil {
+	c := mustConvert(t, "proxies: [{name: Edge, type: http, server: edge.example, port: 8080}]\nproxy-groups: [{name: Streaming, type: select, proxies: [Edge, DIRECT]}]\nrule-providers: {region: {type: inline, behavior: domain, payload: [example.test]}}\nrules: ['RULE-SET,region,Streaming', 'MATCH,DIRECT']")
+	s := providers{ctx: t.Context(), cache: map[string][]byte{}}
+	if e := s.clash(c.doc); e != nil {
 		t.Fatal(e)
 	}
-	body := "proxies: [{name: Edge, type: http, server: edge.example, port: 8080}]\nproxy-groups: [{name: Streaming, type: select, proxies: [Edge, DIRECT]}]\nrules: ['RULE-SET,region,Streaming', 'MATCH,DIRECT']"
-	p, e := parseVerified("source", []byte(body), []BinarySet{set})
-	if e != nil || len(p.Notices) != 0 || p.Rules[0].RuleSet != "region" {
+	p, e := parseVerified("source", c, s.binary)
+	if e != nil || len(p.Notices) != 0 || p.Rules[0].RuleSet != "region" || len(p.BinarySets) != 1 || !bytes.Equal(p.BinarySets[0].Data, raw) {
 		t.Fatal(e, p.Notices)
 	}
+	set := p.BinarySets[0]
 	if public, _ := json.Marshal(p.Summary()); bytes.Contains(public, []byte(set.SHA256)) || bytes.Contains(public, []byte(base64.StdEncoding.EncodeToString(raw))) {
 		t.Fatal("private binary leaked")
 	}
@@ -208,13 +209,11 @@ func TestInlineRuleAndNodeProvidersKeepGroupAndSet(t *testing.T) {
 	}
 }
 
-func TestSnellV5TLSObfuscationIsFormatSpecific(t *testing.T) {
-	p := mustParse(t, "snell://strong-password@host.example:443?version=5&plugin=obfs-local;obfs%3Dtls")
-	if p.Nodes[0].Outbound["obfs-opts"].(map[string]any)["mode"] != "tls" || !slices.Contains(p.Nodes[0].RequiredOptions(), "v5-obfs-tls") {
-		t.Fatal("missing TLS obfuscation capability")
-	}
-	parsed, err := Parse("source", []byte("[Proxy]\nExample = snell, host.example, 443, psk=strong-password, version=5, obfs=tls"))
-	if err == nil || len(parsed.Nodes) != 0 {
-		t.Fatal("unsupported Surge Snell option was admitted")
+func TestSnellV5TLSObfuscationNeedsItsCapability(t *testing.T) {
+	for _, raw := range []string{"snell://strong-password@host.example:443?version=5&plugin=obfs-local;obfs%3Dtls", "[Proxy]\nExample = snell, host.example, 443, psk=strong-password, version=5, obfs=tls"} {
+		p := mustParse(t, raw)
+		if p.Nodes[0].Outbound["obfs-opts"].(map[string]any)["mode"] != "tls" || !slices.Contains(p.Nodes[0].RequiredOptions(), "v5-obfs-tls") {
+			t.Fatal("missing TLS obfuscation capability", raw)
+		}
 	}
 }

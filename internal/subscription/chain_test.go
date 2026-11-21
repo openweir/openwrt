@@ -3,10 +3,23 @@ package subscription
 import (
 	"slices"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
+// docOf is a document as it reaches the router after its providers were expanded: subconv checks
+// the chains it can see, but not those through nodes downloaded later.
+func docOf(t *testing.T, body string) conversion {
+	t.Helper()
+	var doc map[string]any
+	if err := yaml.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatal(err)
+	}
+	return conversion{doc: doc, format: "clash"}
+}
+
 func TestChainsResolveToIDsAndDropBrokenNodes(t *testing.T) {
-	p := mustParse(t, `proxies:
+	p, err := parseVerified("source", docOf(t, `proxies:
  - {name: Front, type: http, server: front.example, port: 80}
  - {name: Exit, type: http, server: exit.example, port: 80, dialer-proxy: Relay}
  - {name: Hop, type: http, server: hop.example, port: 80, dialer-proxy: Front}
@@ -21,7 +34,10 @@ proxy-groups:
  - {name: Pool, type: url-test, proxies: [Self, Front]}
  - {name: Main, type: select, proxies: [Exit, Loop1, Pool, Straight]}
 rules:
- - MATCH,Main`)
+ - MATCH,Main`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
 	byName := map[string]Node{}
 	for _, n := range p.Nodes {
 		byName[n.Name] = n
@@ -62,6 +78,28 @@ rules:
 	// Dropped chains cost nodes, not the subscription's routing.
 	if c := Assess(p, nil, Policy{}); c.Decision != "ready" || c.Profile.Local {
 		t.Fatal(c.Decision, c.Notices)
+	}
+}
+
+func TestConverterRepairsTheChainsItSees(t *testing.T) {
+	p := mustParse(t, `proxies:
+ - {name: Front, type: http, server: front.example, port: 80}
+ - {name: Loop1, type: http, server: loop1.example, port: 80, dialer-proxy: Loop2}
+ - {name: Loop2, type: http, server: loop2.example, port: 80, dialer-proxy: Loop1}
+ - {name: Dangling, type: http, server: dangling.example, port: 80, dialer-proxy: Missing}
+proxy-groups:
+ - {name: Main, type: select, proxies: [Front, Loop1, Loop2, Dangling]}
+rules:
+ - MATCH,Main`)
+	codes := map[string]bool{}
+	for _, n := range p.Notices {
+		codes[n.Code] = true
+	}
+	if len(p.Nodes) != 4 || !codes["subconv_cyclic_reference"] || !codes["subconv_unknown_reference"] {
+		t.Fatal(p.Nodes, p.Notices)
+	}
+	if c := Assess(p, nil, Policy{}); c.Decision != "ready" || c.Profile.Local {
+		t.Fatal("repaired chains cost the routing", c.Decision)
 	}
 }
 

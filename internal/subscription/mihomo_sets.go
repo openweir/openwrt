@@ -5,11 +5,21 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"io"
-	"strings"
 
 	"github.com/klauspost/compress/zstd"
+	"github.com/openweir/subconv"
 )
+
+// The router's limits on a rule set, as subconv's; the core reads each line of a set.
+const (
+	maxClashSetEntries    = 250000
+	maxSetMaterialization = 32 << 20
+	maxClashRuleLine      = 8192
+)
+
+var errRulePayload = errors.New("invalid_rule_provider")
 
 // MRSEntries validates the MRS framing and its allocation lengths before the exact
 // original bytes reach the core, and returns the entry count. Both the Zstandard
@@ -60,37 +70,34 @@ func MRSEntries(data []byte, behavior string) (int, error) {
 	}
 	return int(count), nil
 }
-func mihomoSet(tag, format, behavior string, data []byte) (BinarySet, error) {
+
+// ruleSet converts a rule provider's content into what the core reads: subconv turns lists of
+// any client into mihomo's text, and the behavior the entries need may differ from the declared
+// one. MRS passes through after MRSEntries checks it. subconv.ErrNoRules means nothing usable.
+func ruleSet(tag, format, behavior string, data []byte) (BinarySet, error) {
 	if !safeLabel(tag) || len(data) == 0 || len(data) > MaxBody {
 		return BinarySet{}, errRulePayload
 	}
-	if format == "" {
-		format = "yaml"
-	}
-	if behavior != "domain" && behavior != "ipcidr" && behavior != "classical" {
+	content, err := subconv.ConvertRuleSet(data, behavior, format)
+	switch {
+	case errors.Is(err, subconv.ErrNoRules):
+		return BinarySet{}, err
+	case errors.Is(err, subconv.ErrRuleSetTooLarge):
+		return BinarySet{}, errors.New("provider_size_limit")
+	case err != nil:
 		return BinarySet{}, errRulePayload
 	}
-	count := 0
-	var err error
-	switch format {
-	case "mrs":
-		count, err = MRSEntries(data, behavior)
-	case "yaml", "text":
-		err = readRulePayload(data, format, func(line string) error {
-			count++
-			if count > maxClashSetEntries || len(line) > maxClashRuleLine || strings.ContainsAny(line, "\x00\r\n") {
-				return errRulePayload
-			}
-			return nil
-		})
-	default:
-		err = errRulePayload
+	count := content.Entries
+	if content.Format == "mrs" {
+		if count, err = MRSEntries(content.Body, content.Behavior); err != nil {
+			return BinarySet{}, err
+		}
 	}
-	if err != nil {
-		return BinarySet{}, err
+	if count > maxClashSetEntries || len(content.Body) > MaxBody {
+		return BinarySet{}, errors.New("provider_size_limit")
 	}
-	sum := sha256.Sum256(data)
-	return BinarySet{Tag: tag, Format: format, Behavior: behavior, Entries: count, SHA256: hex.EncodeToString(sum[:]), Data: data}, nil
+	sum := sha256.Sum256(content.Body)
+	return BinarySet{Tag: tag, Format: content.Format, Behavior: content.Behavior, Entries: count, SHA256: hex.EncodeToString(sum[:]), Data: content.Body}, nil
 }
 
 func GeoRules(p Profile) []string {

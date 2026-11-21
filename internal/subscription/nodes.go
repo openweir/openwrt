@@ -1,13 +1,8 @@
 package subscription
 
-import (
-	"errors"
+import "errors"
 
-	"github.com/openweir/openwrt/internal/proxyspec"
-)
-
-var errNode = errors.New("invalid_node")
-var errOption = proxyspec.ErrOption
+// A Snell node without its psk (warningNotice), which blocks an update that would lose it.
 var errSnellCredential = errors.New("nonstandard_snell_credential")
 var errInvalidCredential = errors.New("invalid_credential")
 
