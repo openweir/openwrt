@@ -2,6 +2,21 @@
 # iptables on a firewall4 image can be an nft compatibility frontend.
 bypass4='0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 172.16.0.0/12 192.168.0.0/16 224.0.0.0/4 240.0.0.0/4'
 bypass6='::/128 ::1/128 fe80::/10 fc00::/7 ff00::/8'
+# Ports kept when only common ports are proxied: web, mail, chat, DNS-over-TLS and Cloudflare's alternates.
+common_ports='21, 22, 53, 80, 123, 143, 194, 443, 465, 587, 853, 993, 995, 998, 2052, 2053, 2082, 2083, 2086, 2095, 2096, 5222, 5228, 5229, 5230, 8080, 8443, 8880, 8888, 8889'
+
+# Networks the router is directly attached to (LAN, WAN and delegated IPv6
+# prefixes), so public LAN addresses and the upstream modem stay direct.
+# Only kernel-connected and delegated routes count; a VPN's static routes never do.
+local_prefixes() {
+ if [ "$1" = 4 ]; then
+  ip -4 route show table main proto kernel 2>/dev/null | awk '$1 != "default" && $1 ~ /^[0-9.]+(\/[0-9]+)?$/ {print $1}'
+ else
+  ip -6 route show table main 2>/dev/null | awk '
+   { p = $1; if (p == "unreachable" || p == "blackhole" || p == "prohibit") p = $2; else if ($0 !~ / proto kernel /) next }
+   p != "default" && p !~ /^(fe80|ff[0-9a-f][0-9a-f]):/ && p ~ /^[0-9a-f:]+(\/[0-9]+)?$/ {print p}'
+ fi | sort -u
+}
 
 legacy_tool() {
  case "$1" in 4) xtbase=iptables ;; 6) xtbase=ip6tables ;; *) return 1 ;; esac
@@ -75,7 +90,7 @@ legacy_plan() {
  # Replies to connections opened from outside (port forwards, inbound services) stay untouched.
  echo "-A OPENWEIR_LAN -m conntrack --ctdir REPLY $tag -j RETURN"
  echo "-A OPENWEIR_LAN -m addrtype --dst-type $desttypes $tag -j RETURN"
- for prefix in $private_ips; do
+ for prefix in $private_ips $(local_prefixes "$fam"); do
   echo "-A OPENWEIR_LAN -d $prefix $tag -j RETURN"
  done
  for proto_name in tcp udp; do

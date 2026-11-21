@@ -82,6 +82,9 @@ dns_restore() {
  /etc/init.d/dnsmasq restart || return 1
  rm -f "$state/dns"
 }
+# Every optional dnsmasq line is written only when this build lists the option:
+# names are case-sensitive and an unknown line stops dnsmasq from starting.
+dnsmasq_has() { dnsmasq --help 2>/dev/null | grep -qE -- "--$1([^A-Za-z0-9-]|$)"; }
 dns_setup() {
  if ! dnsdirs >"$state/dns.raw"; then
   read -r prefix issue <"$state/dns.raw" && [ "$prefix" = missing ] && stage=$issue
@@ -102,11 +105,36 @@ dns_setup() {
    # Without IPv6 takeover, AAAA answers would send preferred IPv6 traffic
    # around the proxy, so hide them while the takeover is active.
    # The option is case-sensitive and needs dnsmasq 2.87 or newer; an unknown line stops dnsmasq.
-   if [ "$v6" != 1 ] && dnsmasq --help 2>/dev/null | grep -q -- '--filter-AAAA'; then echo 'filter-AAAA'; fi
+   if [ "$v6" != 1 ] && dnsmasq_has filter-AAAA; then echo 'filter-AAAA'; fi
   } >"$tmp"
   chmod 0644 "$tmp"; mv -f "$tmp" "$dir/$dnsfile"
  done <"$state/dns"
  /etc/init.d/dnsmasq restart
+}
+# Append elements to one of our sets in the pending batch, one per line.
+set_elements() {
+ [ -n "$2" ] || return 0
+ { echo "add element inet openweir $1 {"; printf '%s\n' "$2" | sed '$!s/$/,/'; echo '}'; } >>"$batch"
+}
+# Unused ports skip the core. With fake-ip every port to the fake range must still reach it.
+port_filter() {
+ [ "$only_common" = 1 ] || return 0
+ if [ "$fake_ip" = 1 ]; then
+  echo "  meta nfproto ipv4 ip daddr != 198.18.0.0/16 meta l4proto { tcp, udp } th dport != { $common_ports } return" >>"$batch"
+ else
+  echo "  meta nfproto ipv4 meta l4proto { tcp, udp } th dport != { $common_ports } return" >>"$batch"
+ fi
+ echo "  meta nfproto ipv6 meta l4proto { tcp, udp } th dport != { $common_ports } return" >>"$batch"
+}
+# Interface changes (PPPoE redial, a new IPv6 prefix) only replace the attached-network sets.
+refresh() {
+ [ -f "$state/owned" ] && [ "$(cat "$state/backend" 2>/dev/null)" = fw4 ] && owned_table || return 0
+ batch="$state/refresh.nft"
+ v6=0; [ ! -f "$state/ipv6" ] || v6=1
+ { echo 'flush set inet openweir local4'; echo 'flush set inet openweir local6'; } >"$batch"
+ set_elements local4 "$(local_prefixes 4)"
+ if [ "$v6" = 1 ]; then set_elements local6 "$(local_prefixes 6)"; fi
+ nft -f "$batch"
 }
 clean_routes() {
  family=$1
@@ -335,6 +363,10 @@ apply() {
  fake_ip=0
  if [ "$dns" = 1 ] && [ "$(uci -q get openweir.main.fake_ip)" != 0 ]; then fake_ip=1; fi
  if [ "$backend" != fw4 ] || [ -z "$core_gid" ] || [ "$core_gid" = 0 ]; then local_proxy=0; fake_ip=0; fi
+ # Firewall-level shortcuts need nftables sets; on fw3 the core still routes these itself.
+ bypass_cn=$(uci -q get openweir.main.bypass_cn || echo 0)
+ only_common=$(uci -q get openweir.main.common_ports || echo 0)
+ if [ "$backend" != fw4 ]; then bypass_cn=0; only_common=0; fi
  if [ "$backend" = fw3 ]; then
   stage=legacy_capabilities
   legacy_families=4
@@ -346,6 +378,10 @@ apply() {
  cat >"$batch" <<EOF
 table inet openweir {
  comment "$note"
+ set local4 { type ipv4_addr; flags interval; auto-merge; }
+ set local6 { type ipv6_addr; flags interval; auto-merge; }
+ set cn4 { type ipv4_addr; flags interval; auto-merge; }
+ set cn6 { type ipv6_addr; flags interval; auto-merge; }
  chain lan {
   type filter hook prerouting priority mangle - 1; policy accept;
 EOF
@@ -367,7 +403,12 @@ EOF
  cat >>"$batch" <<EOF
   ip daddr { $(echo "$bypass4" | sed 's/ /, /g') } return
   ip6 daddr { $(echo "$bypass6" | sed 's/ /, /g') } return
+  ip daddr @local4 return
+  ip6 daddr @local6 return
+  ip daddr @cn4 return
+  ip6 daddr @cn6 return
 EOF
+ port_filter
  if [ "$method" = tun ]; then
   echo '  meta l4proto { tcp, udp } meta mark set (meta mark & 0xffff0000) | 0x4f57' >>"$batch"
  else
@@ -401,11 +442,24 @@ EOF
   meta l4proto { tcp, udp } th dport 53 return
   ip daddr { $(echo "$bypass4" | sed 's/ /, /g') } return
   ip6 daddr { $(echo "$bypass6" | sed 's/ /, /g') } return
+  ip daddr @local4 return
+  ip6 daddr @local6 return
+  ip daddr @cn4 return
+  ip6 daddr @cn6 return
+EOF
+  port_filter
+  cat >>"$batch" <<EOF
   meta l4proto { tcp, udp } meta mark set (meta mark & 0xffff0000) | $mark
  }
 EOF
  fi
  echo '}' >>"$batch"
+ set_elements local4 "$(local_prefixes 4)"
+ if [ "$v6" = 1 ]; then set_elements local6 "$(local_prefixes 6)"; fi
+ if [ "$bypass_cn" = 1 ]; then
+  set_elements cn4 "$(openweir-net cn-ranges 4)"
+  if [ "$v6" = 1 ]; then set_elements cn6 "$(openweir-net cn-ranges 6)"; fi
+ fi
  stage=firewall_prepare
  nft -j list table inet fw4 >/dev/null
  nft -c -f "$batch"
@@ -459,6 +513,7 @@ case "${1:-}" in
  apply) trap 'finish_apply "$?"' EXIT; apply ;;
  verify) verify || { fail_stage managed_lan_probe; exit 1; } ;;
  release) release ;;
+ refresh) refresh ;;
  fault) fault ;;
  *) exit 2 ;;
 esac

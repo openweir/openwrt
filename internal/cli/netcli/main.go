@@ -1,13 +1,38 @@
 package netcli
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"github.com/openweir/openwrt/internal/netguard"
+	"github.com/openweir/openwrt/internal/subscription"
 	"os"
 	"os/signal"
 	"syscall"
 )
+
+// cnRanges prints the built-in mainland China ranges of one family as nft set elements.
+func cnRanges(v6 bool) error {
+	data, err := os.ReadFile("/usr/share/openweir/rules/geoip-cn.mrs")
+	if err != nil {
+		return err
+	}
+	ranges, err := subscription.MRSRanges(data)
+	if err != nil {
+		return err
+	}
+	w := bufio.NewWriter(os.Stdout)
+	for _, r := range ranges {
+		if r[0].Is6() == v6 {
+			if r[0] == r[1] {
+				fmt.Fprintln(w, r[0])
+			} else {
+				fmt.Fprintf(w, "%s-%s\n", r[0], r[1])
+			}
+		}
+	}
+	return w.Flush()
+}
 
 func Main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -15,6 +40,8 @@ func Main() {
 	var e error
 	if len(os.Args) == 2 && (os.Args[1] == "management-record" || os.Args[1] == "management-check") {
 		e = netguard.Management(ctx, os.Args[1] == "management-record")
+	} else if len(os.Args) == 3 && os.Args[1] == "cn-ranges" && (os.Args[2] == "4" || os.Args[2] == "6") {
+		e = cnRanges(os.Args[2] == "6")
 	} else if len(os.Args) >= 2 && os.Args[1] == "dns-directories" {
 		e = netguard.DNSDirectories(os.Args[2:], os.Stdout)
 	} else {

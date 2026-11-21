@@ -9,4 +9,6 @@ case "$INTERFACE" in
  *) managed=$(uci -q get openweir.main.network) || exit 0
     case " $managed " in *" $INTERFACE "*) ;; *) exit 0 ;; esac ;;
 esac
+# Keep the attached-network bypass sets current (new IPv6 prefix, PPPoE redial) before the manager reacts.
+/usr/libexec/openweir/network refresh >/dev/null 2>&1 || :
 /usr/sbin/openweird notify-network

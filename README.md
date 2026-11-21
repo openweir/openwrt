@@ -51,6 +51,8 @@ DNS protection keeps dnsmasq in charge of local names and forwards upstream quer
 
 The core resolves mainland China names through domestic DoH and every other name through encrypted DNS sent over the proxy, so poisoned answers never reach the routing decision. Edit both lists under **DNS** on the overview. Fake-IP is the default DNS mode while DNS protection is on; switch to real IPs beside the run mode. Domain sniffing dials the real domain, QUIC is blocked by default so browsers use TCP, and without IPv6 takeover dnsmasq hides AAAA answers so devices stay on IPv4. The router's own traffic follows the same rules on fw4 unless you turn off **Proxy the router itself**.
 
+Networks the router is attached to, including LAN and WAN subnets and delegated IPv6 prefixes, always stay direct and are refreshed when an interface changes. On fw4, **Connection tuning** can also send mainland China IPs and uncommon ports straight past the core; both are off by default, and with Fake-IP the China IP shortcut only covers connections made to an IP address.
+
 Changing the routing mode, subscription, rules, groups or failover reloads the running core in place. Changes to the run mode, DNS, IPv6, LAN networks or the kernel restart the takeover.
 
 Domain-specific dnsmasq upstreams, such as an internal resolver for a company domain, can coexist with DNS protection. If a managed instance has an explicit default upstream, a dynamic server list or a configuration directory shared with an unmanaged instance, the environment check identifies the conflict. With fail-open enabled, the watchdog restores direct DNS when repeated checks of the local mihomo DNS listener fail.

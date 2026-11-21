@@ -640,7 +640,7 @@ export async function overview(ui) {
 		upstreamRow(ui, '国内域名', '直连解析', 'domestic', prefs.dns_domestic, (v) => saveP({ dns_domestic: v })),
 		upstreamRow(ui, '其他域名', '经代理加密解析', 'foreign', prefs.dns_foreign, (v) => saveP({ dns_foreign: v })),
 	);
-	// A compact 2x2 card; each note moves into the label's tooltip.
+	// A compact two-column card; each note moves into the label's tooltip.
 	const compactToggle = (title, note, value, fn) =>
 		h('div', { class: 'ow-row', title: note }, title, toggle(title, value, fn));
 	const tuning = card(
@@ -650,6 +650,8 @@ export async function overview(ui) {
 			compactToggle('屏蔽 QUIC', '改用 TCP，分流更准', prefs.block_quic !== false, (v) => saveP({ block_quic: v })),
 			compactToggle('并发连接', '多地址同时连接', prefs.tcp_concurrent !== false, (v) => saveP({ tcp_concurrent: v })),
 			compactToggle('统一延迟', '测速不计握手', prefs.unified_delay !== false, (v) => saveP({ unified_delay: v })),
+			compactToggle('大陆 IP 直连', '国内 IP 在防火墙直连，不经内核；Fake-IP 下仅对直接用 IP 的连接生效', !!prefs.bypass_cn, (v) => saveP({ bypass_cn: v })),
+			compactToggle('仅常用端口', '只代理网页、邮件等常用端口，其余直连', !!prefs.common_ports, (v) => saveP({ common_ports: v })),
 		),
 	);
 	const failOpen = prefs.fail_open !== false;

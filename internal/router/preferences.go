@@ -24,6 +24,8 @@ type Preferences struct {
 	Sniff        *bool    `json:"sniff,omitempty"`
 	Concurrent   *bool    `json:"tcp_concurrent,omitempty"`
 	UnifiedDelay *bool    `json:"unified_delay,omitempty"`
+	BypassCN     *bool    `json:"bypass_cn,omitempty"`
+	CommonPorts  *bool    `json:"common_ports,omitempty"`
 	DNSDomestic  []string `json:"dns_domestic,omitempty"`
 	DNSForeign   []string `json:"dns_foreign,omitempty"`
 	IPv6         bool     `json:"ipv6"`
@@ -67,6 +69,7 @@ func (p Preferences) SameNetwork(o Preferences) bool {
 	return p.Method == o.Method && p.DNS == o.DNS && p.DNSIntercept == o.DNSIntercept && p.IPv6 == o.IPv6 && slices.Equal(p.Networks, o.Networks) &&
 		sameBit(p.FailOpen, o.FailOpen) && sameBit(p.LocalProxy, o.LocalProxy) && sameBit(p.BlockQUIC, o.BlockQUIC) && sameBit(p.FakeIP, o.FakeIP) &&
 		sameBit(p.Sniff, o.Sniff) && sameBit(p.Concurrent, o.Concurrent) && sameBit(p.UnifiedDelay, o.UnifiedDelay) &&
+		sameBit(p.BypassCN, o.BypassCN) && sameBit(p.CommonPorts, o.CommonPorts) &&
 		sameList(p.DNSDomestic, o.DNSDomestic) && sameList(p.DNSForeign, o.DNSForeign)
 }
 
@@ -93,6 +96,11 @@ func ReadPreferences(ctx context.Context) (Preferences, error) {
 	p.Concurrent = &concurrent
 	unified := uci(ctx, "unified_delay") != "0"
 	p.UnifiedDelay = &unified
+	// Both narrow what the firewall hands to the core, so they stay off unless chosen.
+	cn := uci(ctx, "bypass_cn") == "1"
+	p.BypassCN = &cn
+	ports := uci(ctx, "common_ports") == "1"
+	p.CommonPorts = &ports
 	p.DNSDomestic = upstreams(uci(ctx, "dns_domestic"), DomesticDNS)
 	p.DNSForeign = upstreams(uci(ctx, "dns_foreign"), ForeignDNS)
 	return p, p.Validate()
@@ -119,7 +127,7 @@ func SavePreferences(ctx context.Context, p Preferences) error {
 	if p.LocalProxy != nil {
 		b.WriteString("set openweir.main.local_proxy='" + bit(*p.LocalProxy) + "'\n")
 	}
-	for k, v := range map[string]*bool{"sniff": p.Sniff, "tcp_concurrent": p.Concurrent, "unified_delay": p.UnifiedDelay} {
+	for k, v := range map[string]*bool{"sniff": p.Sniff, "tcp_concurrent": p.Concurrent, "unified_delay": p.UnifiedDelay, "bypass_cn": p.BypassCN, "common_ports": p.CommonPorts} {
 		if v != nil {
 			b.WriteString("set openweir.main." + k + "='" + bit(*v) + "'\n")
 		}
