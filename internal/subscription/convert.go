@@ -94,8 +94,10 @@ func formatName(f subconv.Format) string {
 func warningNotice(w subconv.Warning) Notice {
 	n := Notice{Code: "subconv_" + w.Code, At: publicLabel(w.Detail, "")}
 	switch w.Code {
-	case subconv.WarnUnsupportedRule, subconv.WarnUnsupportedRuleSet:
-		n.Dangerous = true
+	case subconv.WarnUnsupportedRule:
+		// As before the switch, only a dropped rejection needs confirming: a subscription that
+		// always loses some other rule would otherwise stop at every scheduled refresh.
+		n.Dangerous = dropsRejection(w.Detail)
 	case "invalid_credential":
 		name, problem := w.Detail, ""
 		if i := strings.LastIndex(w.Detail, ": "); i >= 0 {
@@ -112,6 +114,22 @@ func warningNotice(w subconv.Warning) Notice {
 		}
 	}
 	return n
+}
+
+// dropsRejection reports whether a dropped rule, given as "<rule as written>: <problem>" or
+// "rule <n> to <target>: <problem>", rejected traffic. The target is the last field, or the one before a trailing option.
+func dropsRejection(detail string) bool {
+	line, _, _ := strings.Cut(detail, ": ")
+	// A rule dropped with its rule set reads "rule <n> to <target>".
+	if i := strings.LastIndex(line, " to "); i >= 0 && !strings.Contains(line, ",") {
+		line = line[i+4:]
+	}
+	fields := strings.Split(line, ",")
+	target := strings.TrimSpace(fields[len(fields)-1])
+	if (strings.EqualFold(target, "no-resolve") || strings.EqualFold(target, "src")) && len(fields) > 1 {
+		target = strings.TrimSpace(fields[len(fields)-2])
+	}
+	return strings.EqualFold(target, "REJECT") || strings.EqualFold(target, "REJECT-DROP")
 }
 
 // Top-level Clash fields the router decides itself.

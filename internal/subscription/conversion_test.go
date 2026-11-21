@@ -125,8 +125,13 @@ func TestConverterWarningsKeepTheirWeight(t *testing.T) {
 		code    string
 		danger  bool
 	}{
-		{subconv.Warning{Code: subconv.WarnUnsupportedRule, Detail: "USER-AGENT,app*,Proxy: rule type USER-AGENT"}, "subconv_unsupported_rule", true},
-		{subconv.Warning{Code: subconv.WarnUnsupportedRuleSet, Detail: "ads: a sing-box rule set mihomo cannot read"}, "subconv_unsupported_rule_set", true},
+		// Only a dropped rejection needs confirming; its rule set's rules are reported one by one.
+		{subconv.Warning{Code: subconv.WarnUnsupportedRule, Detail: "USER-AGENT,app*,Proxy: rule type USER-AGENT"}, "subconv_unsupported_rule", false},
+		{subconv.Warning{Code: subconv.WarnUnsupportedRule, Detail: "USER-AGENT,ads*,REJECT: rule type USER-AGENT"}, "subconv_unsupported_rule", true},
+		{subconv.Warning{Code: subconv.WarnUnsupportedRule, Detail: "IP-CIDR6,2001:db8::/32,REJECT-DROP,no-resolve: x"}, "subconv_unsupported_rule", true},
+		{subconv.Warning{Code: subconv.WarnUnsupportedRule, Detail: "rule 2 to REJECT: rule set ads was left out"}, "subconv_unsupported_rule", true},
+		{subconv.Warning{Code: subconv.WarnUnsupportedRule, Detail: "rule 3 to Proxy: rule set ads was left out"}, "subconv_unsupported_rule", false},
+		{subconv.Warning{Code: subconv.WarnUnsupportedRuleSet, Detail: "ads: a sing-box rule set mihomo cannot read"}, "subconv_unsupported_rule_set", false},
 		{subconv.Warning{Code: "invalid_credential", Detail: "Edge: a password but no psk"}, "nonstandard_snell_credential", false},
 		{subconv.Warning{Code: "invalid_credential", Detail: "Edge: no psk"}, "invalid_credential", false},
 		{subconv.Warning{Code: "invalid_credential", Detail: "Edge: no uuid"}, "node_missing_credential", false},
@@ -137,7 +142,7 @@ func TestConverterWarningsKeepTheirWeight(t *testing.T) {
 			t.Errorf("%v: %+v", tc.warning, n)
 		}
 	}
-	// Only dropped rules weigh on the routing; whatever else subconv reports informs.
+	// Only dropped rejections weigh on the routing; whatever else subconv reports informs.
 	p := mustParse(t, basic)
 	for _, code := range []string{"invalid_proxy", "ignored_option", "renamed", "unsupported_provider", "local_provider", "unsupported_group", "unknown_reference", "cyclic_reference", "empty_group", "unsupported_proxy", "unsupported_option", "a_future_code"} {
 		p.Notices = append(p.Notices, warningNotice(subconv.Warning{Code: code, Detail: "x"}))
@@ -145,9 +150,13 @@ func TestConverterWarningsKeepTheirWeight(t *testing.T) {
 	if c := Assess(p, nil, Policy{}); c.Decision != "ready" {
 		t.Fatal(c.Decision)
 	}
-	p.Notices = append(p.Notices, warningNotice(subconv.Warning{Code: subconv.WarnUnsupportedRule, Detail: "SUB-RULE,(NETWORK,UDP),udp"}))
+	p.Notices = append(p.Notices, warningNotice(subconv.Warning{Code: subconv.WarnUnsupportedRule, Detail: "SUB-RULE,(NETWORK,UDP),udp: rule type SUB-RULE"}))
+	if c := Assess(p, nil, Policy{AllowLocalFallback: true}); c.Decision != "ready" {
+		t.Fatal("a dropped rule that rejected nothing stopped the refresh", c.Decision)
+	}
+	p.Notices = append(p.Notices, warningNotice(subconv.Warning{Code: subconv.WarnUnsupportedRule, Detail: "GEOSITE,category-ads,REJECT: unknown"}))
 	if c := Assess(p, nil, Policy{AllowLocalFallback: true}); c.Decision != "confirmation_required" {
-		t.Fatal("a dropped rule went unconfirmed")
+		t.Fatal("a dropped rejection went unconfirmed")
 	}
 }
 
