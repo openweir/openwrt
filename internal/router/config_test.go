@@ -434,6 +434,55 @@ func TestChinaShortcutGivesMainlandNamesRealAddresses(t *testing.T) {
 	}
 }
 
+func TestChinaShortcutKeepsRuledNamesFake(t *testing.T) {
+	p := baseProfile(t, "p")
+	p.Local = false
+	const hk = "group:hk"
+	p.Groups = []subscription.Group{{ID: hk, Kind: "selector", Members: []string{p.Nodes[0].ID, subscription.Direct}}}
+	p.Final = hk
+	p.BinarySets = []subscription.BinarySet{
+		{Tag: "media", Format: "mrs", Behavior: "domain", SHA256: strings.Repeat("a", 64)},
+		{Tag: "ips", Format: "mrs", Behavior: "ipcidr", SHA256: strings.Repeat("b", 64)},
+		{Tag: "openweir-mix", Format: "text", Behavior: "classical", SHA256: strings.Repeat("c", 64)},
+	}
+	rule := func(clash, target string) subscription.Rule {
+		r := subscription.Rule{Match: obj{"clash": clash}, Target: target}
+		if set, ok := strings.CutPrefix(clash, "RULE-SET,"); ok {
+			r.RuleSet = set
+		}
+		return r
+	}
+	p.Rules = []subscription.Rule{
+		rule("DOMAIN-SUFFIX,bilibili.com", hk), rule("DOMAIN,a.example.cn", hk), rule("DOMAIN-KEYWORD,bili", hk), rule("DOMAIN-SUFFIX,direct.cn", subscription.Direct),
+		rule("RULE-SET,media", hk), rule("RULE-SET,ips", hk), rule("RULE-SET,openweir-mix", subscription.Reject), rule("GEOSITE,bilibili", hk),
+		rule("AND,((DOMAIN,x.cn),(NETWORK,TCP))", hk), rule("DOMAIN-SUFFIX,bilibili.com", subscription.Reject),
+	}
+	i := initial()
+	i.Source = p.Source
+	i.Policy.Rules = []CustomRule{
+		{ID: "a", Rule: subscription.Rule{Match: obj{"domain_suffix": []any{"douyin.com", "bilibili.com"}}, Target: hk}},
+		{ID: "b", Rule: subscription.Rule{Match: obj{"domain": "z.cn", "port": 443}, Target: subscription.Reject}},
+		{ID: "c", Rule: subscription.Rule{Match: obj{"domain": "d.cn"}, Target: subscription.Direct}},
+	}
+	n := Network{Method: "tproxy", DNS: true, FakeIP: true, ChinaDirect: true, Resolver: "192.0.2.53"}
+	c := configForTest(t, i, p, n)
+	routed := c["rule-providers"].(map[string]any)[routedSet].(map[string]any)
+	if !slices.Equal(routed["payload"].([]any), []any{"+.douyin.com", "+.bilibili.com", "z.cn", "a.example.cn"}) || routed["type"] != "inline" || routed["behavior"] != "domain" {
+		t.Fatal(routed)
+	}
+	filter := []any{"RULE-SET," + realIPSet + ",real-ip", "RULE-SET," + proxiedCNSet + ",fake-ip", "RULE-SET," + routedSet + ",fake-ip",
+		"DOMAIN-KEYWORD,bili,fake-ip", "RULE-SET,media,fake-ip", "RULE-SET,openweir-sub-openweir-mix,fake-ip", "GEOSITE,bilibili,fake-ip",
+		"RULE-SET," + dnsDomesticSet + ",real-ip", "MATCH,fake-ip"}
+	if got := c["dns"].(map[string]any)["fake-ip-filter"].([]any); !slices.Equal(got, filter) {
+		t.Fatal(got)
+	}
+	// Without the shortcut nothing is kept back.
+	i.Mode = "global"
+	if c = configForTest(t, i, p, n); c["rule-providers"].(map[string]any)[routedSet] != nil {
+		t.Fatal("names kept fake without the shortcut")
+	}
+}
+
 // dnsPolicyEntries reads nameserver-policy in document order, the order the core tries it.
 func dnsPolicyEntries(t *testing.T, data []byte) (keys []string, servers [][]string) {
 	t.Helper()

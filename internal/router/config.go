@@ -149,6 +149,7 @@ const dnsDomesticSet = "openweir-dns-cn"
 const domesticIPSet = "openweir-ip-cn"
 const realIPSet = "openweir-real-ip"
 const proxiedCNSet = "openweir-cn-proxied"
+const routedSet = "openweir-routed"
 
 // profileSet moves a subscription's rule set out of the openweir- names, which belong to the
 // built-in and device sets, so that no subscription can replace or collide with them.
@@ -160,6 +161,53 @@ func profileSet(tag string) string {
 }
 
 var ruleSetRef = regexp.MustCompile(`(?i)(RULE-SET\s*,\s*)([^,()]+)`)
+
+// routedByName lists what a rule matches by name alone: patterns for a domain set, and
+// fake-ip filter rules for the other name matches the filter accepts. Conditions on
+// addresses, ports or logical combinations are left out.
+func routedByName(r subscription.Rule, behavior map[string]string) (names, filters []string) {
+	add := func(kind, value string) {
+		switch kind {
+		case "DOMAIN":
+			names = append(names, value)
+		case "DOMAIN-SUFFIX":
+			names = append(names, "+."+value)
+		case "DOMAIN-KEYWORD", "DOMAIN-REGEX", "DOMAIN-WILDCARD", "GEOSITE":
+			filters = append(filters, kind+","+value+",fake-ip")
+		case "RULE-SET":
+			// The filter refuses address sets; classical ones match by their name rules.
+			if b := behavior[value]; b == "domain" || b == "classical" {
+				filters = append(filters, "RULE-SET,"+profileSet(value)+",fake-ip")
+			}
+		}
+	}
+	if line, ok := r.Match["clash"].(string); ok {
+		if r.Match["src"] != true {
+			kind, value, _ := strings.Cut(line, ",")
+			add(strings.ToUpper(strings.TrimSpace(kind)), strings.TrimSpace(value))
+		}
+		return names, filters
+	}
+	for _, f := range [][2]string{{"domain", "DOMAIN"}, {"domain_suffix", "DOMAIN-SUFFIX"}, {"domain_keyword", "DOMAIN-KEYWORD"}, {"domain_regex", "DOMAIN-REGEX"}, {"rule_set", "RULE-SET"}} {
+		values, _ := matchValues(r.Match[f[0]])
+		for _, v := range values {
+			add(f[1], v)
+		}
+	}
+	return names, filters
+}
+
+// unique drops repeats and keeps the first order, so the configuration stays the same.
+func unique(list []string) []string {
+	seen := map[string]bool{}
+	return slices.DeleteFunc(list, func(s string) bool {
+		if seen[s] {
+			return true
+		}
+		seen[s] = true
+		return false
+	})
+}
 
 // mainlandRule reports whether a profile rule matches by the mainland lists: the bundled
 // sets, a set or GEOSITE category named as a cn one, or GEOIP,CN.
@@ -519,15 +567,15 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 	// With the China shortcut the firewall sends mainland addresses straight out. As with
 	// OpenClash's China route, mainland names then get real addresses from the domestic
 	// resolvers, so their traffic also leaves in the kernel instead of through the core.
-	// Names the proxy must carry keep fake addresses so they still reach the core.
-	if n.DNS && n.FakeIP && chinaShortcut(i, n) {
-		providers[realIPSet] = obj{"type": "inline", "behavior": "domain", "payload": fakeIPFilter}
-		dns := config["dns"].(obj)
-		dns["fake-ip-filter-mode"] = "rule"
-		dns["fake-ip-filter"] = []string{"RULE-SET," + realIPSet + ",real-ip", "RULE-SET," + proxiedCNSet + ",fake-ip", "RULE-SET," + dnsDomesticSet + ",real-ip", "MATCH,fake-ip"}
-	}
+	// Names the proxy must carry, and names that rules send anywhere but DIRECT (a group may
+	// switch between direct and a proxy at any time), keep fake addresses so the core still
+	// routes them. Device routes cannot be kept this way: the filter sees only the name, not
+	// which device asks, so a device sent to a proxy still reaches mainland names directly.
+	shortcut := n.DNS && n.FakeIP && chinaShortcut(i, n)
+	var routedNames, routedRules []string
 	if i.Mode == "smart" {
 		moved := map[string]bool{}
+		behavior := map[string]string{subscription.DomesticDomainSet: "domain", subscription.DomesticIPSet: "ipcidr"}
 		for _, set := range p.BinarySets {
 			if !digestName.MatchString(set.SHA256) || filepath.Base(set.Filename()) != set.Filename() {
 				return nil, errors.New("invalid rule provider digest")
@@ -541,11 +589,16 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 				return nil, errors.New("rule provider name collision")
 			}
 			moved[set.Tag] = name != set.Tag
+			behavior[set.Tag] = set.Behavior
 			providers[name] = obj{"type": "file", "format": format, "behavior": set.Behavior, "path": "./rulesets/" + set.Filename()}
 		}
 		addRule := func(r subscription.Rule) error {
 			if !targets[r.Target] {
 				return fmt.Errorf("unavailable rule target %s", r.Target)
+			}
+			if shortcut && r.Target != subscription.Direct {
+				names, filters := routedByName(r, behavior)
+				routedNames, routedRules = append(routedNames, names...), append(routedRules, filters...)
 			}
 			line, err := nativeRule(r.Match, coreTarget(r.Target))
 			if err == nil {
@@ -606,6 +659,17 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 			}
 		}
 		placePlay()
+	}
+	if shortcut {
+		providers[realIPSet] = obj{"type": "inline", "behavior": "domain", "payload": fakeIPFilter}
+		filter := []string{"RULE-SET," + realIPSet + ",real-ip", "RULE-SET," + proxiedCNSet + ",fake-ip"}
+		if routedNames = unique(routedNames); len(routedNames) > 0 {
+			providers[routedSet] = obj{"type": "inline", "behavior": "domain", "payload": routedNames}
+			filter = append(filter, "RULE-SET,"+routedSet+",fake-ip")
+		}
+		dns := config["dns"].(obj)
+		dns["fake-ip-filter-mode"] = "rule"
+		dns["fake-ip-filter"] = append(append(filter, unique(routedRules)...), "RULE-SET,"+dnsDomesticSet+",real-ip", "MATCH,fake-ip")
 	}
 	if !targets[end] {
 		return nil, errors.New("default route has no available group")
