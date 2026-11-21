@@ -223,6 +223,7 @@ func (s *app) handle(ctx context.Context, method string, r request) (any, error)
 		if t := cnlist.Updated(); !t.IsZero() {
 			status.ChinaLists = t.UnixMilli()
 		}
+		status.SideRouter = router.SideRouter()
 		if status.Phase == "starting" && s.sys != nil {
 			status.ConfirmationSeconds = s.sys.ConfirmationSeconds()
 		}

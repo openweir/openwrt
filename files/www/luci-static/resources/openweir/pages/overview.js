@@ -417,6 +417,7 @@ export async function overview(ui) {
 		power,
 		h('strong', { class: 'ow-plan-label' }, cat.primary?.name || '尚未选择订阅'),
 		h('small', { class: 'ow-muted' }, devices.unavailable ? '等待局域网接口' : devices.items.length + ' 台局域网设备'),
+		running && ui.status.side_router && h('small', { class: 'ow-muted' }, '旁路由模式：设备的网关和 DNS 都需要指向本机'),
 		h(
 			'div',
 			{ class: 'ow-graph-block' },

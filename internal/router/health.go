@@ -101,6 +101,14 @@ func (s *System) verify(ctx context.Context) error {
 	_, e := command(ctx, networkHelper, "verify")
 	return e
 }
+
+// SideRouter reports a takeover on a side router (旁路由): the network helper found the IPv4
+// default route on a managed LAN, so devices must use this router as gateway and DNS.
+func SideRouter() bool {
+	_, e := os.Stat(RunDir + "/network/side_router")
+	return e == nil
+}
+
 func (s *System) Healthy(ctx context.Context) error {
 	s.mu.Lock()
 	audit := s.audit

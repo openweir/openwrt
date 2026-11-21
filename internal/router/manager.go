@@ -34,6 +34,7 @@ type Status struct {
 	RunningSince        int64  `json:"running_since,omitempty"`
 	FailOpen            bool   `json:"fail_open"`
 	Problem             string `json:"error,omitempty"`
+	SideRouter          bool   `json:"side_router,omitempty"` // see SideRouter
 	// When the China lists in use were downloaded; unset for the packaged copies.
 	ChinaLists int64 `json:"china_lists,omitempty"`
 }

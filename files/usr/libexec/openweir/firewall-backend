@@ -119,12 +119,21 @@ legacy_plan() {
   echo "-I PREROUTING $position -i $device $tag -j OPENWEIR_LAN"
  done
  echo COMMIT
- if [ "${dns_intercept:-0}" = 1 ]; then
+ side_nat=0; if [ "$fam" = 4 ] && [ "${side_router:-0}" = 1 ]; then side_nat=1; fi
+ if [ "${dns_intercept:-0}" = 1 ] || [ "$side_nat" = 1 ]; then
   echo '*nat'
   for device in $interfaces; do
-   for proto_name in tcp udp; do
-    echo "-I PREROUTING -i $device -p $proto_name --dport 53 -m addrtype --dst-type UNICAST $tag -j REDIRECT --to-ports 53"
-   done
+   if [ "${dns_intercept:-0}" = 1 ]; then
+    for proto_name in tcp udp; do
+     echo "-I PREROUTING -i $device -p $proto_name --dport 53 -m addrtype --dst-type UNICAST $tag -j REDIRECT --to-ports 53"
+    done
+   fi
+   # A side router's direct flows, as in the nft side_router chain. Appended after fw3's own
+   # rules so a zone NAT of the user's keeps precedence. Without sets this also masquerades
+   # flows routed between managed LANs, as masquerading on the LAN zone does.
+   if [ "$side_nat" = 1 ]; then
+    echo "-A POSTROUTING -o $device -m addrtype ! --src-type LOCAL $tag -j MASQUERADE"
+   fi
   done
   echo COMMIT
  fi
@@ -137,7 +146,7 @@ legacy_snapshot() {
   list=$("$xtcmd" -w 2 -t "$tbl" -S) || return 1
   echo "*$tbl"
   printf '%s\n' "$list" | awk -v owner="$note" '
-   $1=="-A" && ($2=="INPUT" || $2=="FORWARD" || $2=="PREROUTING" || $2=="OPENWEIR_LAN") {
+   $1=="-A" && ($2=="INPUT" || $2=="FORWARD" || $2=="PREROUTING" || $2=="POSTROUTING" || $2=="OPENWEIR_LAN") {
     for (i=3; i<NF; ++i) if ($i=="--comment" && ($(i+1)==owner || $(i+1)=="\"" owner "\"")) {print; break}
    }'
   echo COMMIT
@@ -152,6 +161,7 @@ legacy_prepare() {
   "$xtrestore" -V 2>/dev/null | grep -Fq '(legacy)' || return 1
   nat_table=
   if [ "${dns_intercept:-0}" = 1 ] && { [ "$fam" = 4 ] || [ "$v6" = 1 ]; }; then nat_table=nat; fi
+  if [ "$fam" = 4 ] && [ "${side_router:-0}" = 1 ]; then nat_table=nat; fi
   prior=$(legacy_snapshot "$xt" "$nat_table") || return 1
   if printf '%s\n' "$prior" | grep -q '^-A ' || "$xt" -w 2 -t mangle -S OPENWEIR_LAN >/dev/null 2>&1; then return 1; fi
   # The MAC match is an optional xtables module; without it the core still routes those devices direct.

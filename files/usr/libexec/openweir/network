@@ -306,7 +306,7 @@ release_active() {
   restored=0
   for _ in 1 2 3 4; do if verify_direct; then restored=1; break; fi; sleep 1; done
   [ "$restored" = 1 ] || { fail_stage direct_lan_probe; return 1; }
-  rm -f "$state/owned" "$state/armed" "$state/interfaces" "$state/dns-probed" "$state/ipv6" "$state/management.json" "$state/backend"
+  rm -f "$state/owned" "$state/armed" "$state/interfaces" "$state/dns-probed" "$state/ipv6" "$state/management.json" "$state/backend" "$state/side_router"
  fi
  return "$failure"
 }
@@ -484,6 +484,11 @@ apply() {
  openweir-net management-record
  names="";for dev in $interfaces; do names="$names, \"$dev\""; done
  names=${names#, }
+ # A side router (旁路由) reaches the internet through its main router on a managed LAN: the
+ # IPv4 default route leaves through that LAN and there is no WAN of its own.
+ side_router=0
+ uplink=$(ip -4 route show default 2>/dev/null | awk '{for (i = 1; i < NF; i++) if ($i == "dev") {print $(i+1); exit}}')
+ case " $interfaces " in *" $uplink "*) [ -z "$uplink" ] || side_router=1 ;; esac
  dns=$(uci -q get openweir.main.dns || echo 0)
  # As in OpenClash, DNS protection also takes over lookups devices send to other resolvers.
  dns_intercept=$dns
@@ -603,6 +608,21 @@ EOF
  }
 EOF
  fi
+ if [ "$side_router" = 1 ]; then
+  # Flows this router forwards direct (direct devices; China, private and NTP destinations)
+  # leave through the LAN to the main router, whose replies would reach the device straight:
+  # an asymmetric route that drop-invalid and stateful firewalls break. Masquerade them so the
+  # replies come back here, as OpenClash's bypass_gateway_compatible does. A NAT chain sees
+  # only a flow's first packet, so replies need no rule; proxied flows leave the core with a
+  # local source (TUN ones through owtun0) and never match. Attached networks keep device
+  # addresses, and running after srcnat lets a NAT rule of the user's own take precedence.
+  cat >>"$batch" <<EOF
+ chain side_router {
+  type nat hook postrouting priority srcnat + 1; policy accept;
+  meta nfproto ipv4 oifname { $names } fib saddr type != local ip daddr != @local4 masquerade
+ }
+EOF
+ fi
  if [ "$method" = tproxy ]; then
   cat >>"$batch" <<EOF
  chain listener_guard {
@@ -636,6 +656,7 @@ EOF
  apply_started=1
  echo "$backend" >"$state/backend"
  touch "$state/owned"
+ if [ "$side_router" = 1 ]; then touch "$state/side_router"; else rm -f "$state/side_router"; fi
  stage=ipv4_route
  add_routes 4
  if [ "$v6" = 1 ]; then stage=ipv6_route; add_routes 6; fi
