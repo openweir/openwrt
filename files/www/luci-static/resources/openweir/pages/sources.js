@@ -104,6 +104,7 @@ const notices = {
     subconv_unsupported_provider: '该节点提供方无法使用，已跳过',
     subconv_local_provider: '该提供方读取本机文件，只能使用已导入路由器的规则文件',
     subconv_unsupported_group: '该策略组类型无法使用，已跳过',
+    subconv_template_unavailable: '暂时取不到内置分流规则，已按默认分流：大陆直连，其余走代理。下次更新会重试',
     subconv_cyclic_reference: '策略组或前置代理形成循环，已移除其中一处引用',
     node_missing_credential: '节点缺少认证信息，已跳过',
     script: '订阅依赖脚本分流，路由器无法执行',
@@ -132,6 +133,19 @@ const notices = {
     unsupported_group: '策略组无法转换',
     source_mismatch: '来源与当前订阅不一致',
 };
+// Why a subscription routes by the built-in rules (the profile's template.reason).
+const templateReasons = {
+    requested: () => '已选择内置规则',
+    no_rules: () => '订阅未附带分流规则',
+    no_match: () => '订阅规则缺少最终规则',
+    dropped_rules: (t) => t.dropped + ' / ' + t.total + ' 条订阅规则无法使用',
+};
+function templateLine(t) {
+    const reason = templateReasons[t.reason]?.(t);
+    return ['内置分流规则', reason, '规则版本 ' + day(t.version), t.cached ? '暂用本机副本' : '']
+        .filter(Boolean)
+        .join(' · ');
+}
 function moreRows(u, body, rows, render, noun) {
     let offset = 0;
     const append = () => {
@@ -577,11 +591,18 @@ async function editSource(u, s, agents) {
     const url = input(u, { type: 'url', value: previousURL, required: true, placeholder: 'https://', autocomplete: 'off' });
     const fallback = input(u, { type: 'checkbox' });
     fallback.checked = !!s.local_fallback;
+    const routing = choice(u, [['', '订阅自带'], ['template', '内置规则']], s.rules || '', '分流规则');
     const controls = [];
     if (s.kind !== 'platform') controls.push(field(u, '名称', name));
     if (s.kind === 'external') controls.push(field(u, '订阅链接', url));
     if (a) controls.push(a.node);
-    controls.push(field(u, '可转换时允许使用本地分流', fallback));
+    controls.push(
+        field(u, '分流规则', routing),
+        muted(u, s.kind === 'file'
+            ? '订阅自带：订阅没有可用的规则时改用内置规则。更改在重新导入文件后生效。'
+            : '订阅自带：订阅没有可用的规则时改用内置规则。'),
+        field(u, '可转换时允许使用本地分流', fallback),
+    );
     const body = u.h('div', { class: 'ow-stack' });
     const dialog = u.dialog('编辑订阅', body);
     body.append(
@@ -590,12 +611,17 @@ async function editSource(u, s, agents) {
                 ...(a ? a.values() : {}),
                 ...(s.kind === 'platform' ? {} : { name: name.value.trim() }),
                 allow_local_fallback: fallback.checked,
+                rules: routing.value,
             };
             await write(u, 'preferences', { source: s.source, preferences });
             const nextURL = url.value.trim();
-            // A changed link is verified by downloading it before it replaces the old one.
+            // A changed link is verified by downloading it before it replaces the old one; a
+            // changed routing choice takes effect with the update it starts.
             if (s.kind === 'external' && nextURL !== previousURL) {
                 const ok = await importSource(u, s.source, undefined, undefined, undefined, nextURL);
+                if (!ok) return;
+            } else if (s.kind !== 'file' && routing.value !== (s.rules || '')) {
+                const ok = await importSource(u, s.source, '');
                 if (!ok) return;
             }
             dialog.close();
@@ -788,6 +814,7 @@ export async function subscriptions(u) {
                 use,
             ),
             metadata,
+            ...(s.template ? [muted(u, templateLine(s.template))] : []),
             ...(planInfo ? [planInfo] : []),
             ...(s.suspended ? [badge(u, '套餐暂不可用')] : []),
             ...(warning ? [u.h('details', {}, u.h('summary', {}, warning), review(u, s))] : []),
