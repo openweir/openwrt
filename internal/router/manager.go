@@ -105,8 +105,9 @@ func (m *Manager) Change(expected *uint64, edit func(*Intent) error) (uint64, er
 	if !validMode(i.Mode) {
 		return 0, errors.New("unknown routing mode")
 	}
-	if reflect.DeepEqual(i, m.state.Intent.clone()) {
-		return i.Revision, nil // nothing changed: keep the running core
+	// An unchanged intent keeps a healthy core; a failed one may still be retried.
+	if m.state.Phase == "running" && reflect.DeepEqual(i, m.state.Intent.clone()) {
+		return i.Revision, nil
 	}
 	i.Revision++
 	if e := m.store.Save(i); e != nil {

@@ -343,6 +343,7 @@ func TestChangeWithoutDifferenceKeepsRevision(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
+	m.state.Phase = "running"
 	r2, e := m.Change(nil, func(i *Intent) error { i.Mode = "global"; return nil })
 	if e != nil || r2 != r1 {
 		t.Fatalf("no-op change bumped revision %d -> %d (%v)", r1, r2, e)
