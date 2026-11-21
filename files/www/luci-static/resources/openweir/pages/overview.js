@@ -629,8 +629,8 @@ export async function overview(ui) {
 			toggle('接管设备 DNS（端口 53）', !!prefs.dns_intercept, (v) => saveP({ dns_intercept: v }))) : null,
 		prefs.dns ? updateRow('Fake-IP 模式', toggle('Fake-IP 模式', !!prefs.fake_ip, (v) => saveP({ fake_ip: v })),
 			h('small', { class: 'ow-muted' }, '虚拟地址，连接更快')) : null,
-		upstreamRow(ui, '国内域名', '直连解析', '223.5.5.5 · 120.53.53.53 DoH', prefs.dns_domestic, (v) => saveP({ dns_domestic: v })),
-		upstreamRow(ui, '其他域名', '经代理加密解析', '1.1.1.1 · 8.8.8.8 DoH', prefs.dns_foreign, (v) => saveP({ dns_foreign: v })),
+		upstreamRow(ui, '国内域名', '直连解析', 'domestic', prefs.dns_domestic, (v) => saveP({ dns_domestic: v })),
+		upstreamRow(ui, '其他域名', '经代理加密解析', 'foreign', prefs.dns_foreign, (v) => saveP({ dns_foreign: v })),
 		updateRow('域名嗅探', toggle('域名嗅探', prefs.sniff !== false, (v) => saveP({ sniff: v })),
 			h('small', { class: 'ow-muted' }, '按真实域名连接')),
 	);
@@ -838,19 +838,82 @@ function updateInterval(ui, hours, saveP) {
 	return h('div', { class: 'ow-row' }, '更新间隔', h('span', { class: 'ow-actions' }, '每', input, '小时'));
 }
 
-// Upstreams are edited as a space-separated list; the router validates each entry.
-function upstreamRow(ui, title, note, hint, list, save) {
-	const value = (list || []).join(' ');
-	const input = h('input', { type: 'text', value, 'aria-label': title + ' DNS', class: 'ow-upstream', spellcheck: 'false', placeholder: '默认 ' + hint });
-	input.addEventListener('change', async () => {
-		const next = input.value.trim().split(/\s+/).filter(Boolean);
-		if (next.join(' ') === value) return;
-		try {
-			await save(next);
-		} catch (e) {
-			ui.notify(e.message);
-			input.value = value;
-		}
-	});
-	return h('div', { class: 'ow-upstream-row' }, h('span', { class: 'ow-label' }, title, h('small', { class: 'ow-muted' }, note)), input);
+// Upstreams show a short summary; a dialog edits the list and restores the built-in servers.
+const presetDNS = {
+	domestic: [
+		['阿里 DoH', 'https://223.5.5.5/dns-query'], ['阿里 DoH 备用', 'https://223.6.6.6/dns-query'],
+		['腾讯 DoH', 'https://120.53.53.53/dns-query'], ['腾讯 DoH 备用', 'https://1.12.12.12/dns-query'],
+		['阿里 DoT', 'tls://223.5.5.5'], ['腾讯 DoT', 'tls://1.12.12.12'],
+	],
+	foreign: [
+		['Cloudflare DoH', 'https://1.1.1.1/dns-query'], ['Cloudflare DoH 备用', 'https://1.0.0.1/dns-query'],
+		['Google DoH', 'https://8.8.8.8/dns-query'], ['Google DoH 备用', 'https://8.8.4.4/dns-query'],
+		['Quad9 DoH', 'https://9.9.9.9/dns-query'], ['Cloudflare DoT', 'tls://1.1.1.1'], ['Google DoT', 'tls://8.8.8.8'],
+	],
+};
+const builtinDNS = {
+	domestic: ['https://223.5.5.5/dns-query', 'https://120.53.53.53/dns-query'],
+	foreign: ['https://1.1.1.1/dns-query', 'https://8.8.8.8/dns-query'],
+};
+function upstreamRow(ui, title, note, kind, list, save) {
+	const builtin = builtinDNS[kind];
+	const current = list?.length ? list : builtin;
+	const host = (v) => v.replace(/^[a-z]+:\/\//, '').replace(/\/.*$/, '');
+	const same = current.join(' ') === builtin.join(' ');
+	const summary = (same ? '内置 · ' : '') + current.map(host).join('、');
+	const open = () => {
+		let items = [...current];
+		const rows = h('div', { class: 'ow-stack' });
+		const presets = h('div', { class: 'ow-dns-presets' });
+		const add = (v) => {
+			if (!v || items.includes(v)) return false;
+			if (items.length >= 4) {
+				ui.notify('最多 4 个服务器');
+				return false;
+			}
+			items.push(v);
+			render();
+			return true;
+		};
+		const input = h('input', { type: 'text', placeholder: 'https://… 、tls://… 或 IP', 'aria-label': '添加 DNS 服务器', spellcheck: 'false' });
+		const render = () => {
+			presets.replaceChildren(...presetDNS[kind].map(([name, v]) => {
+				const on = items.includes(v);
+				const b = ui.button(name, () => {
+					if (on) items.splice(items.indexOf(v), 1);
+					else if (!add(v)) return;
+					render();
+				}, on ? 'ow-chip ow-chip-on' : 'ow-chip');
+				b.setAttribute('aria-pressed', String(on));
+				b.title = v;
+				return b;
+			}));
+			rows.replaceChildren(...items.map((v, i) => h('div', { class: 'ow-row' },
+				h('code', { class: 'ow-upstream' }, v),
+				ui.button('移除', () => { items.splice(i, 1); render(); }, 'ow-link'))));
+		};
+		const d = ui.dialog(title + ' DNS', h('div', { class: 'ow-stack' },
+			h('small', { class: 'ow-muted' }, '常用服务器'),
+			presets,
+			h('small', { class: 'ow-muted' }, '已选（按顺序使用）'),
+			rows,
+			h('div', { class: 'ow-row' }, input, ui.button('添加', () => {
+				if (add(input.value.trim())) input.value = '';
+			}, 'ow-link')),
+			h('div', { class: 'ow-row' },
+				ui.button('恢复内置', () => { items = [...builtin]; render(); }, 'ow-link'),
+				ui.button('保存', async () => {
+					if (!items.length) return ui.notify('至少保留 1 个服务器');
+					try {
+						await save(items);
+						d.close();
+					} catch (e) {
+						ui.notify(e.message);
+					}
+				}, 'ow-primary')),
+		));
+		render();
+	};
+	return updateRow(title, ui.button('管理', open, 'ow-link'),
+		h('small', { class: 'ow-muted' }, note + ' · ' + summary));
 }

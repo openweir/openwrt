@@ -1161,5 +1161,8 @@
 	.ow .ow-source-list { flex: none; max-height: 320px; }
 }
 
-.ow .ow-upstream-row { display: flex; flex-direction: column; gap: 6px; }
-.ow input.ow-upstream { width: 100%; font-family: ui-monospace, monospace; font-size: 12px; }
+.ow .ow-upstream { font-family: ui-monospace, monospace; font-size: 12px; overflow-wrap: anywhere; }
+.ow .ow-dns-presets { display: flex; flex-wrap: wrap; gap: 8px; }
+.ow .ow-chip { border: 1px solid var(--ow-line); border-radius: 999px; padding: 4px 12px; background: transparent; font-size: 12px; }
+.ow .ow-chip-on { border-color: var(--ow-accent); color: var(--ow-accent); background: color-mix(in srgb, var(--ow-accent) 10%, transparent); }
+.ow .ow-modal .ow-row > input { flex: 1; min-width: 0; }

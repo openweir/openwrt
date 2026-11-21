@@ -329,7 +329,11 @@ apply() {
  # Proxying the router itself needs nftables and the core's group id.
  local_proxy=$(uci -q get openweir.main.local_proxy || echo 0)
  core_gid=$(awk -F: '$1 == "openweir-core" { print $3 }' /etc/group)
- if [ "$backend" != fw4 ] || [ -z "$core_gid" ] || [ "$core_gid" = 0 ]; then local_proxy=0; fi
+ # With fake-ip the router's own lookups also return fake addresses, which only
+ # the core can serve, so router traffic to that range is always captured.
+ fake_ip=0
+ if [ "$dns" = 1 ] && [ "$(uci -q get openweir.main.fake_ip)" = 1 ]; then fake_ip=1; fi
+ if [ "$backend" != fw4 ] || [ -z "$core_gid" ] || [ "$core_gid" = 0 ]; then local_proxy=0; fake_ip=0; fi
  if [ "$backend" = fw3 ]; then
   stage=legacy_capabilities
   legacy_families=4
@@ -344,7 +348,7 @@ table inet openweir {
  chain lan {
   type filter hook prerouting priority mangle - 1; policy accept;
 EOF
- if [ "$local_proxy" = 1 ] && [ "$method" = tproxy ]; then
+ if { [ "$local_proxy" = 1 ] || [ "$fake_ip" = 1 ]; } && [ "$method" = tproxy ]; then
   # Router-originated packets marked in the output chain loop back through lo.
   echo "  iifname \"lo\" meta mark & 0xffff == $mark meta l4proto { tcp, udp } tproxy to :$port accept" >>"$batch"
  fi
@@ -375,7 +379,7 @@ EOF
  }
 EOF
  fi
- if [ "$local_proxy" = 1 ]; then
+ if [ "$local_proxy" = 1 ] || [ "$fake_ip" = 1 ]; then
   # The core's own group is excluded so its outbound traffic never loops.
   cat >>"$batch" <<EOF
  chain local {
@@ -383,6 +387,12 @@ EOF
   meta nfproto != { $families } return
   meta skgid $core_gid return
   fib daddr type { local, broadcast, multicast } return
+EOF
+  if [ "$local_proxy" != 1 ]; then
+   echo '  ip daddr != 198.18.0.0/16 return' >>"$batch"
+   echo '  meta nfproto ipv6 return' >>"$batch"
+  fi
+  cat >>"$batch" <<EOF
   meta l4proto { tcp, udp } th dport 53 return
   ip daddr { $(echo "$bypass4" | sed 's/ /, /g') } return
   ip6 daddr { $(echo "$bypass6" | sed 's/ /, /g') } return

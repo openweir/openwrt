@@ -245,6 +245,12 @@ try {
 		const hero = page.locator('.ow-connection'),
 			fixed = (await hero.boundingBox()).height;
 		await page.screenshot({ path: path.join(output, 'overview-' + width + '.png'), fullPage: true });
+		await page.locator('.ow-row', { hasText: '国内域名' }).getByRole('button', { name: '管理' }).click();
+		const dnsDialog = page.getByRole('dialog', { name: '国内域名 DNS' });
+		await dnsDialog.getByRole('button', { name: '阿里 DoT' }).click();
+		assert.equal(await dnsDialog.getByRole('button', { name: '阿里 DoT' }).getAttribute('aria-pressed'), 'true');
+		await page.screenshot({ path: path.join(output, 'dns-dialog-' + width + '.png') });
+		await dnsDialog.getByRole('button', { name: '关闭' }).click();
 		// 检查更新 offers 更新到 vX only when a newer stable kernel exists.
 		const kernelRow = page.locator('.ow-row').filter({ hasText: '内核 ·' });
 		await kernelRow.getByRole('button', { name: '检查更新' }).click();
