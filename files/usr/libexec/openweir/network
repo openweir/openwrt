@@ -534,7 +534,6 @@ EOF
 EOF
   cat >>"$batch" <<EOF
   meta l4proto { tcp, udp } th dport 53 return
-  udp dport 123 return
   ip daddr { $(echo "$bypass4" | sed 's/ /, /g') } return
   ip6 daddr { $(echo "$bypass6" | sed 's/ /, /g') } return
   ip daddr @local4 return
@@ -542,8 +541,12 @@ EOF
   ip daddr @cn4 return
   ip6 daddr @cn6 return
 EOF
+  # As in OpenClash, the router's own UDP stays direct except toward fake addresses, which only
+  # the core can serve: kernel WireGuard has no socket group to exempt, and Tailscale, ZeroTier,
+  # OpenVPN, STUN hole punching, mwan3 probes and time sync break through a node without UDP.
+  [ "$fake_ip" != 1 ] || echo "  ip daddr $fakenet meta l4proto udp meta mark set (meta mark & 0xffff0000) | $mark" >>"$batch"
   cat >>"$batch" <<EOF
-  meta l4proto { tcp, udp } meta mark set (meta mark & 0xffff0000) | $mark
+  meta l4proto tcp meta mark set (meta mark & 0xffff0000) | $mark
  }
 EOF
  fi
