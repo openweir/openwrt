@@ -5,6 +5,9 @@ on:
       format:
         type: string
         required: true
+      version:
+        type: string
+        required: true
 permissions:
   contents: read
 jobs:
@@ -15,13 +18,13 @@ jobs:
       matrix: ${{ steps.targets.outputs.matrix }}
     steps:
       - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - name: Version from tags and conventional commits
-        run: go run ./cmd/openweir-release next-version > VERSION && cat VERSION
+      - name: Use the version CI worked out
+        env:
+          VERSION: ${{ inputs.version }}
+        run: printf '%s\n' "$VERSION" > VERSION
       - uses: actions/download-artifact@v8
         with:
           pattern: runtime-*
@@ -52,13 +55,29 @@ jobs:
           OPENWEIR_MIHOMO_PUBLIC_KEY: ${{ vars.MIHOMO_PUBLISHER_KEY }}
         run: |
           case "$FORMAT" in ipk) sdk=24.10.8;; apk) sdk=25.12.6;; *) exit 1;; esac
-          for arch in $(go run ./cmd/openweir-release arches "$FORMAT"); do
-            OPENWEIR_PACKAGE_ARCH=$arch packaging/openwrt/build.sh "$sdk" x86_64 "$(cat VERSION)" "dist/feed/$arch"
+          arches=$(go run ./cmd/openweir-release arches "$FORMAT")
+          docker pull --quiet "ghcr.io/openwrt/sdk:x86_64-$sdk"
+          # Four SDK builds at a time, one per runner core. Each writes its own log, shown
+          # below in architecture order.
+          logs=$RUNNER_TEMP/package-logs
+          mkdir -p "$logs"
+          status=0
+          printf '%s\n' $arches | xargs -P 4 -I '{}' sh -c \
+            'OPENWEIR_PACKAGE_ARCH=$1 packaging/openwrt/build.sh "$2" x86_64 "$3" "dist/feed/$1" >"$4/$1.log" 2>&1 || { echo "::error::$1 package build failed"; exit 1; }' \
+            sh '{}' "$sdk" "$(cat VERSION)" "$logs" || status=$?
+          for arch in $arches; do
+            echo "::group::$arch"
+            cat "$logs/$arch.log" 2>/dev/null || echo "no log"
+            echo "::endgroup::"
           done
+          exit "$status"
       - uses: actions/upload-artifact@v7
         with:
           name: test-feed-${{ inputs.format }}
-          path: dist/feed/
+          # The install tests use the release packages only; previews go out separately below.
+          path: |
+            dist/feed/
+            !dist/feed/*/preview/
           if-no-files-found: error
           retention-days: 3
       - name: Isolate the tested installers for publication

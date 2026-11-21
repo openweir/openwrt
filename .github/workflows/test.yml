@@ -12,10 +12,12 @@ concurrency:
 jobs:
   # main and develop often point at one commit after a release; main's run covers it, so the
   # develop run skips every check and the preview workflow publishes nothing.
+  # The version is worked out here once, so every job builds and publishes the same one.
   gate:
     runs-on: ubuntu-latest
     outputs:
       run: ${{ steps.same.outputs.run }}
+      version: ${{ steps.version.outputs.version }}
     steps:
       - id: same
         env:
@@ -28,23 +30,50 @@ jobs:
             echo "main is at this commit; its CI run covers it." >> "$GITHUB_STEP_SUMMARY"
           fi
           echo "run=$run" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        if: steps.same.outputs.run == 'true'
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        if: steps.same.outputs.run == 'true'
+        with:
+          go-version-file: go.mod
+      - name: Version from tags and conventional commits
+        id: version
+        if: steps.same.outputs.run == 'true'
+        run: |
+          version=$(go run ./cmd/openweir-release next-version)
+          go run ./cmd/openweir-release version "$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Version $version" >> "$GITHUB_STEP_SUMMARY"
   core:
     needs: gate
     if: needs.gate.outputs.run == 'true'
     name: Router configuration and authenticated mihomo controller
     runs-on: ubuntu-24.04-arm
+    env:
+      MIHOMO_REF: 15fb245e92789566cff12e3060ae861534dcf892
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/checkout@v7
-        with:
-          repository: openweir/mihomo
-          ref: 15fb245e92789566cff12e3060ae861534dcf892
-          path: .ci-mihomo
-          persist-credentials: false
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+      # The pinned core only changes with its commit or the Go toolchain.
+      - id: core-cache
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/mihomo
+          key: mihomo-linux-arm64-${{ env.MIHOMO_REF }}-${{ hashFiles('go.mod') }}
+      - uses: actions/checkout@v7
+        if: steps.core-cache.outputs.cache-hit != 'true'
+        with:
+          repository: openweir/mihomo
+          ref: ${{ env.MIHOMO_REF }}
+          path: .ci-mihomo
+          persist-credentials: false
       - name: Build the pinned Linux core
+        if: steps.core-cache.outputs.cache-hit != 'true'
         working-directory: .ci-mihomo
         run: CGO_ENABLED=0 go build -trimpath -tags with_gvisor -o "$RUNNER_TEMP/mihomo" .
       - name: Exercise the real core on loopback
@@ -81,14 +110,21 @@ jobs:
     if: needs.gate.outputs.run == 'true'
     name: LuCI navigation and interactions
     runs-on: ubuntu-latest
+    env:
+      PLAYWRIGHT_VERSION: 1.62.1
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
         with:
           node-version: '24'
+      # The browser download is reused; its system libraries are still installed every run.
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ env.PLAYWRIGHT_VERSION }}
       - name: Install test browser
         run: |
-          npm install --prefix "$RUNNER_TEMP/ui" --no-save playwright@1.62.1
+          npm install --prefix "$RUNNER_TEMP/ui" --no-save "playwright@$PLAYWRIGHT_VERSION"
           "$RUNNER_TEMP/ui/node_modules/.bin/playwright" install --with-deps chromium
       - run: OPENWEIR_PLAYWRIGHT="$RUNNER_TEMP/ui/node_modules/playwright/index.mjs" node scripts/qualification/ui/check.mjs
   source:
@@ -126,51 +162,56 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - name: Version from tags and conventional commits
-        run: go run ./cmd/openweir-release next-version > VERSION && cat VERSION
       - name: Cross-compile the bundled management commands
         env:
           OPENWEIR_MIHOMO_PUBLIC_KEY: ${{ vars.MIHOMO_PUBLISHER_KEY }}
           ABI: ${{ matrix.abi }}
-        run: packaging/openwrt/build-runtime.sh "$ABI" "$(cat VERSION)" dist/runtime
+          VERSION: ${{ needs.gate.outputs.version }}
+        run: packaging/openwrt/build-runtime.sh "$ABI" "$VERSION" dist/runtime
       - uses: actions/upload-artifact@v7
         with:
           name: runtime-${{ matrix.abi }}
           path: dist/runtime/
           if-no-files-found: error
           retention-days: 7
+  # Packaging needs only the runtimes, so it runs beside the tests; nothing is published
+  # until every check has passed.
   ipk:
     name: Universal IPK
-    needs: [source, runtime]
+    needs: [gate, runtime]
     uses: ./.github/workflows/package-format.yml
     with:
       format: ipk
+      version: ${{ needs.gate.outputs.version }}
   apk:
     name: Universal APK
-    needs: [source, runtime]
+    needs: [gate, runtime]
     uses: ./.github/workflows/package-format.yml
     with:
       format: apk
+      version: ${{ needs.gate.outputs.version }}
   # Publishing runs as part of this workflow, so it uses this commit's workflow files and the
   # packages this run tested (a workflow_run trigger would run main's copy instead).
   preview:
     name: Publish preview
     if: github.event_name == 'push' && github.ref == 'refs/heads/develop'
-    needs: [core, browser, ipk, apk]
+    needs: [gate, source, core, browser, ipk, apk]
     permissions:
       contents: write
       actions: write
     uses: ./.github/workflows/preview.yml
+    with:
+      version: ${{ needs.gate.outputs.version }}
   release:
     name: Publish release
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
-    needs: [core, browser, ipk, apk]
+    needs: [gate, source, core, browser, ipk, apk]
     permissions:
       contents: write
       actions: read
     uses: ./.github/workflows/prepare-release.yml
+    with:
+      version: ${{ needs.gate.outputs.version }}

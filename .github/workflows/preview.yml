@@ -6,6 +6,10 @@
 name: Publish OpenWrt preview
 on:
   workflow_call:
+    inputs:
+      version:
+        type: string
+        required: true
 
 jobs:
   publish:
@@ -20,12 +24,13 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-          fetch-depth: 0
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - name: Version from tags and conventional commits
-        run: go run ./cmd/openweir-release next-version > VERSION && cat VERSION
+      - name: Use the version CI worked out
+        env:
+          VERSION: ${{ inputs.version }}
+        run: printf '%s\n' "$VERSION" > VERSION
       - name: Skip a run that develop has moved past
         id: current
         run: |
