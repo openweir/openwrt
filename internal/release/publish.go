@@ -87,6 +87,17 @@ type expectation struct {
 const SumsName = "SHA256SUMS"
 
 // releaseNames lists every asset of the release for tag: the installers and SHA256SUMS.
+// packageVersion is the installers' version for tag: a release carries the revision after
+// its last preview (1.2.0-r3), read from the IPKs in dir; without one it is revision 1.
+func packageVersion(tag, dir string) string {
+	v := strings.TrimPrefix(tag, "v")
+	if n, err := AssetRevision(v, dir); err == nil {
+		return RevisionVersion(v, n)
+	}
+	return v
+}
+
+// releaseNames lists a release's assets for a tag or a package version with its revision.
 func releaseNames(tag string) []string {
 	return append(AllNames(strings.TrimPrefix(tag, "v")), SumsName)
 }
@@ -136,7 +147,7 @@ func localAssets(dir, tag string) (map[string]expectation, error) {
 	if err != nil {
 		return nil, err
 	}
-	expected, err := manifest(splitLines(string(raw)), tag)
+	expected, err := manifest(splitLines(string(raw)), packageVersion(tag, dir))
 	if err != nil {
 		return nil, err
 	}
@@ -258,7 +269,7 @@ func Publish(api API, tag, commit, dir, notes string, out func(string)) error {
 		// Later builds of the same version may have different signing bytes, so a
 		// published release is only checked for its complete, uploaded asset set.
 		expected := map[string]expectation{}
-		for _, name := range releaseNames(tag) {
+		for _, name := range releaseNames(packageVersion(tag, dir)) {
 			expected[name] = expectation{}
 		}
 		present, err := inspectAssets(api, release.ID, expected, false)

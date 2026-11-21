@@ -34,11 +34,11 @@ func FakeLatest(dir, response, invalid, contents string) (string, error) {
 	pkg := packages[0]
 	name := filepath.Base(pkg)
 	names := map[string]*regexp.Regexp{
-		".apk": regexp.MustCompile(`^luci-app-openweir-(\d+\.\d+\.\d+)-r1_([a-z0-9_-]+)\.apk$`),
-		".ipk": regexp.MustCompile(`^luci-app-openweir_(\d+\.\d+\.\d+)-1_([a-z0-9_-]+)\.ipk$`),
+		".apk": regexp.MustCompile(`^luci-app-openweir-(\d+\.\d+\.\d+)-r([1-9][0-9]*)_([a-z0-9_-]+)\.apk$`),
+		".ipk": regexp.MustCompile(`^luci-app-openweir_(\d+\.\d+\.\d+)-([1-9][0-9]*)_([a-z0-9_-]+)\.ipk$`),
 	}
 	m := names[filepath.Ext(name)].FindStringSubmatch(name)
-	if m == nil || !slices.Contains(Arches[filepath.Ext(name)[1:]], m[2]) {
+	if m == nil || !slices.Contains(Arches[filepath.Ext(name)[1:]], m[3]) {
 		return "", fmt.Errorf("unexpected Release package name: %s", name)
 	}
 	tag := "v" + m[1]
@@ -57,7 +57,8 @@ func FakeLatest(dir, response, invalid, contents string) (string, error) {
 		Prerelease bool    `json:"prerelease"`
 		Assets     []asset `json:"assets"`
 	}{TagName: tag, HTMLURL: repo + "/tag/" + tag}
-	for _, filename := range releaseNames(tag) {
+	// A release's revision follows its last preview, so it is read from the package name.
+	for _, filename := range releaseNames(m[1] + "-r" + m[2]) {
 		var size int64
 		var digest string
 		if filename == name {

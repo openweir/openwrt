@@ -257,3 +257,22 @@ func TestBumpFollowsConventionalCommits(t *testing.T) {
 		}
 	}
 }
+
+// A release takes the revision after its last preview, as in luci-app-openweir-1.2.0-r2_x86_64.apk.
+func TestFakeLatestRevision(t *testing.T) {
+	dir := t.TempDir()
+	name := PackageName("1.2.0-r2", "apk", "x86_64")
+	if name != "luci-app-openweir-1.2.0-r2_x86_64.apk" {
+		t.Fatal(name)
+	}
+	os.WriteFile(filepath.Join(dir, name), []byte("pkg"), 0o644)
+	response := filepath.Join(t.TempDir(), "latest")
+	asset, err := FakeLatest(dir, response, "", "")
+	if err != nil || asset != "v1.2.0/"+name {
+		t.Fatal(asset, err)
+	}
+	data, _ := os.ReadFile(response)
+	if !strings.Contains(string(data), `"name":"luci-app-openweir_1.2.0-2_x86_64.ipk"`) {
+		t.Fatalf("%s", data)
+	}
+}
