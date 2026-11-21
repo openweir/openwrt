@@ -74,6 +74,13 @@ func coreTarget(s string) string {
 
 var digestName = regexp.MustCompile("^[a-f0-9]{64}$")
 
+const dnsDomesticSet = "openweir-dns-cn"
+
+var (
+	domesticDNS = []string{"https://223.5.5.5/dns-query", "https://120.53.53.53/dns-query"}
+	foreignDNS  = []string{"https://1.1.1.1/dns-query", "https://8.8.8.8/dns-query"}
+)
+
 func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Network, secret string) ([]byte, error) {
 	if p.SchemaVersion != subscription.SchemaVersion || i.Source == "" || i.Source != p.Source {
 		return nil, errors.New("no authorized primary source")
@@ -100,11 +107,18 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 	config := obj{"mode": "rule", "mixed-port": MixedPort, "allow-lan": false, "external-controller": "127.0.0.1:19761", "secret": secret, "ipv6": n.Family6,
 		"log-level": "warning", "profile": obj{"store-selected": false, "store-fake-ip": false}, "geodata-mode": true, "geo-auto-update": false,
 		"hosts": obj{"probe.openweir.invalid": "192.0.2.1"}, "dns": obj{"enable": true, "listen": "", "enhanced-mode": "redir-host", "use-hosts": true,
-			"use-system-hosts": false, "ipv6": n.Family6, "default-nameserver": []string{resolver.String()}, "nameserver": []string{resolver.String()}, "fake-ip-range": "172.30.254.1/30"}}
+			"use-system-hosts": false, "ipv6": n.Family6, "default-nameserver": []string{resolver.String(), "223.5.5.5", "119.29.29.29"},
+			// Foreign names resolve over encrypted DNS through the proxy; mainland
+			// names and node hostnames use domestic resolvers so CDNs stay local.
+			"nameserver": foreignDNS, "proxy-server-nameserver": domesticDNS, "direct-nameserver": domesticDNS, "respect-rules": true,
+			"nameserver-policy": obj{"rule-set:" + dnsDomesticSet: domesticDNS}, "fake-ip-range": "172.30.254.1/30"},
+		"find-process-mode": "off", "tcp-concurrent": true, "unified-delay": true, "keep-alive-interval": 30}
 	// The WAN resolver may return poisoned answers for proxied sites. Dial the
 	// sniffed domain so the node resolves it, in every proxy mode.
 	config["sniffer"] = obj{"enable": true, "override-destination": true, "parse-pure-ip": true, "force-dns-mapping": true,
-		"sniff": obj{"TLS": obj{"ports": []string{"443", "8443"}}, "HTTP": obj{"ports": []string{"80", "8080"}}, "QUIC": obj{"ports": []string{"443"}}}}
+		// Push and smart-home services break when their destination is rewritten.
+		"skip-domain": []string{"+.push.apple.com", "Mijia Cloud", "+.mi.com", "+.xiaomi.net", "dlg.io.mi.com"},
+		"sniff":       obj{"TLS": obj{"ports": []string{"443", "8443"}}, "HTTP": obj{"ports": []string{"80", "8080"}}, "QUIC": obj{"ports": []string{"443"}}}}
 	if n.DNS {
 		config["dns"].(obj)["listen"] = "127.0.0.1:19764"
 	}
@@ -259,6 +273,8 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 		listeners = append(listeners, relay)
 		rules = append(rules, extra...)
 	}
+	// Reject QUIC so browsers fall back to TCP, where sniffing and routing are reliable.
+	rules = append(rules, "AND,((NETWORK,UDP),(DST-PORT,443)),REJECT")
 	if len(listeners) > 0 {
 		config["listeners"] = listeners
 	}
@@ -353,9 +369,10 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 	if !targets[end] {
 		return nil, errors.New("default route has no available group")
 	}
-	if len(providers) > 0 {
-		config["rule-providers"] = providers
+	if _, taken := providers[dnsDomesticSet]; !taken {
+		providers[dnsDomesticSet] = obj{"type": "file", "format": "mrs", "behavior": "domain", "path": "./builtin/geosite-cn.mrs"}
 	}
+	config["rule-providers"] = providers
 	config["rules"] = append(rules, "MATCH,"+coreTarget(end))
 	return yaml.Marshal(config)
 }

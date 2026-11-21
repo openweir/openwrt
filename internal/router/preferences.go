@@ -46,7 +46,8 @@ func (p Preferences) Validate() error {
 
 // SameNetwork reports whether two preference sets produce the same takeover.
 func (p Preferences) SameNetwork(o Preferences) bool {
-	return p.Method == o.Method && p.DNS == o.DNS && p.DNSIntercept == o.DNSIntercept && p.IPv6 == o.IPv6 && slices.Equal(p.Networks, o.Networks)
+	return p.Method == o.Method && p.DNS == o.DNS && p.DNSIntercept == o.DNSIntercept && p.IPv6 == o.IPv6 && slices.Equal(p.Networks, o.Networks) &&
+		(p.FailOpen == nil || o.FailOpen == nil || *p.FailOpen == *o.FailOpen)
 }
 func ReadPreferences(ctx context.Context) (Preferences, error) {
 	p := Preferences{Enabled: uci(ctx, "enabled") == "1", Method: uci(ctx, "method"), DNS: uci(ctx, "dns") == "1", IPv6: uci(ctx, "ipv6") == "1", Networks: strings.Fields(uci(ctx, "network"))}

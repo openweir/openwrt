@@ -94,7 +94,15 @@ dns_setup() {
  mv "$state/dns.new" "$state/dns"
  while IFS= read -r dir; do
   tmp=$(mktemp "$dir/.openweir.XXXXXX")
-  printf '%s\n' '# OpenWeir managed upstream' 'no-resolv' 'server=127.0.0.1#19764' 'server=/probe.openweir.invalid/127.0.0.1#19764' 'rebind-domain-ok=/probe.openweir.invalid/' >"$tmp"
+  {
+   echo '# OpenWeir managed upstream'
+   if [ "$dns" = 1 ]; then
+    printf '%s\n' 'no-resolv' 'server=127.0.0.1#19764' 'server=/probe.openweir.invalid/127.0.0.1#19764' 'rebind-domain-ok=/probe.openweir.invalid/'
+   fi
+   # Without IPv6 takeover, AAAA answers would send preferred IPv6 traffic
+   # around the proxy, so hide them while the takeover is active.
+   [ "$v6" = 1 ] || echo 'filter-aaaa'
+  } >"$tmp"
   chmod 0644 "$tmp"; mv -f "$tmp" "$dir/$dnsfile"
  done <"$state/dns"
  /etc/init.d/dnsmasq restart
@@ -375,7 +383,8 @@ EOF
  stage=ipv4_route
  add_routes 4
  if [ "$v6" = 1 ]; then stage=ipv6_route; add_routes 6; fi
- if [ "$dns" = 1 ]; then stage=dns_reload; dns_setup; touch "$state/dns-probed"; fi
+ if [ "$dns" = 1 ]; then stage=dns_reload; dns_setup; touch "$state/dns-probed"
+ elif [ "$v6" != 1 ]; then stage=dns_reload; dns_setup || true; fi
  stage=firewall_apply
  if [ "$backend" = fw3 ]; then
   legacy_apply

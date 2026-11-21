@@ -232,6 +232,7 @@ func TestDeclaredDomesticRuleSetDoesNotDuplicateBundledDefinition(t *testing.T) 
 		t.Fatal(err)
 	}
 	def := cfg.Providers[subscription.DomesticIPSet]
+	delete(cfg.Providers, dnsDomesticSet)
 	if len(cfg.Providers) != 1 || def.Path != "./rulesets/"+p.BinarySets[0].Filename() || def.Format != "mrs" || def.Behavior != "ipcidr" {
 		t.Fatal(cfg.Providers)
 	}
@@ -304,5 +305,19 @@ func TestCandidateCannotReplaceLiveDeviceAddresses(t *testing.T) {
 	got, err := os.ReadFile(file)
 	if err != nil || string(got) != string(data) {
 		t.Fatal("candidate changed the active DHCP policy", err)
+	}
+}
+
+func TestDNSSplitsDomesticAndProxiedUpstreams(t *testing.T) {
+	p := baseProfile(t, "p")
+	i := initial()
+	i.Source = p.Source
+	c := configForTest(t, i, p, Network{Method: "tproxy", Resolver: "192.0.2.53", LAN: map[string][]netip.Prefix{"br-lan": {netip.MustParsePrefix("192.168.3.1/24")}}})
+	dns := c["dns"].(map[string]any)
+	if dns["respect-rules"] != true || dns["nameserver-policy"].(map[string]any)["rule-set:"+dnsDomesticSet] == nil || c["rule-providers"].(map[string]any)[dnsDomesticSet] == nil {
+		t.Fatal(dns)
+	}
+	if c["sniffer"].(map[string]any)["override-destination"] != true || !slices.Contains(c["rules"].([]any), any("AND,((NETWORK,UDP),(DST-PORT,443)),REJECT")) {
+		t.Fatal("sniffer override or QUIC block missing")
 	}
 }
