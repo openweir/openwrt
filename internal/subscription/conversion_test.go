@@ -6,12 +6,33 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
 	"github.com/openweir/subconv"
 )
+
+func TestImportedRuleFilesStillLoad(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "source-local"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "source-local", "list.txt"), []byte("DOMAIN-SUFFIX,imported.example\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	store := OpenStore(t.TempDir())
+	if err := store.Configure(Source{ID: "local", Name: "test", Kind: "file"}); err != nil {
+		t.Fatal(err)
+	}
+	body := "proxies: [{name: A, type: http, server: a.example, port: 80}]\nrule-providers: {mine: {type: file, behavior: classical, path: ./sets/list.txt}}\nrules: ['RULE-SET,mine,A', 'MATCH,DIRECT']\n"
+	c, err := (Fetcher{ruleImportRoot: root}).Refresh(t.Context(), store, "local", []byte(body), Policy{})
+	if err != nil || c.Decision != "ready" || len(c.Profile.BinarySets) != 1 || len(c.Profile.Rules) != 1 || string(c.Profile.BinarySets[0].Data) != "DOMAIN-SUFFIX,imported.example\n" {
+		t.Fatal(err, c.Decision, c.Notices)
+	}
+}
 
 // IDs the router gave these nodes and groups before subconv converted Clash subscriptions too:
 // saved choices, local groups and device rules refer to them.
