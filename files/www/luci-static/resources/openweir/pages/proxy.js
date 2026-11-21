@@ -76,7 +76,7 @@ export async function proxy(ui) {
 	);
 	const canMeasure = () => state.method === 'tcp' || ui.status.phase === 'running';
 	bulk.disabled = !canMeasure();
-	const extra = h('div', { class: 'ow-actions' });
+	const extra = h('span', { class: 'ow-proxy-extra' });
 	const cancel = ui.button('取消测速', () => ui.run('cancel_tests', {}), 'ow-link');
 	async function measure(ids) {
 		const candidates = new Set();
@@ -108,7 +108,7 @@ export async function proxy(ui) {
 		} finally {
 			if (probeJob === job) {
 				probeJob = null;
-				extra.append(cancel);
+				cancel.remove();
 				if (!ui.signal.aborted) {
 					draw();
 					await update();
@@ -132,7 +132,7 @@ export async function proxy(ui) {
 			state.method === 'tcp' &&
 			(!id?.startsWith('node:') || data.get(id)?.tcp_probe === false || sample?.error === 'not_applicable')
 		)
-			return '不适用';
+			return '不支持';
 		if (probeJob?.method === state.method && probeJob.candidates.has(id)) return '测速中';
 		return sample?.latency
 			? sample.latency.delay_ms + ' ms'
@@ -303,14 +303,16 @@ export async function proxy(ui) {
 					h('span', { class: 'ow-truncate ow-group-route', title: routeText }, routeText),
 					h('span', { class: 'ow-group-delay' }, measured(chain.at(-1))),
 				);
-				const indicator = h('span', { class: 'ow-group-dots', 'aria-hidden': 'true' });
-				for (const id of g.members.slice(0, 24)) {
-					const sample = timings[route(id).at(-1)];
-					indicator.append(
-						h('i', { 'data-speed': sample?.latency ? (sample.latency.delay_ms < 150 ? 'fast' : 'slow') : '' }),
-					);
+				// Member dots appear once a measurement has something to show.
+				const samples = g.members.slice(0, 24).map((id) => timings[route(id).at(-1)]);
+				if (samples.some((s) => s?.latency || s?.error)) {
+					const indicator = h('span', { class: 'ow-group-dots', 'aria-hidden': 'true' });
+					for (const sample of samples)
+						indicator.append(
+							h('i', { 'data-speed': sample?.latency ? (sample.latency.delay_ms < 150 ? 'fast' : 'slow') : '' }),
+						);
+					summary.append(indicator);
 				}
-				summary.append(indicator);
 				summary.addEventListener('click', () => {
 					if (state.query.trim()) return;
 					if (!state.touched && !ui.detail && groups[0]) state.open.add(groups[0].id);
@@ -400,8 +402,6 @@ export async function proxy(ui) {
 			methodSelector.children[i].setAttribute('aria-pressed', String(method === name));
 		timings = {};
 		bulk.disabled = !canMeasure();
-		if (probeJob || canMeasure()) extra.append(cancel);
-		else cancel.remove();
 		draw();
 		await update();
 	});
@@ -413,13 +413,13 @@ export async function proxy(ui) {
 		methodSelector,
 		sort,
 		search,
+		extra,
 		bulk,
 	);
 	if (!global) extra.append(ui.button('本地策略组', () => localGroups(ui)));
 	if (nodes.some((n) => n.special && n.protocol === 'mtproxy') || intent.policy?.telegram)
 		extra.append(ui.button('Telegram 入口', () => telegram(ui, nodes)));
-	if (canMeasure()) extra.append(cancel);
-	return h('div', { class: 'ow-proxy-page' }, toolbar, body, extra);
+	return h('div', { class: 'ow-proxy-page' }, toolbar, body);
 }
 async function localGroups(ui) {
 	const policy = ui.status.intent.policy || {},

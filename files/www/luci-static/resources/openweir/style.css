@@ -1154,9 +1154,7 @@
 
 /* Every subscription is listed; the list scrolls inside a card sized by the hero row. */
 .ow .ow-source-list { display: flex; flex-direction: column; gap: 10px; flex: 1 1 0; min-height: 0; overflow-y: auto; }
-@container (min-width: 841px) {
-	.ow .ow-dashboard > .ow-sources { height: 0; min-height: 100%; display: flex; flex-direction: column; }
-}
+
 @container (max-width: 840px) {
 	.ow .ow-source-list { flex: none; max-height: 320px; }
 }
@@ -1170,3 +1168,21 @@
 	.ow .ow-modes { grid-template-columns: 1fr 1fr; }
 	.ow .ow-modes > :first-child { grid-column: 1 / -1; }
 }
+.ow .ow-side-stack { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.ow .ow-side-stack > .ow-sources { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; }
+@container (min-width: 841px) {
+	/* The hero sets the row height; the subscription list scrolls within it. */
+	.ow .ow-dashboard > .ow-side-stack { height: 0; min-height: 100%; }
+	.ow .ow-side-stack > .ow-sources { flex-basis: 0; }
+}
+@container (max-width: 840px) {
+	.ow .ow-side-stack { grid-column: 1 / -1; }
+}
+.ow .ow-proxy-extra { display: contents; }
+@container (max-width: 650px) {
+	/* The heading already names the state; the round button keeps only its icon. */
+	.ow .ow-power span { display: none; }
+	.ow .ow-power svg { width: 28px; height: 28px; }
+}
+.ow .ow-source-list > * { flex: none; }
+.ow .ow-tuning { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 20px; }

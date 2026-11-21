@@ -186,7 +186,6 @@ function sourceCard(ui) {
 	}
 	if (!sources.length) box.append(empty('尚未添加订阅'));
 	if (sources.length) box.append(h('div', { class: 'ow-source-list' }, ...sources.map(item)));
-	box.append(ui.button('＋ 添加订阅', () => ui.go('subscriptions', 'add'), 'ow-add'));
 	return box;
 }
 function deviceCard(ui, devices) {
@@ -587,8 +586,7 @@ export async function overview(ui) {
 							'ow-dot' + (v?.[k] ? (v[k].ok ? ' good' : ' bad') : k === 'core' && running ? ' good' : ''),
 					}),
 					n +
-						' ' +
-						(v?.[k] ? (v[k].ok ? v[k].delay_ms + ' ms' : '超时') : k === 'core' && running ? '运行中' : '—'),
+						(v?.[k] ? ' ' + (v[k].ok ? v[k].delay_ms + ' ms' : '超时') : k === 'core' && running ? ' 运行中' : ''),
 				),
 			),
 			check,
@@ -626,8 +624,6 @@ export async function overview(ui) {
 			h('small', { class: 'ow-muted' }, prefs.ipv6 ? 'IPv6 也走代理' : '关闭时设备改走 IPv4')),
 		updateRow('代理路由器自身', toggle('代理路由器自身', prefs.local_proxy !== false, (v) => saveP({ local_proxy: v })),
 			h('small', { class: 'ow-muted' }, '路由器本机流量也分流')),
-		updateRow('屏蔽 QUIC', toggle('屏蔽 QUIC', prefs.block_quic !== false, (v) => saveP({ block_quic: v })),
-			h('small', { class: 'ow-muted' }, '改用 TCP，分流更准')),
 		h(
 			'div',
 			{ class: 'ow-row' },
@@ -643,16 +639,19 @@ export async function overview(ui) {
 			toggle('接管设备 DNS（端口 53）', !!prefs.dns_intercept, (v) => saveP({ dns_intercept: v }))) : null,
 		upstreamRow(ui, '国内域名', '直连解析', 'domestic', prefs.dns_domestic, (v) => saveP({ dns_domestic: v })),
 		upstreamRow(ui, '其他域名', '经代理加密解析', 'foreign', prefs.dns_foreign, (v) => saveP({ dns_foreign: v })),
-		updateRow('域名嗅探', toggle('域名嗅探', prefs.sniff !== false, (v) => saveP({ sniff: v })),
-			h('small', { class: 'ow-muted' }, '按真实域名连接')),
 	);
-	const tuning = [
-		updateRow('并发连接', toggle('并发连接', prefs.tcp_concurrent !== false, (v) => saveP({ tcp_concurrent: v })),
-			h('small', { class: 'ow-muted' }, '多地址同时连接')),
-		updateRow('统一延迟', toggle('统一延迟', prefs.unified_delay !== false, (v) => saveP({ unified_delay: v })),
-			h('small', { class: 'ow-muted' }, '测速不计握手')),
-	];
-	proxyPrefs.append(...tuning);
+	// A compact 2x2 card; each note moves into the label's tooltip.
+	const compactToggle = (title, note, value, fn) =>
+		h('div', { class: 'ow-row', title: note }, title, toggle(title, value, fn));
+	const tuning = card(
+		'连接优化',
+		h('div', { class: 'ow-tuning' },
+			compactToggle('域名嗅探', '按真实域名连接', prefs.sniff !== false, (v) => saveP({ sniff: v })),
+			compactToggle('屏蔽 QUIC', '改用 TCP，分流更准', prefs.block_quic !== false, (v) => saveP({ block_quic: v })),
+			compactToggle('并发连接', '多地址同时连接', prefs.tcp_concurrent !== false, (v) => saveP({ tcp_concurrent: v })),
+			compactToggle('统一延迟', '测速不计握手', prefs.unified_delay !== false, (v) => saveP({ unified_delay: v })),
+		),
+	);
 	const failOpen = prefs.fail_open !== false;
 	const failOpenLabel = '代理无响应时回退直连';
 	const fallback = toggle(failOpenLabel, failOpen, (v) => saveP({ fail_open: v }));
@@ -696,7 +695,8 @@ export async function overview(ui) {
 		'div',
 		{ class: 'ow-dashboard' },
 		hero,
-		sourceCard(ui),
+		// Subscriptions and connection tuning share the column beside the hero.
+		h('div', { class: 'ow-side-stack' }, sourceCard(ui), tuning),
 		devices.unavailable ? card('设备',empty('局域网接口尚未就绪'),ui.button('重新检测',ui.refresh,'ow-link')) : deviceCard(ui, devices.items),
 		proxyPrefs,
 		dnsPrefs,

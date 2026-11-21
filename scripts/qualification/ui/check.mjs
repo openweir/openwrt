@@ -312,7 +312,7 @@ try {
 		const batch = page.getByRole('button', { name: '全部测速' });
 		assert.equal(await batch.isDisabled(), true, 'URL tests need a running core');
 		await methods.getByRole('button', { name: 'TCP' }).click();
-		await page.getByRole('button', { name: /新加坡 01/ }).getByText('不适用').waitFor();
+		await page.getByRole('button', { name: /新加坡 01/ }).getByText('不支持').waitFor();
 		await batch.click();
 		await page.getByRole('button', { name: /香港 01/ }).getByText('12 ms').waitFor();
 		await methods.getByRole('button', { name: 'URL' }).click();
