@@ -410,7 +410,7 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 	// and so does other UDP on port 443 to the mainland (WireGuard, DTLS). Mainland names the
 	// proxy must carry count as foreign.
 	rules = append(rules, "AND,((NETWORK,UDP),(DST-PORT,443),(RULE-SET,"+proxiedCNSet+")),REJECT", quicBlock)
-	providers[domesticIPSet] = obj{"type": "file", "format": "mrs", "behavior": "ipcidr", "path": "./builtin/geoip-cn.mrs"}
+	providers[domesticIPSet] = obj{"type": "file", "format": "mrs", "behavior": "ipcidr", "path": chinaList(cnlist.Addresses)}
 	providers[proxiedCNSet] = obj{"type": "inline", "behavior": "domain", "payload": proxiedCN}
 	// With the China shortcut the firewall sends mainland addresses straight out. As with
 	// OpenClash's China route, mainland names then get real addresses from the domestic
