@@ -494,7 +494,7 @@ applyLoop:
 		s.txn = ""
 		s.mu.Unlock()
 	}
-	s.remember(i, n, caps.Tag)
+	s.remember(i, n, caps.Tag, config)
 	s.startMonitor(i, n, gid, key)
 	return nil
 }

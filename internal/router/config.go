@@ -145,12 +145,14 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 			// names and node hostnames use domestic resolvers so CDNs stay local.
 			"nameserver": foreignDNS, "proxy-server-nameserver": domesticDNS, "direct-nameserver": domesticDNS, "respect-rules": true,
 			"nameserver-policy": obj{"rule-set:" + dnsDomesticSet: domesticDNS}, "fake-ip-range": "172.30.254.1/30"},
-		"find-process-mode": "off", "tcp-concurrent": !n.NoConcurrent, "unified-delay": !n.NoUnifiedDelay, "keep-alive-interval": 30}
-	// The WAN resolver may return poisoned answers for proxied sites. Dial the
-	// sniffed domain so the node resolves it, in every proxy mode.
-	config["sniffer"] = obj{"enable": !n.NoSniff, "override-destination": true, "parse-pure-ip": true, "force-dns-mapping": true,
+		"find-process-mode": "off", "tcp-concurrent": !n.NoConcurrent, "unified-delay": !n.NoUnifiedDelay, "keep-alive-interval": 15, "keep-alive-idle": 600}
+	// Without DNS protection devices may hold poisoned answers from the WAN resolver, so the
+	// sniffed domain is dialled instead. With it their addresses are already clean (or fake
+	// IPs the core maps back), and rewriting destinations only breaks apps whose SNI differs
+	// from their real host, so it stays off, as in OpenClash.
+	config["sniffer"] = obj{"enable": !n.NoSniff, "override-destination": !n.DNS, "parse-pure-ip": true, "force-dns-mapping": true,
 		// Push and smart-home services break when their destination is rewritten.
-		"skip-domain": []string{"+.push.apple.com", "Mijia Cloud", "+.mi.com", "+.xiaomi.net", "dlg.io.mi.com"},
+		"skip-domain": []string{"+.push.apple.com", "Mijia Cloud", "+.mi.com", "+.xiaomi.net", "dlg.io.mi.com", "+.oray.com", "+.sunlogin.net"},
 		"sniff":       obj{"TLS": obj{"ports": []string{"443", "8443"}}, "HTTP": obj{"ports": []string{"80", "8080"}}, "QUIC": obj{"ports": []string{"443"}}}}
 	if n.DNS {
 		dns := config["dns"].(obj)

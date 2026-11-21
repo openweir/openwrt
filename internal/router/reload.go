@@ -2,6 +2,7 @@ package router
 
 import (
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os/user"
@@ -20,6 +21,7 @@ var ErrNeedsRestart = errors.New("change needs a full restart")
 type applied struct {
 	network, guard, telegram string
 	tag                      string
+	config                   [32]byte // digest of the configuration the core is running
 }
 
 func networkKey(n Network) string {
@@ -34,7 +36,7 @@ func takeover(i Intent, n Network) (guard, telegram string, err error) {
 	return
 }
 
-func (s *System) remember(i Intent, n Network, tag string) {
+func (s *System) remember(i Intent, n Network, tag string, config []byte) {
 	guard, telegram, err := takeover(i, n)
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -42,7 +44,7 @@ func (s *System) remember(i Intent, n Network, tag string) {
 		s.applied = nil
 		return
 	}
-	s.applied = &applied{networkKey(n), guard, telegram, tag}
+	s.applied = &applied{networkKey(n), guard, telegram, tag, sha256.Sum256(config)}
 }
 
 // Reload swaps the core configuration in place when the listeners, firewall
@@ -107,6 +109,12 @@ func (s *System) Reload(ctx context.Context, i Intent) error {
 	if e = prepareGeo(ctx, config, profile); e != nil {
 		return e
 	}
+	// Interface notices (address lifetimes, RA refreshes) usually change nothing; reloading
+	// the core anyway would drop every open connection.
+	digest := sha256.Sum256(config)
+	if digest == last.config {
+		return nil
+	}
 	if e = client.ReloadPayload(ctx, config); e != nil {
 		return fmt.Errorf("core rejected the new configuration: %w", e)
 	}
@@ -115,6 +123,11 @@ func (s *System) Reload(ctx context.Context, i Intent) error {
 	}
 	s.records.CoreStarted(i.Source)
 	s.restartMonitor(i, n, gid, client)
+	s.mu.Lock()
+	if s.applied != nil {
+		s.applied.config = digest
+	}
+	s.mu.Unlock()
 	return nil
 }
 

@@ -14,8 +14,9 @@ func (m *Manager) Refresh(source string) {
 	if source != "" && !m.state.Intent.ReferencesSource(source) {
 		return
 	}
-	// A refreshed subscription reloads in place; settings changes restart.
-	if source != "" && m.hotLocked(m.state.Intent, m.state.Intent) {
+	// A refreshed subscription or a network notice reloads in place, which is a no-op when
+	// nothing changed; only a different LAN, DNS or address family falls back to a restart.
+	if m.hotLocked(m.state.Intent, m.state.Intent) {
 		m.reviewEpoch++
 		return
 	}
