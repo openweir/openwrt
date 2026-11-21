@@ -7,7 +7,7 @@ guard_plan=$state/guard-plan
 # Write both backends from the same ordered device policy. The input is a root
 # handoff produced from the configuration that is about to become active.
 guard_rules() {
- awk -v engine="$1" -v family="$2" -v devices="$interfaces" -v v6="$v6" -v dns="$dns" -v intercept="$dns_intercept" -v tag="$hold_note" -v priv4="$bypass4" -v priv6="$bypass6" '
+ awk -v engine="$1" -v family="$2" -v devices="$interfaces" -v v6="$v6" -v dns="$dns" -v intercept="$dns_intercept" -v tag="$hold_note" -v priv4="$bypass4" -v priv6="$bypass6" -v local4="$(local_prefixes 4)" -v local6="$(local_prefixes 6)" '
  function xt(chain, spec, action) { print "-A " chain " " spec " -m comment --comment " tag " " action }
  function prefix_ok(f,s) { return (f=="4" ? s ~ /^[0-9.]+\/[0-9]+$/ : s ~ /^[a-fA-F0-9:.]+\/[0-9]+$/) }
  BEGIN {
@@ -15,10 +15,16 @@ guard_rules() {
   if (engine=="nft") {
    print "table inet openweir_hold {\n comment \"" tag "\""
    print "chain blocked {"
+   # Replies to connections opened from outside (port forwards, inbound services) are never held.
+   print "ct direction reply return"
    if (dns) print "th dport 53 fib daddr type " (intercept ? "{ local, unicast }" : "local") " drop"
    print "fib daddr type { local, multicast, broadcast } return"
    gsub(/ /,", ",priv4); gsub(/ /,", ",priv6)
-   print "ip daddr { " priv4 " } return\nip6 daddr { " priv6 " } return\ndrop\n}"
+   print "ip daddr { " priv4 " } return\nip6 daddr { " priv6 " } return"
+   # Attached networks may overlap, which an anonymous set rejects, so each gets its own rule.
+   cnt=split(local4,p,"\n"); for (i=1;i<=cnt;i++) if (p[i]!="") print "ip daddr " p[i] " return"
+   cnt=split(local6,p,"\n"); for (i=1;i<=cnt;i++) if (p[i]!="") print "ip6 daddr " p[i] " return"
+   print "drop\n}"
    print "chain device_routes {"
   } else {
    print "*mangle\n-N OW_HOLD\n-N OW_HOLD_DEV\n-N OW_HOLD_BLOCK"
@@ -27,9 +33,12 @@ guard_rules() {
     xt("OW_HOLD_BLOCK","-p tcp --dport 53 -m addrtype --dst-type " types,"-j DROP")
     xt("OW_HOLD_BLOCK","-p udp --dport 53 -m addrtype --dst-type " types,"-j DROP")
    }
+   xt("OW_HOLD_BLOCK","-m conntrack --ctdir REPLY","-j RETURN")
    xt("OW_HOLD_BLOCK","-m addrtype --dst-type " (family==4 ? "LOCAL,BROADCAST,MULTICAST" : "LOCAL,MULTICAST"),"-j RETURN")
    cnt=split((family==4 ? priv4 : priv6),p," ")
    for (i=1;i<=cnt;i++) xt("OW_HOLD_BLOCK","-d " p[i],"-j RETURN")
+   cnt=split((family==4 ? local4 : local6),p,"\n")
+   for (i=1;i<=cnt;i++) if (p[i]!="") xt("OW_HOLD_BLOCK","-d " p[i],"-j RETURN")
    xt("OW_HOLD_BLOCK","","-j DROP")
   }
  }
