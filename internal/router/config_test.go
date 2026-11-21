@@ -373,3 +373,50 @@ func TestDNSUpstreamValidation(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+// dnsPolicyEntries reads nameserver-policy in document order, the order the core tries it.
+func dnsPolicyEntries(t *testing.T, data []byte) (keys []string, servers [][]string) {
+	t.Helper()
+	var cfg struct {
+		DNS struct {
+			Policy yaml.Node `yaml:"nameserver-policy"`
+		} `yaml:"dns"`
+	}
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	for j := 0; j+1 < len(cfg.DNS.Policy.Content); j += 2 {
+		var list []string
+		if err := cfg.DNS.Policy.Content[j+1].Decode(&list); err != nil {
+			t.Fatal(err)
+		}
+		keys, servers = append(keys, cfg.DNS.Policy.Content[j].Value), append(servers, list)
+	}
+	return keys, servers
+}
+
+func TestTimeSyncNamesUsePlainDNS(t *testing.T) {
+	p := baseProfile(t, "p")
+	i := initial()
+	i.Source = p.Source
+	data, err := Compile(i, p, kernel.TargetCapabilities{Control: kernel.Controller, TProxy: true}, Network{Method: "tproxy", DNS: true, FakeIP: true, Resolver: "2001:db8::53"}, strings.Repeat("x", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Time sync names come before the mainland set, which may list them, and skip the proxy.
+	keys, servers := dnsPolicyEntries(t, data)
+	if len(keys) != 2 || keys[0] != strings.Join(ntpNames, ",") || keys[1] != "rule-set:"+dnsDomesticSet ||
+		!slices.Equal(servers[0], []string{"udp://[2001:db8::53]:53#DIRECT", "udp://223.5.5.5:53#DIRECT", "udp://119.29.29.29:53#DIRECT"}) || !slices.Equal(servers[1], DomesticDNS) {
+		t.Fatal(keys, servers)
+	}
+	for _, name := range ntpNames {
+		if !slices.Contains(fakeIPFilter, name) {
+			t.Fatal("time sync name gets a fake address:", name)
+		}
+	}
+	// Without a WAN resolver the public ones remain.
+	b, _ := yaml.Marshal(obj{"dns": obj{"nameserver-policy": dnsPolicy("", DomesticDNS)}})
+	if _, servers = dnsPolicyEntries(t, b); !slices.Equal(servers[0], []string{"udp://223.5.5.5:53#DIRECT", "udp://119.29.29.29:53#DIRECT"}) {
+		t.Fatal(servers)
+	}
+}

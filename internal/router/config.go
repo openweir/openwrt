@@ -86,16 +86,22 @@ const domesticIPSet = "openweir-ip-cn"
 // that only names its host matches by name, without a lookup for the rule.
 var quicBlock = "AND,((NETWORK,UDP),(DST-PORT,443),(NOT,((RULE-SET," + dnsDomesticSet + "))),(NOT,((RULE-SET," + domesticIPSet + ",no-resolve)))),REJECT"
 
+// Time sync names resolve over plain DNS sent straight out, not over encrypted DNS through
+// the proxy: with a badly wrong clock, TLS fails and the clock could never be corrected.
+var ntpNames = []string{
+	"+.ntp.org", "*.ntp.org.cn", "*.time.edu.cn", "time.*.com", "time.*.gov", "time.*.edu.cn", "time.*.apple.com", "time-ios.apple.com",
+	"time1.*.com", "time2.*.com", "time3.*.com", "time4.*.com", "time5.*.com", "time6.*.com", "time7.*.com",
+	"ntp.*.com", "ntp1.*.com", "ntp2.*.com", "ntp3.*.com", "ntp4.*.com", "ntp5.*.com", "ntp6.*.com", "ntp7.*.com", "time1.cloud.tencent.com",
+}
+
 // Names that must keep real addresses, following OpenClash's filter: local and reserved
 // names, time sync, connectivity checks, STUN and consoles, carrier one-tap login,
 // VoWiFi, router setup pages, Windows domain controllers, Apple software update and iCloud
 // Private Relay, whose Safari "Hide IP" otherwise fails Cloudflare challenges (OpenClash #4370).
-var fakeIPFilter = []string{
+var fakeIPFilter = slices.Concat([]string{
 	"*.lan", "*.local", "*.localdomain", "*.localhost", "*.home.arpa", "*.example", "*.invalid", "*.test", "localhost.ptlink",
 	"localhost.ptlogin2.qq.com", "localhost.sec.qq.com", "localhost.*.weixin.qq.com",
-	"+.ntp.org", "+.pool.ntp.org", "*.ntp.org.cn", "*.time.edu.cn", "time.*.com", "time.*.gov", "time.*.edu.cn", "time.*.apple.com", "time-ios.apple.com",
-	"time1.*.com", "time2.*.com", "time3.*.com", "time4.*.com", "time5.*.com", "time6.*.com", "time7.*.com",
-	"ntp.*.com", "ntp1.*.com", "ntp2.*.com", "ntp3.*.com", "ntp4.*.com", "ntp5.*.com", "ntp6.*.com", "ntp7.*.com", "time1.cloud.tencent.com",
+}, ntpNames, []string{
 	"+.msftconnecttest.com", "+.msftncsi.com", "connectivitycheck.gstatic.com", "captive.apple.com", "detectportal.firefox.com", "network-test.debian.org",
 	"stun.*.*", "stun.*.*.*", "+.stun.*.*", "+.stun.*.*.*", "+.stun.*.*.*.*", "stun.l.google.com", "global.stun.twilio.com", "global.turn.twilio.com",
 	"+.srv.nintendo.net", "+.cdn.nintendo.net", "+.stun.playstation.net", "xbox.*.microsoft.com", "xbox.*.*.microsoft.com", "*.*.xboxlive.com", "xnotify.xboxlive.com",
@@ -108,6 +114,31 @@ var fakeIPFilter = []string{
 	"mask.icloud.com", "mask-h2.icloud.com", "mask.apple-dns.net",
 	"local.adguard.org", "injections.adguard.org", "resolver1.opendns.com",
 	"probe.openweir.invalid",
+})
+
+// dnsPolicy lists nameserver-policy entries in the order the core tries them, which a map
+// would lose to sorting. Time sync names come first and query plain resolvers through
+// DIRECT, which also keeps them off respect-rules and the proxy.
+func dnsPolicy(resolver string, domestic []string) *yaml.Node {
+	var plain []string
+	for _, s := range []string{resolver, "223.5.5.5", "119.29.29.29"} {
+		if a, err := netip.ParseAddr(s); err == nil && !a.IsLoopback() && !a.IsUnspecified() {
+			plain = append(plain, "udp://"+netip.AddrPortFrom(a, 53).String()+"#DIRECT")
+		}
+	}
+	str := func(s string) *yaml.Node { return &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: s} }
+	policy := &yaml.Node{Kind: yaml.MappingNode}
+	for _, e := range []struct {
+		match   string
+		servers []string
+	}{{strings.Join(ntpNames, ","), plain}, {"rule-set:" + dnsDomesticSet, domestic}} {
+		list := &yaml.Node{Kind: yaml.SequenceNode}
+		for _, s := range e.servers {
+			list.Content = append(list.Content, str(s))
+		}
+		policy.Content = append(policy.Content, str(e.match), list)
+	}
+	return policy
 }
 
 func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Network, secret string) ([]byte, error) {
@@ -152,7 +183,7 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 			// Foreign names resolve over encrypted DNS through the proxy; mainland
 			// names and node hostnames use domestic resolvers so CDNs stay local.
 			"nameserver": foreignDNS, "proxy-server-nameserver": domesticDNS, "direct-nameserver": domesticDNS, "respect-rules": true,
-			"nameserver-policy": obj{"rule-set:" + dnsDomesticSet: domesticDNS}, "fake-ip-range": "172.30.254.1/30"},
+			"nameserver-policy": dnsPolicy(n.Resolver, domesticDNS), "fake-ip-range": "172.30.254.1/30"},
 		"find-process-mode": "off", "tcp-concurrent": true, "unified-delay": true, "keep-alive-interval": 15, "keep-alive-idle": 600}
 	// Dial the sniffed domain, not the address the device chose. Devices may still hold
 	// poisoned answers (IPv6 resolvers from router advertisements, hard-coded DNS, cached
