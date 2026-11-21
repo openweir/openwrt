@@ -187,7 +187,7 @@ func (f Fetcher) expandSourceProviders(ctx context.Context, b []byte, origin str
 	if len(b) > MaxBody {
 		return nil, nil, nil, errors.New("subscription_size_limit")
 	}
-	if !bytes.Contains(b, []byte("proxy-providers")) && !bytes.Contains(b, []byte("rule-providers")) && !bytes.Contains(b, []byte("rule_set")) && !hasYAMLRoot(string(b)) && !bytes.Contains(b, []byte(`"proxies"`)) {
+	if !bytes.Contains(b, []byte("proxy-providers")) && !bytes.Contains(b, []byte("rule-providers")) && !hasYAMLRoot(string(b)) && !bytes.Contains(b, []byte(`"proxies"`)) {
 		return b, nil, nil, nil
 	}
 	var m map[string]any

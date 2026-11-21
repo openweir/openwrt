@@ -16,9 +16,9 @@ func TestProviderCaseKeepsSignedPathAndQuery(t *testing.T) {
 	if got := providerAddress("HTTPS://RuLeS.Example:9443" + path); got != want {
 		t.Fatalf("%q", got)
 	}
-	doc := map[string]any{"route": map[string]any{"rule_set": []any{map[string]any{"url": "https://RuLeS.Example:9443" + path}}}, "rule-providers": map[string]any{"X": map[string]any{"url": want}}}
+	doc := map[string]any{"proxy-providers": map[string]any{"N": map[string]any{"url": "https://RuLeS.Example:9443" + path}}, "rule-providers": map[string]any{"X": map[string]any{"url": want}}}
 	normalizeProviderAddresses(doc)
-	if field(object(list(object(doc["route"])["rule_set"])[0]), "url") != field(object(object(doc["rule-providers"])["X"]), "url") {
+	if field(object(object(doc["proxy-providers"])["N"]), "url") != field(object(object(doc["rule-providers"])["X"]), "url") {
 		t.Fatal("provider aliases were not canonicalized")
 	}
 }

@@ -18,18 +18,12 @@ func providerAddress(raw string) string {
 }
 
 func normalizeProviderAddresses(doc map[string]any) {
-	normalize := func(entry any) {
-		p := object(entry)
-		if raw := field(p, "url"); raw != "" {
-			p["url"] = providerAddress(raw)
-		}
-	}
 	for _, key := range []string{"proxy-providers", "rule-providers"} {
 		for _, entry := range object(doc[key]) {
-			normalize(entry)
+			p := object(entry)
+			if raw := field(p, "url"); raw != "" {
+				p["url"] = providerAddress(raw)
+			}
 		}
-	}
-	for _, entry := range list(object(doc["route"])["rule_set"]) {
-		normalize(entry)
 	}
 }
