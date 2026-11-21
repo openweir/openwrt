@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-在 LuCI 的「服务 → OpenWeir」中，可以登录服务商账户、添加外部订阅或导入本地文件。插件使用 OpenWeir 版 mihomo 处理流量。账户使用 `OpenWeir/<版本> (OpenWrt)` 请求 Clash YAML，保留节点、策略组、规则提供方和规则顺序。外部链接默认使用 `clash.meta`，也可选 sing-box 或自定义 UA。sing-box JSON 和分享链接在导入时由共享的 [subconv](https://github.com/openweir/subconv) 转换（与桌面端相同），转不了的内容在导入详情中列出。
+在 LuCI 的「服务 → OpenWeir」中，可以登录服务商账户、添加外部订阅或导入本地文件。插件使用 OpenWeir 版 mihomo 处理流量。账户使用 `OpenWeir/<版本> (OpenWrt)` 请求 Clash YAML，保留节点、策略组、规则提供方和规则顺序。外部链接默认使用 `clash`，也可选 `sing-box` 或 `OpenWeir`。名称可留空，自动使用订阅自带的名称，没有时用域名。sing-box JSON 和分享链接在导入时由共享的 [subconv](https://github.com/openweir/subconv) 转换（与桌面端相同），转不了的内容在导入详情中列出。
 
 路由器管理控制端口、DNS、透明代理和监听权限。原生规则提供方支持 YAML、text 和 MRS，安装包内含已校验的中国大陆域名及 IP 规则。使用 GEOIP 或 GEOSITE 的配置按需准备指定版本的地理数据库，校验通过后可复用。
 

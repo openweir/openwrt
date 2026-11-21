@@ -3,6 +3,7 @@ package subscription
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -25,6 +27,7 @@ type Source struct {
 	Plan               *Plan             `json:"plan,omitempty"`
 	ID                 string            `json:"id"`
 	Name               string            `json:"name"`
+	AutoName           bool              `json:"auto_name,omitempty"` // named after the link; the subscription's own title replaces it
 	Kind               string            `json:"kind"`
 	URL                string            `json:"url,omitempty"`
 	UserAgent          string            `json:"user_agent,omitempty"`
@@ -36,7 +39,7 @@ type Source struct {
 	AllowLocalFallback bool              `json:"allow_local_fallback,omitempty"`
 }
 
-const defaultSubscriptionUserAgent = "clash.meta"
+const defaultSubscriptionUserAgent = "clash"
 const platformUserAgent = "OpenWeir"
 
 // The OpenWeir platform matches its first-party client by the product/version prefix.
@@ -49,7 +52,7 @@ func subscriptionHeader(agent string) string {
 	return agent
 }
 
-var UserAgents = []string{defaultSubscriptionUserAgent, "sing-box", "clash", platformUserAgent}
+var UserAgents = []string{defaultSubscriptionUserAgent, "sing-box", platformUserAgent}
 
 func webURL(s string, secure bool) (*url.URL, error) {
 	u, e := url.Parse(s)
@@ -605,6 +608,7 @@ func (f Fetcher) readProfile(ctx context.Context, s Source, file []byte, usage *
 	}
 	p, err := parseVerified(s.ID, body, sets)
 	p.converted(format, converted)
+	p.Title = subscriptionTitle(headers)
 	if s.Kind == "platform" {
 		_, params, _ := mime.ParseMediaType(headers.Get("Content-Disposition"))
 		if p.Format == "clash" && (strings.EqualFold(params["filename"], "openweir.yaml") || strings.EqualFold(params["filename"], "openweir.yml")) {
@@ -829,4 +833,30 @@ func (f Fetcher) entitlement(ctx context.Context, s Source, knownUnavailable boo
 		}
 	}
 	return ErrRevoked
+}
+
+// subscriptionTitle reads the name a provider gives its subscription: Profile-Title (plain
+// or "base64:"), else the Content-Disposition file name without its extension.
+func subscriptionTitle(headers http.Header) string {
+	title := strings.TrimSpace(headers.Get("Profile-Title"))
+	if rest, ok := strings.CutPrefix(title, "base64:"); ok {
+		raw, err := base64.StdEncoding.DecodeString(strings.TrimSpace(rest))
+		title = ""
+		if err == nil {
+			title = strings.TrimSpace(string(raw))
+		}
+	}
+	if title == "" {
+		if _, params, err := mime.ParseMediaType(headers.Get("Content-Disposition")); err == nil {
+			name := filepath.Base(params["filename"])
+			title = strings.TrimSpace(strings.TrimSuffix(name, filepath.Ext(name)))
+			if title == "." || title == "/" {
+				title = ""
+			}
+		}
+	}
+	if len(title) > 64 || !safeLabel(title) || publicLabel(title, "") == "" {
+		return ""
+	}
+	return title
 }

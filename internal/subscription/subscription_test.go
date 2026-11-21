@@ -280,7 +280,7 @@ func TestExternalPresetsChangeOnlyRequestHeader(t *testing.T) {
 			t.Fatal(err)
 		}
 		c, err := (Fetcher{}).Refresh(t.Context(), s, "url", nil, Policy{})
-		want := first(ua, "clash.meta")
+		want := first(ua, "clash")
 		if ua == "OpenWeir" {
 			want = "OpenWeir/" + packageVersion + " (OpenWrt)"
 		}

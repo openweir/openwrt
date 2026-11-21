@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -253,6 +254,9 @@ func (s *Store) commit(ctx context.Context, t Ticket, c Candidate, recheck func(
 		}
 		r.NeedsRefresh = false
 		r.Current = &c.Profile
+		if r.Config != nil && r.Config.AutoName && c.Profile.Title != "" {
+			r.Config.Name, r.Config.AutoName = c.Profile.Title, false
+		}
 		r.Providers = c.receipt
 		r.Usage = c.Usage
 		if replacement != "" && replacement != r.Config.URL {
@@ -444,7 +448,16 @@ func (s *Store) ValidateReference(source, nodeID string, epoch uint64) error {
 
 // Configure explicitly creates a source or updates filters and request preferences.
 // A verified platform login is the only path that can renew a revoked authority.
-func (s *Store) Configure(src Source) error { return s.configure(src, false) }
+func (s *Store) Configure(src Source) error {
+	// An unnamed link is called after its host until the subscription names itself.
+	src.AutoName = false
+	if src.Kind == "external" && strings.TrimSpace(src.Name) == "" {
+		if u, err := url.Parse(src.URL); err == nil && u.Hostname() != "" {
+			src.Name, src.AutoName = u.Hostname(), true
+		}
+	}
+	return s.configure(src, false)
+}
 func (s *Store) configure(src Source, authenticated bool) error {
 	if e := src.validate(); e != nil {
 		return e
@@ -606,8 +619,8 @@ func (s *Store) Preferences(id string, p Preferences) error {
 		} else if !p.KeepUserAgent {
 			v.UserAgent = p.UserAgent
 		}
-		if p.Name != "" && v.Kind != "platform" {
-			v.Name = p.Name
+		if p.Name != "" && v.Kind != "platform" && p.Name != v.Name {
+			v.Name, v.AutoName = p.Name, false
 		}
 		v.AllowLocalFallback = p.AllowLocalFallback
 		if v.Kind == "platform" {

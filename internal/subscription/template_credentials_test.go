@@ -56,7 +56,7 @@ func TestSnellTemplateCredentials(t *testing.T) {
 
 func TestBuiltInSubscriptionAgents(t *testing.T) {
 	a := Account{}
-	if a.Source(Plan{ID: 1}).UserAgent != "OpenWeir" || !reflect.DeepEqual(UserAgents, []string{"clash.meta", "sing-box", "clash", "OpenWeir"}) {
+	if a.Source(Plan{ID: 1}).UserAgent != "OpenWeir" || !reflect.DeepEqual(UserAgents, []string{"clash", "sing-box", "OpenWeir"}) {
 		t.Fatal("unexpected presets or default account user-agent")
 	}
 }

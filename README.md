@@ -2,7 +2,7 @@
 
 [中文说明](README.zh-CN.md)
 
-Open **Services → OpenWeir** in LuCI to connect a provider account, add a subscription URL or import a local file. The OpenWeir fork of mihomo handles traffic. Account requests use `OpenWeir/<version> (OpenWrt)` to fetch Clash YAML with its nodes, policy groups, providers and ordered rules. External links default to `clash.meta`. You can select a different UA, including sing-box or a custom value. The importer converts sing-box JSON and share links with the shared [subconv](https://github.com/openweir/subconv) converter, the same one the desktop app uses, and reports what it leaves out.
+Open **Services → OpenWeir** in LuCI to connect a provider account, add a subscription URL or import a local file. The OpenWeir fork of mihomo handles traffic. Account requests use `OpenWeir/<version> (OpenWrt)` to fetch Clash YAML with its nodes, policy groups, providers and ordered rules. External links default to `clash`; you can switch to `sing-box` or `OpenWeir`. Leave the name empty to use the subscription's own title, or its domain. The importer converts sing-box JSON and share links with the shared [subconv](https://github.com/openweir/subconv) converter, the same one the desktop app uses, and reports what it leaves out.
 
 The router controls listeners, transparent proxying, the controller secret and DNS. Native rule providers support YAML, text and MRS. The installer includes verified mainland China IP and domain rules. Profiles using GEOIP or GEOSITE can reuse the pinned geographic databases after their first verified download.
 

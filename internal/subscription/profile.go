@@ -95,6 +95,7 @@ type Profile struct {
 	Final         string      `json:"final,omitempty"`
 	Notices       []Notice    `json:"notices,omitempty"`
 	Local         bool        `json:"local"`
+	Title         string      `json:"title,omitempty"`
 }
 
 type Policy struct {
