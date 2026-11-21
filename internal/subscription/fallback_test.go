@@ -14,6 +14,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -175,9 +176,14 @@ func fakeMixedPort(t *testing.T, status string) <-chan string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	previous := mixedProxy
-	mixedProxy = ln.Addr().String()
-	t.Cleanup(func() { mixedProxy = previous; ln.Close() })
+	u, err := user.Current()
+	if err != nil {
+		t.Skip(err)
+	}
+	// This process owns the listener, standing in for the core's account.
+	previous, account := mixedProxy, coreAccount
+	mixedProxy, coreAccount = ln.Addr().String(), u.Username
+	t.Cleanup(func() { mixedProxy, coreAccount = previous, account; ln.Close() })
 	targets := make(chan string, 1)
 	go func() {
 		c, err := ln.Accept()
@@ -221,6 +227,44 @@ func TestMixedPortTunnelsByNameOrCheckedAddress(t *testing.T) {
 	if _, err := dialMixed(t.Context(), "tcp", "sub.test:80"); err == nil {
 		t.Fatal("refused tunnel accepted")
 	}
+	// Another account took the port, as after a core restart: nothing is sent to it.
+	if other, err := user.Lookup("nobody"); err == nil && other.Uid != strconv.Itoa(os.Getuid()) {
+		targets := fakeMixedPort(t, "200 Connection established")
+		coreAccount = other.Username
+		if _, err := dialMixed(t.Context(), "tcp", "sub.test:443"); err == nil || err.Error() != "proxy_not_core" {
+			t.Fatal(err)
+		}
+		select {
+		case got := <-targets:
+			t.Fatal("sent to a foreign listener:", got)
+		case <-time.After(50 * time.Millisecond):
+		}
+	}
+}
+
+// The local proxy is not trusted with plain http, even when it worked for this refresh.
+func TestMixedPortCarriesOnlyTLS(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer server.Close()
+	dialed := useRoute(t, server.Listener.Addr().String(), "203.0.113.7")
+	inner := fallbackRoute
+	fallbackRoute = func() *route { r := inner(); r.tlsOnly = true; return r }
+	var usual atomic.Int32
+	f := Fetcher{Fallback: true, Client: failingPath(server, &usual)}.withEgress()
+	get := func(raw string) error {
+		_, err := f.request(t.Context(), http.MethodGet, raw, nil, "", "", false, MaxBody)
+		return err
+	}
+	if err := get("http://example.com/feed"); err == nil || len(dialed()) != 0 {
+		t.Fatal("plain http retried through the local proxy", err)
+	}
+	if err := get("https://example.com/feed"); err != nil || len(dialed()) != 1 {
+		t.Fatal(err, dialed())
+	}
+	usual.Store(0)
+	if err := get("http://example.com/feed"); err == nil || usual.Load() != 1 || len(dialed()) != 1 {
+		t.Fatal("plain http sent through the proxy that went first", err, dialed())
+	}
 }
 
 func TestRouterFallbackFollowsTakeover(t *testing.T) {
@@ -256,8 +300,8 @@ func TestRouterFallbackFollowsTakeover(t *testing.T) {
 		t.Fatal("another account's listener taken for the core")
 	}
 	write("tcp", fmt.Sprintf(line, u.Uid))
-	if r := routerFallback(); r == nil || !r.byName {
-		t.Fatal("uncaptured router traffic must retry through the core")
+	if r := routerFallback(); r == nil || !r.byName || !r.tlsOnly {
+		t.Fatal("uncaptured router traffic must retry through the core, over TLS only")
 	}
 	os.Remove(filepath.Join(dir, "owned"))
 	write("backend", "fw4\n")

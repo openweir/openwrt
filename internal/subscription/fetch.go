@@ -226,7 +226,8 @@ func (f Fetcher) request(ctx context.Context, method, raw string, payload []byte
 	if !f.Fallback {
 		return send(&c)
 	}
-	return f.egress.send(ctx, &c, f.embedded, send)
+	// Redirects never leave https, so the scheme covers every hop.
+	return f.egress.send(ctx, &c, f.embedded, u.Scheme == "https", send)
 }
 func statusErr(r response) error {
 	switch r.status {
