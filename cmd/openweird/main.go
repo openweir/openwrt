@@ -265,8 +265,14 @@ func (s *app) handle(ctx context.Context, method string, r request) (any, error)
 		default:
 		}
 		return map[string]bool{"accepted": true}, nil
-	case "notify_source", "notify_network":
-		if method == "notify_source" && status.Intent.Source == "" && r.Source != "" {
+	case "notify_network":
+		// Latency results only go stale when the uplinks or LANs actually changed.
+		if s.m.NetworkNotice(ctx) {
+			s.tests.reset()
+		}
+		return map[string]bool{"accepted": true}, nil
+	case "notify_source":
+		if status.Intent.Source == "" && r.Source != "" {
 			selected, err := selectInitialSource(s.m, subscription.OpenStore(router.Root+"/sources"), r.Source)
 			if err != nil {
 				return nil, err
@@ -709,7 +715,10 @@ func runDaemon() {
 		defer cancel()
 		_, e = call(c, "notify_clock", nil)
 	case len(args) == 1 && args[0] == "notify-network":
-		_, e = call(ctx, "notify_network", nil)
+		// Runs from every interface hotplug event, which netifd handles one at a time.
+		c, cancel := context.WithTimeout(ctx, 15*time.Second)
+		defer cancel()
+		_, e = call(c, "notify_network", nil)
 	case len(args) == 2 && args[0] == "call":
 		var d []byte
 		d, e = rpcInput(os.Stdin)

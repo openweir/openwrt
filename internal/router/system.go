@@ -47,6 +47,7 @@ type System struct {
 	records       *Records
 	recovered     bool
 	applied       *applied
+	network       [2]string // see observe
 }
 
 func NewSystem() *System { return &System{records: NewRecords()} }
@@ -277,6 +278,7 @@ func (s *System) Start(ctx context.Context, i Intent) (err error) {
 		return errors.New("network resource conflict or incomplete inspection")
 	}
 	n, e := networkOptions(ctx)
+	s.observe(ctx, n, e)
 	if e != nil {
 		return e
 	}

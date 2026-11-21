@@ -1,10 +1,13 @@
 package router
 
 import (
+	"context"
 	"errors"
 	"net/netip"
 	"slices"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestManagedLANSkipsInterfacesThatAreDown(t *testing.T) {
@@ -73,4 +76,99 @@ func TestWANResolverIsOptional(t *testing.T) {
 	if networkKey(i, n) != networkKey(i, Network{Method: n.Method, LAN: n.LAN}) {
 		t.Fatal("resolver change forces a restart")
 	}
+}
+
+func TestNetworkSnapshotIgnoresRepeatedNotices(t *testing.T) {
+	s := &System{}
+	ctx := context.Background()
+	a, b := netip.MustParsePrefix("192.168.1.1/24"), netip.MustParsePrefix("192.168.2.1/24")
+	n := Network{Method: "tproxy", LAN: map[string][]netip.Prefix{"br-lan": {a}, "br-guest": {b}}}
+	if changed, takeover := s.observe(ctx, n, nil); !changed || !takeover {
+		t.Fatal("first notice ignored")
+	}
+	same := Network{Method: "tproxy", LAN: map[string][]netip.Prefix{"br-guest": {b}}}
+	same.LAN["br-lan"] = []netip.Prefix{a}
+	if changed, _ := s.observe(ctx, same, nil); changed {
+		t.Fatal("unchanged network counted as a change")
+	}
+	n.Resolver = "192.0.2.53"
+	if changed, takeover := s.observe(ctx, n, nil); !changed || takeover {
+		t.Fatal("a resolver change must reload in place", changed, takeover)
+	}
+	delete(n.LAN, "br-guest")
+	if changed, takeover := s.observe(ctx, n, nil); !changed || !takeover {
+		t.Fatal("a LAN that went down kept the takeover")
+	}
+	if changed, takeover := s.observe(ctx, Network{}, errors.New("managed LAN interface unavailable")); !changed || !takeover {
+		t.Fatal("failure not noticed")
+	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if changed, _ := s.observe(canceled, n, nil); !changed {
+		t.Fatal("an interrupted read proved the network unchanged")
+	}
+	if changed, _ := s.observe(ctx, n, nil); !changed {
+		t.Fatal("an interrupted read replaced the snapshot")
+	}
+}
+
+type noticeService struct {
+	reloadService
+	changed, takeover *atomic.Bool
+}
+
+func (n noticeService) NetworkChanged(context.Context) (bool, bool) {
+	return n.changed.Load(), n.takeover.Load()
+}
+
+func TestNetworkNoticeInterruptsOnlyForANewTakeover(t *testing.T) {
+	var changed, takeover atomic.Bool
+	var starts, reloads atomic.Int32
+	proceed := make(chan struct{})
+	f := noticeService{reloadService{fakeService{start: func(c context.Context, _ Intent) error {
+		if starts.Add(1) == 1 {
+			select {
+			case <-proceed:
+			case <-c.Done():
+				return c.Err()
+			}
+		}
+		return nil
+	}}, func(context.Context, Intent) error {
+		reloads.Add(1)
+		if takeover.Load() {
+			return ErrNeedsRestart
+		}
+		return nil
+	}}, &changed, &takeover}
+	i := initial()
+	i.Enabled = true
+	i.Source = "primary"
+	m := New(&fakeStore{i: i}, f, Timing{time.Second, 100 * time.Millisecond, 5 * time.Millisecond, time.Second})
+	ctx, end := context.WithCancel(context.Background())
+	defer end()
+	go m.Run(ctx)
+	eventually(t, func() bool { return starts.Load() == 1 && m.Status().Phase == "starting" })
+	token, _, _, _ := m.ReviewToken("primary")
+	if m.NetworkNotice(ctx) {
+		t.Fatal("unchanged network reported as a change")
+	}
+	if again, _, _, _ := m.ReviewToken("primary"); again != token {
+		t.Fatal("an unchanged network voided the review")
+	}
+	// A resolver that appears during the start reaches the core by reload, once it runs.
+	changed.Store(true)
+	if !m.NetworkNotice(ctx) {
+		t.Fatal("resolver change ignored")
+	}
+	close(proceed)
+	eventually(t, func() bool { return reloads.Load() == 1 && m.Status().Phase == "running" })
+	if starts.Load() != 1 {
+		t.Fatal("a resolver change interrupted the start")
+	}
+	takeover.Store(true)
+	if !m.NetworkNotice(ctx) {
+		t.Fatal("LAN change ignored")
+	}
+	eventually(t, func() bool { return starts.Load() == 2 && m.Status().Phase == "running" })
 }

@@ -23,6 +23,37 @@ func (m *Manager) Refresh(source string) {
 	m.refreshLocked()
 }
 
+// NetworkNotice handles an interface event and reports whether it changed anything. An event
+// that leaves the network as the last start or reload saw it must not interrupt a start,
+// reload the core, wake a failed start early or void a pending review.
+func (m *Manager) NetworkNotice(ctx context.Context) bool {
+	changed, takeover := true, true
+	if w, ok := m.backend.(interface {
+		NetworkChanged(context.Context) (bool, bool)
+	}); ok {
+		c, end := context.WithTimeout(ctx, 10*time.Second)
+		changed, takeover = w.NetworkChanged(c)
+		end()
+	}
+	if !changed {
+		return false
+	}
+	m.mu.Lock()
+	if !takeover && m.state.Phase == "starting" && m.cancel != nil {
+		// A WAN resolver that came or went keeps the takeover: the core reloads once it runs.
+		m.reviewEpoch++
+		select {
+		case m.hot <- struct{}{}:
+		default:
+		}
+		m.mu.Unlock()
+		return true
+	}
+	m.mu.Unlock()
+	m.Refresh("")
+	return true
+}
+
 func (m *Manager) refreshLocked() {
 	m.reviewEpoch++
 	if m.cancel != nil {

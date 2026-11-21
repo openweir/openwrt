@@ -4,12 +4,11 @@ case "$ACTION" in ifup|ifdown) ;;
  *) exit 0 ;;
 esac
 [ -S /var/run/openweir/manager.sock ] || exit 0
-case "$INTERFACE" in
- # Uplinks, including the dynamic wan_6 that PPPoE creates for DHCPv6: IPv6 proxying follows them.
- wan|wan6|wan_*|wan6_*) ;;
- *) managed=$(uci -q get openweir.main.network) || exit 0
-    case " $managed " in *" $INTERFACE "*) ;; *) exit 0 ;; esac ;;
-esac
-# Keep the attached-network bypass sets current (new IPv6 prefix, PPPoE redial) before the manager reacts.
-/usr/libexec/openweir/network refresh >/dev/null 2>&1 || :
+# Every interface counts: uplinks go by many names (wwan, wan2, 4G modems, the dynamic wan_6 of
+# PPPoE) and carry the IPv6 route, the resolver and attached networks; managed LANs come and go.
+# The manager ignores events that change nothing it uses.
+[ "$INTERFACE" != loopback ] || exit 0
+# Keep the attached-network bypass sets current (new IPv6 prefix, PPPoE redial) before the manager
+# reacts. Without a takeover there are none, so skip the helper's lock.
+[ ! -e /var/run/openweir/network/owned ] || /usr/libexec/openweir/network refresh >/dev/null 2>&1 || :
 /usr/sbin/openweird notify-network

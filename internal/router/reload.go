@@ -78,6 +78,7 @@ func (s *System) Reload(ctx context.Context, i Intent) error {
 		return ErrNeedsRestart
 	}
 	n, e := networkOptions(ctx)
+	s.observe(ctx, n, e)
 	if e != nil {
 		return e
 	}

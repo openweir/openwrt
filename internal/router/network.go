@@ -280,3 +280,29 @@ func wanResolver(resolv []byte) string {
 	}
 	return ""
 }
+
+// NetworkChanged reports whether the network differs from what the last start, reload or
+// notice saw, and whether the difference needs a new takeover rather than an in-place reload.
+// Hotplug reports every interface, and most events (address lifetimes, router advertisements,
+// interfaces nobody uses) change nothing.
+func (s *System) NetworkChanged(ctx context.Context) (changed, takeover bool) {
+	n, e := networkOptions(ctx)
+	return s.observe(ctx, n, e)
+}
+
+// observe records the network a start or reload is built from. A read cut short by its
+// context proves nothing and counts as a change.
+func (s *System) observe(ctx context.Context, n Network, e error) (changed, takeover bool) {
+	if ctx.Err() != nil {
+		return true, true
+	}
+	all := fmt.Sprint(n, e)
+	// Upstreams reach only the core configuration, not networkKey.
+	n.Resolver, n.Domestic, n.Foreign = "", nil, nil
+	seen := [2]string{all, fmt.Sprint(n, e)}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	changed, takeover = seen[0] != s.network[0], seen[1] != s.network[1]
+	s.network = seen
+	return
+}
