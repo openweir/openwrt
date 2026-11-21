@@ -29,6 +29,8 @@ type Network struct {
 	Resolver  string
 	LAN       map[string][]netip.Prefix
 	Interface string
+	// DNSMasq is set when dnsmasq forwards LAN lookups to the core instead of the firewall.
+	DNSMasq   bool
 	BlockQUIC bool
 	FakeIP    bool
 	// Zero values mean the defaults: sniffing and tuning on, built-in upstreams.
@@ -159,6 +161,15 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 	if n.DNS {
 		dns := config["dns"].(obj)
 		dns["listen"] = "127.0.0.1:19764"
+		if !n.DNSMasq {
+			// The firewall redirects LAN lookups of both families here; WAN access is rejected
+			// by the network helper. Local names stay with dnsmasq, which answers them itself.
+			dns["listen"] = "[::]:19764"
+			policy := dns["nameserver-policy"].(obj)
+			for _, zone := range []string{"+.lan", "+.home.arpa"} {
+				policy[zone] = []string{"127.0.0.1#DIRECT"}
+			}
+		}
 		// Fake-ip needs devices to resolve through the core, so it follows DNS protection.
 		if n.FakeIP {
 			dns["enhanced-mode"] = "fake-ip"

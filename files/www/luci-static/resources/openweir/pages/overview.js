@@ -637,10 +637,22 @@ export async function overview(ui) {
 		'DNS',
 		updateRow('DNS 保护', toggle('DNS 保护', prefs.dns, (v) => saveP({ dns: v })),
 			h('small', { class: 'ow-muted' }, '由内核解析，防污染')),
+		prefs.dns ? h('div', { class: 'ow-row' }, '本地 DNS 劫持',
+			segment(ui, '本地 DNS 劫持', [['dnsmasq', 'Dnsmasq 转发'], ['firewall', '防火墙转发']],
+				prefs.dns_mode || 'dnsmasq', (v) => saveP({ dns_mode: v }))) : null,
 		prefs.dns ? h('div', { class: 'ow-row' }, '接管设备 DNS（端口 53）',
 			toggle('接管设备 DNS（端口 53）', !!prefs.dns_intercept, (v) => saveP({ dns_intercept: v }))) : null,
 		upstreamRow(ui, '国内域名', '直连解析', 'domestic', prefs.dns_domestic, (v) => saveP({ dns_domestic: v })),
 		upstreamRow(ui, '其他域名', '经代理加密解析', 'foreign', prefs.dns_foreign, (v) => saveP({ dns_foreign: v })),
+		h('div', { class: 'ow-row' },
+			ui.button('清理 DNS 缓存', async () => {
+				await ui.run('flush_dns', {});
+				ui.notify('已清理内核和 dnsmasq 的 DNS 缓存');
+			}, 'ow-link'),
+			ui.button('Dnsmasq 修复', async () => {
+				await ui.run('repair_dnsmasq', {});
+				ui.notify('已清除残留配置并重启 dnsmasq');
+			}, 'ow-link')),
 	);
 	// A compact two-column card; each note moves into the label's tooltip.
 	const compactToggle = (title, note, value, fn) =>

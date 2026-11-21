@@ -51,7 +51,9 @@ DNS protection keeps dnsmasq in charge of local names and forwards upstream quer
 
 The core resolves mainland China names through domestic DoH and every other name through encrypted DNS sent over the proxy, so poisoned answers never reach the routing decision. Edit both lists under **DNS** on the overview. Fake-IP is the default DNS mode while DNS protection is on; switch to real IPs beside the run mode. Domain sniffing dials the real domain, QUIC is blocked by default so browsers use TCP, and without IPv6 takeover dnsmasq hides AAAA answers so devices stay on IPv4. The router's own traffic follows the same rules on fw4 unless you turn off **Proxy the router itself**.
 
-Networks the router is attached to, including LAN and WAN subnets and delegated IPv6 prefixes, always stay direct and are refreshed when an interface changes. On fw4, **Connection tuning** can also send mainland China IPs and uncommon ports straight past the core; both are off by default, and with Fake-IP the China IP shortcut only covers connections made to an IP address.
+Networks the router is attached to, including LAN and WAN subnets and delegated IPv6 prefixes, always stay direct and are refreshed when an interface changes. On fw4, **Connection tuning** can also send mainland China IPs and uncommon ports straight past the core; both are off by default, and with Fake-IP the China IP shortcut only covers connections made to an IP address. **Bypass lists** add your own destination IPs, ports and LAN devices that skip the core, plus IPs that stay proxied despite the China IP shortcut.
+
+LAN lookups reach the core through dnsmasq by default. **Local DNS hijack** can switch to a firewall redirect, which sends port 53 straight to the core and leaves dnsmasq untouched; local names such as `.lan` are still answered by dnsmasq. The DNS card can also flush the core and dnsmasq caches and repair dnsmasq by removing a leftover OpenWeir include and restarting it.
 
 Changing the routing mode, subscription, rules, groups or failover reloads the running core in place. Changes to the run mode, DNS, IPv6, LAN networks or the kernel restart the takeover.
 

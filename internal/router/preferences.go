@@ -13,11 +13,14 @@ import (
 )
 
 type Preferences struct {
-	UpdateHours  int      `json:"update_hours"`
-	Enabled      bool     `json:"enabled"`
-	Method       string   `json:"method"`
-	DNS          bool     `json:"dns"`
-	DNSIntercept bool     `json:"dns_intercept"`
+	UpdateHours  int    `json:"update_hours"`
+	Enabled      bool   `json:"enabled"`
+	Method       string `json:"method"`
+	DNS          bool   `json:"dns"`
+	DNSIntercept bool   `json:"dns_intercept"`
+	// How LAN lookups reach the core: "dnsmasq" forwards them (the default) and "firewall"
+	// redirects port 53 straight to it, leaving dnsmasq untouched. As in OpenClash.
+	DNSMode      string   `json:"dns_mode"`
 	FailOpen     *bool    `json:"fail_open,omitempty"`
 	LocalProxy   *bool    `json:"local_proxy,omitempty"`
 	BlockQUIC    *bool    `json:"block_quic,omitempty"`
@@ -44,6 +47,9 @@ var networkName = regexp.MustCompile("^[A-Za-z0-9_]{1,32}$")
 func (p Preferences) Validate() error {
 	if p.UpdateHours < 0 || p.UpdateHours > 720 {
 		return errors.New("invalid subscription refresh period")
+	}
+	if p.DNSMode != "" && p.DNSMode != "firewall" && p.DNSMode != "dnsmasq" {
+		return errors.New("unsupported DNS mode")
 	}
 	if p.Method != "tproxy" && p.Method != "tun" {
 		return errors.New("unsupported network method")
@@ -91,7 +97,7 @@ func (p Preferences) Validate() error {
 
 // SameNetwork reports whether two preference sets produce the same takeover.
 func (p Preferences) SameNetwork(o Preferences) bool {
-	return p.Method == o.Method && p.DNS == o.DNS && p.DNSIntercept == o.DNSIntercept && p.IPv6 == o.IPv6 && slices.Equal(p.Networks, o.Networks) &&
+	return p.Method == o.Method && p.DNS == o.DNS && dnsMode(p.DNSMode) == dnsMode(o.DNSMode) && p.DNSIntercept == o.DNSIntercept && p.IPv6 == o.IPv6 && slices.Equal(p.Networks, o.Networks) &&
 		sameBit(p.FailOpen, o.FailOpen) && sameBit(p.LocalProxy, o.LocalProxy) && sameBit(p.BlockQUIC, o.BlockQUIC) && sameBit(p.FakeIP, o.FakeIP) &&
 		sameBit(p.Sniff, o.Sniff) && sameBit(p.Concurrent, o.Concurrent) && sameBit(p.UnifiedDelay, o.UnifiedDelay) &&
 		sameBit(p.BypassCN, o.BypassCN) && sameBit(p.CommonPorts, o.CommonPorts) &&
@@ -109,6 +115,7 @@ func ReadPreferences(ctx context.Context) (Preferences, error) {
 	p := Preferences{Enabled: uci(ctx, "enabled") == "1", Method: uci(ctx, "method"), DNS: uci(ctx, "dns") == "1", IPv6: uci(ctx, "ipv6") != "0", Networks: strings.Fields(uci(ctx, "network"))}
 	p.UpdateHours, _ = strconv.Atoi(uci(ctx, "update_hours"))
 	p.DNSIntercept = uci(ctx, "dns_intercept") == "1"
+	p.DNSMode = dnsMode(uci(ctx, "dns_mode"))
 	failOpen := uci(ctx, "fail_open") != "0"
 	p.FailOpen = &failOpen
 	local := uci(ctx, "local_proxy") != "0"
@@ -177,7 +184,7 @@ func SavePreferences(ctx context.Context, p Preferences) error {
 	if p.BlockQUIC != nil {
 		b.WriteString("set openweir.main.block_quic='" + bit(*p.BlockQUIC) + "'\n")
 	}
-	for k, v := range map[string]string{"update_hours": strconv.Itoa(p.UpdateHours), "enabled": bit(p.Enabled), "method": p.Method, "dns": bit(p.DNS), "dns_intercept": bit(p.DNSIntercept), "ipv6": bit(p.IPv6)} {
+	for k, v := range map[string]string{"update_hours": strconv.Itoa(p.UpdateHours), "enabled": bit(p.Enabled), "method": p.Method, "dns": bit(p.DNS), "dns_intercept": bit(p.DNSIntercept), "ipv6": bit(p.IPv6), "dns_mode": dnsMode(p.DNSMode)} {
 		b.WriteString("set openweir.main." + k + "='" + v + "'\n")
 	}
 	for k, list := range map[string][]string{"bypass_ip": p.BypassIPs, "bypass_port": p.BypassPorts, "bypass_source": p.BypassSources, "proxy_ip": p.ProxyIPs} {
@@ -199,6 +206,14 @@ func SavePreferences(ctx context.Context, p Preferences) error {
 		return errors.New("could not save network preferences")
 	}
 	return nil
+}
+
+// dnsMode defaults to dnsmasq forwarding.
+func dnsMode(v string) string {
+	if v == "firewall" {
+		return v
+	}
+	return "dnsmasq"
 }
 
 // validPrefix accepts one IPv4 or IPv6 address or CIDR prefix.

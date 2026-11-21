@@ -165,6 +165,16 @@ refresh() {
  if [ "$v6" = 1 ]; then set_elements local6 "$(local_prefixes 6)"; fi
  nft -f "$batch"
 }
+# Remove an OpenWeir dnsmasq include the running takeover does not own (left by a crash or
+# an interrupted upgrade), then restart dnsmasq. Other programs' settings are left alone.
+dns_repair() {
+ if [ ! -e "$state/dns" ]; then
+  for f in /tmp/dnsmasq.d/$dnsfile /tmp/dnsmasq.*.d/$dnsfile /etc/dnsmasq.d/$dnsfile; do
+   if [ -f "$f" ] && grep -Fqx '# OpenWeir managed upstream' "$f"; then rm -f "$f"; fi
+  done
+ fi
+ /etc/init.d/dnsmasq restart
+}
 clean_routes() {
  family=$1
  [ -e "$state/route$family" ] || return 0
@@ -208,7 +218,7 @@ release_active() {
   restored=0
   for _ in 1 2 3 4; do if verify_direct; then restored=1; break; fi; sleep 1; done
   [ "$restored" = 1 ] || { fail_stage direct_lan_probe; return 1; }
-  rm -f "$state/owned" "$state/armed" "$state/interfaces" "$state/dns-probed" "$state/ipv6" "$state/management.json" "$state/backend"
+  rm -f "$state/owned" "$state/armed" "$state/interfaces" "$state/dns-probed" "$state/dns-firewall" "$state/ipv6" "$state/management.json" "$state/backend"
  fi
  return "$failure"
 }
@@ -263,7 +273,11 @@ probe_interfaces() {
     ip "-$family" route get "$addr" | grep -Eq '^local ' || return 1
     if [ -e "$state/dns-probed" ]; then
      if [ "$phase" = active ]; then
-      nslookup -retry=1 -timeout=1 -type=A probe.openweir.invalid "$addr" 2>/dev/null | grep -Eq '^Address([[:space:]][0-9]+)?:[[:space:]]+192\.0\.2\.1([[:space:]]|$)' || return 1
+      server=$addr
+      if [ -e "$state/dns-firewall" ]; then
+       if [ "$family" = 4 ]; then server="$addr:19764"; else server="[$addr]:19764"; fi
+      fi
+      nslookup -retry=1 -timeout=1 -type=A probe.openweir.invalid "$server" 2>/dev/null | grep -Eq '^Address([[:space:]][0-9]+)?:[[:space:]]+192\.0\.2\.1([[:space:]]|$)' || return 1
      else
       nslookup -retry=1 -timeout=1 -type=A localhost "$addr" >/dev/null 2>&1 || return 1
      fi
@@ -396,6 +410,9 @@ apply() {
  bypass_cn=$(uci -q get openweir.main.bypass_cn || echo 0)
  only_common=$(uci -q get openweir.main.common_ports || echo 0)
  if [ "$backend" != fw4 ]; then bypass_cn=0; only_common=0; fi
+ # LAN lookups reach the core through dnsmasq (default) or a firewall redirect to its port.
+ dns_mode=$(uci -q get openweir.main.dns_mode || echo dnsmasq)
+ if [ "$dns_mode" != firewall ] || [ "$backend" != fw4 ] || [ "$dns" != 1 ]; then dns_mode=dnsmasq; fi
  user_ips=$(uci_list bypass_ip); user_ports=$(uci_list bypass_port)
  user_sources=$(uci_list bypass_source); force_ips=$(uci_list proxy_ip)
  if [ "$backend" = fw3 ]; then
@@ -467,7 +484,16 @@ EOF
   echo "  meta l4proto { tcp, udp } meta mark set (meta mark & 0xffff0000) | 0x4f57 tproxy to :$port accept" >>"$batch"
  fi
  echo ' }' >>"$batch"
- if [ "$dns_intercept" = 1 ]; then
+ if [ "$dns_mode" = firewall ]; then
+  # Both families: the core answers AAAA itself according to the IPv6 setting.
+  if [ "$dns_intercept" = 1 ]; then targets='{ local, unicast }'; else targets=local; fi
+  cat >>"$batch" <<EOF
+ chain lan_dns {
+  type nat hook prerouting priority dstnat - 1; policy accept;
+  iifname { $names } fib daddr type $targets meta l4proto { tcp, udp } th dport 53 redirect to :19764
+ }
+EOF
+ elif [ "$dns_intercept" = 1 ]; then
   cat >>"$batch" <<EOF
  chain lan_dns {
   type nat hook prerouting priority dstnat - 1; policy accept;
@@ -510,14 +536,15 @@ EOF
  }
 EOF
  fi
- if [ "$method" = tproxy ]; then
-  cat >>"$batch" <<EOF
- chain listener_guard {
-  type filter hook input priority filter - 1; policy accept;
-  iifname "lo" return
-  meta l4proto { tcp, udp } th dport $port meta mark & 0xffff != $mark reject
- }
-EOF
+ if [ "$method" = tproxy ] || [ "$dns_mode" = firewall ]; then
+  {
+   echo ' chain listener_guard {'
+   echo '  type filter hook input priority filter - 1; policy accept;'
+   echo '  iifname "lo" return'
+   [ "$dns_mode" != firewall ] || echo "  iifname != { $names } meta l4proto { tcp, udp } th dport 19764 reject"
+   [ "$method" != tproxy ] || echo "  meta l4proto { tcp, udp } th dport $port meta mark & 0xffff != $mark reject"
+   echo ' }'
+  } >>"$batch"
  fi
  echo '}' >>"$batch"
  set_elements local4 "$(local_prefixes 4)"
@@ -548,7 +575,9 @@ EOF
  stage=ipv4_route
  add_routes 4
  if [ "$v6" = 1 ]; then stage=ipv6_route; add_routes 6; fi
- if [ "$dns" = 1 ]; then stage=dns_reload; dns_setup; touch "$state/dns-probed"
+ rm -f "$state/dns-firewall"
+ if [ "${dns_mode:-dnsmasq}" = firewall ]; then touch "$state/dns-firewall" "$state/dns-probed"
+ elif [ "$dns" = 1 ]; then stage=dns_reload; dns_setup; touch "$state/dns-probed"
  elif [ "$v6" != 1 ]; then stage=dns_reload; dns_setup || true; fi
  stage=firewall_apply
  if [ "$backend" = fw3 ]; then
@@ -585,6 +614,7 @@ case "${1:-}" in
  verify) verify || { fail_stage managed_lan_probe; exit 1; } ;;
  release) release ;;
  refresh) refresh ;;
+ dns-repair) dns_repair ;;
  fault) fault ;;
  *) exit 2 ;;
 esac

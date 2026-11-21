@@ -36,6 +36,8 @@
           "plugin_update",
           "test_nodes",
           "cancel_tests",
+          "flush_dns",
+          "repair_dnsmasq",
           "start",
           "stop",
           "mode",
