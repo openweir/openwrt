@@ -3,6 +3,7 @@ package router
 import (
 	"bytes"
 	"context"
+	"net/netip"
 	"regexp"
 	"slices"
 	"strconv"
@@ -328,88 +329,217 @@ func (s *logSink) recordLine(line string) {
 	detail := ""
 	switch reason {
 	case "permission_denied":
-		detail = deniedOperation(line)
+		detail = deniedOperation(original)
 	case "core_diagnostic":
-		detail = coreDetail(line)
+		detail = coreDetail(original)
 	}
 	s.r.LogDetail(source, level, reason, detail)
 }
 
+// What the log keeps of a core line goes through redact. Each pattern replaces what it finds with
+// a placeholder (or a space), never by deleting it into the words around it.
 var (
-	detailAddress = regexp.MustCompile(`\[[0-9a-f.]*:[0-9a-f:.]*\](:\d+)?|\b\d{1,3}(\.\d{1,3}){3}(:\d+)?\b|\b[0-9a-f]{0,4}(:[0-9a-f]{0,4}){2,7}\b`)
-	// A name of two labels or more whose last starts and ends with a letter: example.com too.
-	// File names and dotted settings (cache.db, dns.fake-ip-filter) go with them.
-	detailHost = regexp.MustCompile(`\b[a-z0-9-]+(\.[a-z0-9-]+)*\.(xn--[a-z0-9-]+|[a-z][a-z0-9-]*[a-z])\b`)
-	detailPath = regexp.MustCompile(`(/[^/\s:]+/[^/\s:]+)/[^\s:]+`)
-	detailSafe = regexp.MustCompile(`[^a-z0-9 _./:<>-]`)
+	// Literal escapes in a quoted message; a newline in one reads as a space.
+	detailEscapes = strings.NewReplacer(`\\`, `\`, `\"`, `"`, `\n`, " ", `\r`, " ", `\t`, " ")
+	// A run of other than plain ASCII (a name in Chinese, an emoji) reads as a punycode label
+	// (punycode), so that a name with such a label (airport.中国, 机场.example.com) is a host name;
+	// what remains of them is left out at the end (detailPunycode).
+	detailNonASCII = regexp.MustCompile(`[^\x00-\x7f]+`)
+	detailPunycode = regexp.MustCompile(`(?i)\bxn--[a-z0-9-]*`)
 
-	// What coreDetail also takes out: the log header, links (with any credentials, query or
-	// signature in them), user@ prefixes, the IDs the plugin names nodes and groups by, and
-	// long tokens with digits (keys, digests).
-	detailMessage = regexp.MustCompile(`msg="((?:[^"\\]|\\.)*)"`)
-	detailHeader  = regexp.MustCompile(`^(time="[^"]*"\s+)?(level=)?(fatal|panic|error|warn|warning)(\[[^\]]*\])?:?\s+`)
-	detailURL     = regexp.MustCompile(`\b([a-z][a-z0-9+.-]*://)[^\s"]*[^\s"':,.)\]]`)
-	detailUser    = regexp.MustCompile(`[^\s@/:]+(:[^\s@/]*)?@`)
-	detailID      = regexp.MustCompile(`\b(node|group):[0-9a-f]{32}\b`)
-	detailToken   = regexp.MustCompile(`[a-z0-9_+=-]{24,}`)
+	// The log header before a message: a logrus time, or the standard log's date and time, and a
+	// level with any timer after it.
+	detailHeader  = regexp.MustCompile(`(?i)^(time="[^"]*"\s+|\d{4}/\d\d/\d\d \d\d:\d\d:\d\d(\.\d+)?\s+)?((level=)?(fatal error|fatal|panic|error|warn|warning)(\[[^\]]*\])?:?\s+)?`)
+	detailMessage = regexp.MustCompile(`msg=(?:"((?:[^"\\]|\\.)*)"|([^\s"]+))`)
+
+	// Links (with any credentials, query or signature in them) keep their scheme.
+	detailURL = regexp.MustCompile(`(?i)\b([a-z][a-z0-9+.-]*://)[^\s"]*[^\s"':,.)\]]`)
+	// The value of a setting whose name says it is secret: token=, private_key=, password: ...
+	detailSecret = regexp.MustCompile(`(?i)((?:^|[^a-z0-9])(?:[a-z0-9]+[_-])*(?:token|key|password|passwd|secret|pass|auth|sig|uuid|sid|short-id|psk|passphrase|pubkey|publickey|privatekey|cookie|authorization)"?\s*[=:]\s*"?)(?:(?:bearer|basic)\s+)?[^\s"',;&)\]]+`)
+	// A query, up to the end of its word.
+	detailQuery = regexp.MustCompile(`\?[^\s"']*`)
+	// A user (and password) before @, which marks the name after it (detailAfter).
+	detailUser = regexp.MustCompile(`[^\s@"'<>]+@`)
+	// The IDs the plugin names nodes and groups by.
+	detailID = regexp.MustCompile(`(?i)\b(node|group):[0-9a-f]{32}\b`)
+
+	// Addresses: an IPv6 one in brackets (with a zone and port), a run of hex digits, colons and
+	// dots not inside a word that netip reads as an IPv6 address (ipv6Address), IPv4 with a port,
+	// and MAC addresses.
+	detailBracket = regexp.MustCompile(`(?i)\[[0-9a-f.]*:[0-9a-f:.]*(%[^\]\s]*)?\](:\d+)?`)
+	detailIPv6    = regexp.MustCompile(`(?i)(^|[^0-9a-z_.])[0-9a-f:.]*:[0-9a-f.]*:[0-9a-f:.]*(%[0-9a-z_.-]+)?`)
+	detailIPv4    = regexp.MustCompile(`\d{1,3}(\.\d{1,3}){3}(:\d+)?`)
+	detailMAC     = regexp.MustCompile(`(?i)\b[0-9a-f]{2}([:-][0-9a-f]{2}){5}\b`)
+
+	// Host names: two labels or more whose last starts with a letter and has two characters or
+	// more (example.com, host.lan2, myvps.v2), or is punycode, with any port. File names and
+	// dotted settings (cache.db, dns.fake-ip-filter) go with them.
+	detailHost = regexp.MustCompile(`(?i)\b[a-z0-9_-]+(\.[a-z0-9_-]+)*\.(xn--[a-z0-9-]+|[a-z][a-z0-9_-]*[a-z0-9])(:\d{1,5})?\b`)
+	// A name of one label, where nothing else tells it from a word: with a port (my-nas:53), the
+	// fixed localhost, after an arrow (src --> my-nas), a lookup or a user@, or a name with a
+	// hyphen or underscore after dial or to.
+	detailNamePort  = regexp.MustCompile(`(?i)\b[a-z][a-z0-9_-]*:\d{1,5}\b`)
+	detailLocalhost = regexp.MustCompile(`(?i)\blocalhost\b`)
+	detailAfter     = regexp.MustCompile(`(?i)(--?>|\blookup|\x01)\s*[a-z0-9_][a-z0-9_.%-]*`)
+	detailDialTo    = regexp.MustCompile(`(?i)\b(dial|to)\s+[a-z][a-z0-9]*([_-][a-z0-9]+)+\b`)
+
+	// A path after a host or address, deep paths (two directories are kept), and Windows paths.
+	detailHostPath = regexp.MustCompile(`(<host>|<addr>)/[^\s"']*`)
+	detailPath     = regexp.MustCompile(`(/[^/\s:]+/[^/\s:]+)/[^\s:]+`)
+	detailWinPath  = regexp.MustCompile(`(?i)\b[a-z]:\\[^\s"']*`)
+	// Runs of key, ID and digest characters; secretLike tells them from words and paths.
+	detailToken = regexp.MustCompile(`[A-Za-z0-9_+/=-]{16,}`)
+
+	detailSafe = regexp.MustCompile(`[^a-z0-9 _./:<>-]`)
 )
 
-// coreDetail keeps, for the log, what a core line that no reason describes says (the lowered
-// line, as recordLine reads it): its message without the log header, with links, credentials,
-// node and group IDs, addresses, host names, deep paths and long tokens replaced, and nothing
-// but plain ASCII, so that names a subscription chose (rule set tags, often Chinese or with
-// emoji) are left out unless they are plain words. At most 120 characters.
-func coreDetail(line string) string {
+// coreMessage returns a core line's message: the quoted or bare msg= value of a logrus line, or
+// the line without its header, with its escapes read.
+func coreMessage(line string) string {
 	msg := detailHeader.ReplaceAllString(line, "")
 	if m := detailMessage.FindStringSubmatch(line); m != nil {
-		msg = strings.ReplaceAll(m[1], `\"`, `"`)
+		msg = m[1] + m[2]
 	}
+	return detailEscapes.Replace(msg)
+}
+
+// redact takes out of core words what could identify the network or the subscription: links,
+// secret settings, queries, users, node and group IDs, addresses, host names (and the paths after
+// them), deep paths and tokens; and leaves plain ASCII in lower case, so that names a
+// subscription chose (rule set tags, often Chinese or with emoji) are left out unless they are
+// plain words.
+func redact(msg string) string {
+	msg = punycode(msg)
 	msg = detailURL.ReplaceAllString(msg, "$1<url>")
-	msg = detailUser.ReplaceAllString(msg, "")
+	msg = detailSecret.ReplaceAllString(msg, "${1}<secret>")
+	msg = detailQuery.ReplaceAllString(msg, " ")
+	msg = detailUser.ReplaceAllString(msg, "\x01")
 	msg = detailID.ReplaceAllString(msg, "<$1>")
-	msg = detailAddress.ReplaceAllString(msg, "<addr>")
+	msg = detailBracket.ReplaceAllString(msg, "<addr>")
+	msg = detailIPv6.ReplaceAllStringFunc(msg, ipv6Address)
+	msg = detailIPv4.ReplaceAllString(msg, "<addr>")
+	msg = detailMAC.ReplaceAllString(msg, "<addr>")
 	msg = detailHost.ReplaceAllString(msg, "<host>")
+	msg = detailNamePort.ReplaceAllString(msg, "<host>")
+	msg = detailLocalhost.ReplaceAllString(msg, "<host>")
+	msg = detailAfter.ReplaceAllString(msg, "$1 <host>")
+	msg = detailDialTo.ReplaceAllString(msg, "$1 <host>")
+	msg = detailHostPath.ReplaceAllString(msg, "$1")
 	msg = detailPath.ReplaceAllString(msg, "$1/...")
+	msg = detailWinPath.ReplaceAllString(msg, "<path>")
 	msg = detailToken.ReplaceAllStringFunc(msg, func(s string) string {
-		if strings.ContainsAny(s, "0123456789") {
+		if secretLike(s) {
 			return "<id>"
 		}
 		return s
 	})
-	msg = strings.Join(strings.Fields(detailSafe.ReplaceAllString(msg, " ")), " ")
-	if len(msg) > 120 {
-		msg = strings.TrimSpace(msg[:120])
-	}
-	return msg
+	msg = detailPunycode.ReplaceAllString(msg, " ")
+	return strings.Join(strings.Fields(detailSafe.ReplaceAllString(strings.ToLower(msg), " ")), " ")
 }
 
-// deniedOperation keeps the failing operation of a core permission error, such as
-// "listen udp <addr>: bind" or "open /etc/openweir/...", without addresses, host
-// names or deep paths.
-func deniedOperation(line string) string {
-	i := strings.Index(line, "permission denied")
-	if i < 0 {
-		i = strings.Index(line, "operation not permitted")
+// secretLike tells a key, ID or digest from words, settings and paths: base64 signs ('+', or
+// '=' padding), or a part (between '/', '=', '-' and '_') of hex digits of 12 or more with a
+// digit (digests, REALITY short IDs, the end of a UUID), of 8 or more with two separate runs of
+// digits (random letters and digits), or of 16 or more letters changing case at least every
+// third (random letters). Algorithm names (chacha20-ietf-poly1305) and CamelCase identifiers
+// stay.
+func secretLike(run string) bool {
+	trimmed := strings.TrimRight(run, "=")
+	if strings.Contains(run, "+") || len(trimmed) < len(run) && len(trimmed) >= 12 {
+		return true
 	}
-	if i < 0 {
+	for _, part := range strings.FieldsFunc(trimmed, func(r rune) bool { return r == '/' || r == '=' || r == '-' || r == '_' }) {
+		hex, digits, runs, changes := true, 0, 0, 0
+		for i := 0; i < len(part); i++ {
+			c := part[i]
+			hex = hex && (isDigit(c) || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F')
+			if isDigit(c) {
+				digits++
+				if i == 0 || !isDigit(part[i-1]) {
+					runs++
+				}
+			} else if i > 0 && !isDigit(part[i-1]) && isUpper(c) != isUpper(part[i-1]) {
+				changes++
+			}
+		}
+		if hex && digits > 0 && len(part) >= 12 || runs >= 2 && digits < len(part) && len(part) >= 8 || len(part) >= 16 && changes*3 >= len(part) {
+			return true
+		}
+	}
+	return false
+}
+
+// punycode replaces each run of other than plain ASCII with the label xn--0, apart from the
+// letters and digits next to it: 规则provider reads xn--0 provider.
+func punycode(msg string) string {
+	runs := detailNonASCII.FindAllStringIndex(msg, -1)
+	if runs == nil {
+		return msg
+	}
+	var b strings.Builder
+	last := 0
+	for _, r := range runs {
+		b.WriteString(msg[last:r[0]])
+		if r[0] > 0 && isAlnum(msg[r[0]-1]) {
+			b.WriteByte(' ')
+		}
+		b.WriteString("xn--0")
+		if r[1] < len(msg) && isAlnum(msg[r[1]]) {
+			b.WriteByte(' ')
+		}
+		last = r[1]
+	}
+	b.WriteString(msg[last:])
+	return b.String()
+}
+
+// ipv6Address replaces the IPv6 address in what detailIPv6 found: after the character before it,
+// if any, and before a colon or dot that ends a sentence.
+func ipv6Address(s string) string {
+	for i := range min(2, len(s)) {
+		for _, a := range []string{s[i:], strings.TrimRight(s[i:], ".:")} {
+			if _, err := netip.ParseAddr(a); err == nil {
+				return s[:i] + "<addr>" + s[i+len(a):]
+			}
+		}
+	}
+	return s
+}
+
+func isDigit(c byte) bool { return c >= '0' && c <= '9' }
+func isUpper(c byte) bool { return c >= 'A' && c <= 'Z' }
+func isAlnum(c byte) bool { return isDigit(c) || isUpper(c) || c >= 'a' && c <= 'z' }
+
+// capDetail bounds a redacted detail at n bytes (plain ASCII).
+func capDetail(s string, n int) string {
+	if len(s) > n {
+		s = strings.TrimSpace(s[:n])
+	}
+	return s
+}
+
+// coreDetail keeps, for the log, what a core line that no reason describes says: its message
+// without the log header, redacted, at most 120 characters.
+func coreDetail(line string) string {
+	return capDetail(redact(coreMessage(line)), 120)
+}
+
+var deniedWords = regexp.MustCompile(`(?i)permission denied|operation not permitted`)
+
+// deniedOperation keeps the failing operation of a core permission error, such as
+// "listen udp <addr>: bind" or "open /etc/openweir/...": the last three steps of its message
+// before the denial, redacted as coreDetail redacts, at most 96 characters.
+func deniedOperation(line string) string {
+	msg := coreMessage(line)
+	at := deniedWords.FindStringIndex(msg)
+	if at == nil {
 		return ""
 	}
-	parts := strings.Split(strings.TrimRight(line[:i], " :"), ": ")
+	parts := strings.Split(strings.TrimRight(msg[:at[0]], " :"), ": ")
 	if len(parts) > 3 {
 		parts = parts[len(parts)-3:]
 	}
-	op := strings.Join(parts, ": ")
-	if j := strings.LastIndexAny(op, "=\""); j >= 0 {
-		op = op[j+1:]
-	}
-	op = detailAddress.ReplaceAllString(op, "<addr>")
-	op = detailHost.ReplaceAllString(op, "<host>")
-	op = detailPath.ReplaceAllString(op, "$1/...")
-	op = strings.TrimSpace(detailSafe.ReplaceAllString(op, ""))
-	if len(op) > 96 {
-		op = op[:96]
-	}
-	return op
+	return capDetail(redact(strings.Join(parts, ": ")), 96)
 }
 
 func (r *Records) Observe(c control.Connection) {
