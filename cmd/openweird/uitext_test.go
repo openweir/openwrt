@@ -13,33 +13,39 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/openweir/openwrt/internal/subscription"
+	"github.com/openweir/openwrt/internal/tlsdiag"
 	"github.com/openweir/subconv"
 )
 
 // The LuCI pages read the router's codes in Chinese: dom.js through diagnosticMessage (the log,
-// task errors, the service's problem), sources.js for import notices and failed subscription
-// operations, and records.js for the log's sources. A code without a text there reaches the page
-// raw, and a text whose code nothing emits any more is dead weight.
+// task errors, the service's problem, the kernel page), sources.js for import notices and failed
+// subscription operations, and records.js for the log's sources. A code without a text there
+// reaches the page raw, and a text whose code nothing emits any more is dead weight.
 //
 // The codes are read from the Go source where they are emitted: the logger, the service phase,
 // the routing audit, DNS issues, subscription notices, the subscription helper's failure codes,
-// the kernel's rejection reasons and the task names runJob logs. A computed value is followed
+// the kernel's rejection reasons, what the kernel's jobs fail with, the kernel helper commands
+// the router reports failed and the task names runJob logs. A computed value is followed
 // through constants, assignments, the cases of a switch on it, the arguments callers pass and
 // the literals a function returns. What cannot be followed is listed in computed, with the codes
 // it can hold or samples of its family.
 
 const luci = "../../files/www/luci-static/resources/openweir/"
 
-// The maps each kind of code is read from.
-// diagnosticMessage reads the three dom.js maps; sources.js reads notices first.
+// The dom.js maps diagnosticMessage reads.
+var diagnosticMaps = []string{"diagnosticText", "errorText", "providerErrors", "kernelErrors"}
+
+// The maps each kind of code is read from; sources.js reads notices first.
 var readers = map[string][]string{
 	"source":  {"sources"},
-	"log":     {"diagnosticText", "errorText", "providerErrors"},
-	"notice":  {"notices", "diagnosticText", "errorText", "providerErrors"},
-	"failure": {"notices", "diagnosticText", "errorText", "providerErrors"},
-	"reason":  {"diagnosticText", "errorText", "providerErrors"},
+	"log":     diagnosticMaps,
+	"notice":  append([]string{"notices"}, diagnosticMaps...),
+	"failure": append([]string{"notices"}, diagnosticMaps...),
+	"reason":  diagnosticMaps,
+	"kernel":  diagnosticMaps,
 }
 
 // The kinds whose codes each map reads; any other key in it has no emitter. A task's step reads
@@ -49,7 +55,8 @@ var served = map[string][]string{
 	"notices":        {"notice", "failure"},
 	"providerErrors": {"log", "notice", "failure", "reason"},
 	"diagnosticText": {"log", "notice", "failure", "reason", "step"},
-	"errorText":      {"log", "notice", "failure", "reason"},
+	"errorText":      {"log", "notice", "failure", "reason", "kernel"},
+	"kernelErrors":   {"kernel"},
 }
 
 // The subscription helper reports these packages' errors as codes (subscriptioncli.code): a
@@ -94,6 +101,20 @@ var computed = map[string]struct {
 	"internal/subscription/providers.go:download": {"failure", []string{"provider_http_404"}},
 	// The core rejected one entry of a given type.
 	"internal/cli/kernelcli/check.go:rejection": {"reason", []string{"candidate core rejected vmess configuration"}},
+	// The certificate check a kernel download failed, as the kernel helper reports it.
+	"cmd/openweird/kernel.go:publicKernelError": {"kernel", []string{
+		(&tlsdiag.Diagnostic{Reason: "untrusted"}).Wire(),
+		(&tlsdiag.Diagnostic{Reason: "expired", CheckedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+			NotBefore: time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC), NotAfter: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)}).Wire(),
+	}},
+	// A kernel change the service did not confirm: the previous kernel runs again, or the
+	// service's problem, if any.
+	"cmd/openweird/kernel.go:waitForKernel": {"kernel", []string{
+		"candidate failed startup or health checks; previous kernel v1.19.0 is running",
+		"kernel change unconfirmed: core exited during startup", "kernel change unconfirmed: ",
+	}},
+	// begin takes its options in a list.
+	"internal/router/system.go:Start": {"kernel", []string{"openweir-kernel begin failed"}},
 	// The steps of the jobs that take one from the request, as dispatch and kernelJob allow them.
 	"cmd/openweird/main.go:dispatch": {"action", append(prefixed("subscription_write/",
 		"login", "configure", "preferences", "rollback", "revoke", "logout", "site"), "kernel_read/versions")},
@@ -361,6 +382,11 @@ func (s *routerSource) emitted(t *testing.T) map[string]map[string]string {
 	}
 	sentinels := s.sentinels(t)
 	errorCode := regexp.MustCompile(`^[a-z][a-z0-9]*([_ ][a-z0-9%]+)+$`)
+	type jobCall struct {
+		c    scope
+		call *ast.CallExpr
+	}
+	var jobs []jobCall
 	for dir, files := range s.files {
 		failures := slices.Contains(failurePackages, dir)
 		for _, f := range files {
@@ -391,6 +417,21 @@ func (s *routerSource) emitted(t *testing.T) map[string]map[string]string {
 							emit("failure", c, n.Args[1])
 						case name == "runJob":
 							emit("action", c, n.Args[1])
+							jobs = append(jobs, jobCall{c, n})
+						case (name == "command" || name == "jsonCmd") && dir == "internal/router":
+							// A kernel helper command that failed without a reason (command).
+							i := map[string]int{"command": 1, "jsonCmd": 2}[name]
+							if bin, ok := n.Args[i].(*ast.Ident); !ok || bin.Name != "kernelCLI" || len(n.Args) == i+1 {
+								break
+							}
+							verbs, ok := s.values(c, n.Args[i+1], 0)
+							if !ok || n.Ellipsis.IsValid() {
+								dynamic("kernel", c, n.Pos())
+								break
+							}
+							for _, v := range verbs {
+								add("kernel", "openweir-kernel "+v+" failed", s.site(c))
+							}
 						case failures && (recv == "errors" && name == "New" || recv == "fmt" && name == "Errorf"):
 							lit, ok := n.Args[0].(*ast.BasicLit)
 							if !ok {
@@ -476,6 +517,75 @@ func (s *routerSource) emitted(t *testing.T) map[string]map[string]string {
 			add("failure", "subscription_tls_"+reason, "internal/subscription/provider_diagnostic.go:classifyRequestFailure")
 		}
 	}
+	// What the kernel's jobs fail with, which the kernel page shows and the bootstrap job's log
+	// line ends with: the errors their bodies and the functions of this package they call make,
+	// the error variables those return and a context's errors. The kernel helper's errors reach
+	// them through child and publicKernelError.
+	followed := map[*ast.FuncDecl]bool{}
+	var fails func(c scope, body ast.Node)
+	fails = func(c scope, body ast.Node) {
+		ast.Inspect(body, func(n ast.Node) bool {
+			switch n := n.(type) {
+			case *ast.ReturnStmt:
+				for _, r := range n.Results {
+					if v, ok := s.errorVar(c, r); ok {
+						add("kernel", v, s.site(c))
+					}
+				}
+			case *ast.CallExpr:
+				switch name, recv := callee(n); {
+				case recv == "errors" && name == "New":
+					emit("kernel", c, n.Args[0])
+				case recv == "fmt" && name == "Errorf":
+					dynamic("kernel", c, n.Pos())
+				case recv == "ctx" && name == "Err":
+					add("kernel", context.DeadlineExceeded.Error(), s.site(c))
+					add("kernel", context.Canceled.Error(), s.site(c))
+				case recv == "" || recv == receiver(c.fn):
+					for _, fn := range s.funcs[c.dir][name] {
+						if !followed[fn] {
+							followed[fn] = true
+							fails(scope{dir: c.dir, file: s.fileOf(c.dir, fn), fn: fn}, fn.Body)
+						}
+					}
+				}
+			}
+			return true
+		})
+	}
+	kernelJobs := 0
+	for _, j := range jobs {
+		actions, ok := s.values(j.c, j.call.Args[1], 0)
+		if !ok {
+			actions = computed[s.site(j.c)].codes
+		}
+		if slices.ContainsFunc(actions, func(a string) bool { return strings.HasPrefix(a, "kernel") }) {
+			kernelJobs++
+			fails(j.c, j.call.Args[2])
+		}
+	}
+	if public := s.funcs["cmd/openweird"]["publicKernelError"]; kernelJobs == 0 || len(public) == 0 || !followed[public[0]] {
+		t.Fatal("the kernel's jobs and the kernel helper's errors (publicKernelError) not found")
+	}
+	// A task the manager's restart interrupted, which the kernel page shows for the bootstrap job.
+	interrupted := false
+	for _, fn := range s.funcs["cmd/openweird"]["loadJobs"] {
+		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			if a, ok := n.(*ast.AssignStmt); ok && len(a.Lhs) == 1 && len(a.Rhs) == 1 {
+				sel, isField := a.Lhs[0].(*ast.SelectorExpr)
+				lit, isLit := a.Rhs[0].(*ast.BasicLit)
+				if isField && isLit && sel.Sel.Name == "Error" {
+					v, _ := strconv.Unquote(lit.Value)
+					add("kernel", v, "cmd/openweird/tasks.go:loadJobs")
+					interrupted = true
+				}
+			}
+			return true
+		})
+	}
+	if !interrupted {
+		t.Fatal("loadJobs's error for an interrupted task not found")
+	}
 	for site := range computed {
 		if !used[site] {
 			t.Errorf("computed lists %s, which emits nothing computed any more", site)
@@ -544,6 +654,51 @@ func (s *routerSource) englishErrors(t *testing.T) func(string) bool {
 		return literals[text] || strings.Contains(scripts.String(), text) ||
 			slices.ContainsFunc(formats, func(re *regexp.Regexp) bool { return re.MatchString(text) })
 	}
+}
+
+// errorVar returns the message of an error variable made with errors.New, the package's own or
+// one of a package of this module it imports.
+func (s *routerSource) errorVar(c scope, e ast.Expr) (string, bool) {
+	dir, name := c.dir, ""
+	switch e := e.(type) {
+	case *ast.Ident:
+		name = e.Name
+	case *ast.SelectorExpr:
+		x, ok := e.X.(*ast.Ident)
+		if !ok {
+			return "", false
+		}
+		name, dir = e.Sel.Name, ""
+		for _, imp := range c.file.Imports {
+			p, _ := strconv.Unquote(imp.Path.Value)
+			if rel, ok := strings.CutPrefix(p, "github.com/openweir/openwrt/"); ok && (imp.Name == nil && filepath.Base(rel) == x.Name || imp.Name != nil && imp.Name.Name == x.Name) {
+				dir = rel
+			}
+		}
+	default:
+		return "", false
+	}
+	call, ok := s.vars[dir][name].(*ast.CallExpr)
+	if !ok {
+		return "", false
+	}
+	if fn, recv := callee(call); fn != "New" || recv != "errors" {
+		return "", false
+	}
+	lit, ok := call.Args[0].(*ast.BasicLit)
+	if !ok {
+		return "", false
+	}
+	v, err := strconv.Unquote(lit.Value)
+	return v, err == nil
+}
+
+// receiver returns the name of a method's receiver, or "" for a function.
+func receiver(fn *ast.FuncDecl) string {
+	if fn == nil || fn.Recv == nil || len(fn.Recv.List[0].Names) == 0 {
+		return ""
+	}
+	return fn.Recv.List[0].Names[0].Name
 }
 
 func callee(call *ast.CallExpr) (name, recv string) {
@@ -861,7 +1016,7 @@ func luciMaps(t *testing.T) (map[string]map[string]bool, map[string]string) {
 	t.Helper()
 	out, text := map[string]map[string]bool{}, map[string]string{}
 	for file, names := range map[string][]string{
-		"dom.js":           {"diagnosticText", "errorText", "providerErrors", "taskText", "taskStep", "taskStage"},
+		"dom.js":           {"diagnosticText", "errorText", "providerErrors", "kernelErrors", "taskText", "taskStep", "taskStage"},
 		"pages/sources.js": {"notices", "pendingUpdates"},
 		"pages/records.js": {"sources"},
 	} {
