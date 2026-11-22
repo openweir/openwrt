@@ -752,6 +752,11 @@ type Preferences struct {
 	UserAgent          string            `json:"user_agent"`
 	Filters            map[string]string `json:"filters"`
 	AllowLocalFallback bool              `json:"allow_local_fallback"`
+	// Rules is the routing choice a page from before the choice came with its refresh still
+	// sends with the other preferences (a LuCI tab left open across the upgrade). Like
+	// MainlandFallback it is accepted, so that the helper does not refuse the whole save, and
+	// ignored: the rest is saved, and the choice stays the source's.
+	Rules *string `json:"rules,omitempty"`
 }
 
 func (s *Store) Preferences(id string, p Preferences) error {

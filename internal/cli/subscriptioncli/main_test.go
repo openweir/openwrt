@@ -100,22 +100,19 @@ func TestRefreshReturnsPendingUpdate(t *testing.T) {
 	}
 }
 
+// decode reads a request as Main does, refusing fields the helper does not know.
+func decode(raw string) (input, error) {
+	var in input
+	d := json.NewDecoder(strings.NewReader(raw))
+	d.DisallowUnknownFields()
+	return in, d.Decode(&in)
+}
+
 // A routing choice comes with the refresh request and is saved with the update it commits.
-// Preferences no longer carry one: a page that still sends it there is refused, as Main
-// decodes requests, rather than having the choice saved ahead of its update.
 func TestRefreshCarriesRoutingChoice(t *testing.T) {
 	st := sub.OpenStore(t.TempDir())
 	if err := st.Configure(sub.Source{ID: "file", Kind: "file", Name: "File"}); err != nil {
 		t.Fatal(err)
-	}
-	decode := func(raw string) (input, error) {
-		var in input
-		d := json.NewDecoder(strings.NewReader(raw))
-		d.DisallowUnknownFields()
-		return in, d.Decode(&in)
-	}
-	if _, err := decode(`{"source":"file","preferences":{"user_agent":"","filters":null,"allow_local_fallback":false,"rules":"template"}}`); err == nil {
-		t.Fatal("preferences accepted a routing choice")
 	}
 	in, err := decode(`{"source":"file","content":"http://edge.example:81#Edge","rules":"template"}`)
 	if err != nil {
@@ -126,6 +123,27 @@ func TestRefreshCarriesRoutingChoice(t *testing.T) {
 	}
 	if s, err := st.Status("file"); err != nil || s.Rules != sub.RoutingTemplate {
 		t.Fatal("routing choice not saved with its update", err, s.Rules)
+	}
+}
+
+// A LuCI tab open from before the upgrade still sends the routing choice with the other
+// preferences. The save goes through, and the choice is ignored rather than saved ahead of
+// the update read with it.
+func TestPreferencesIgnoreARoutingChoice(t *testing.T) {
+	st := sub.OpenStore(t.TempDir())
+	if err := st.Configure(sub.Source{ID: "link", Kind: "external", Name: "Link", URL: "https://feed.example/sub"}); err != nil {
+		t.Fatal(err)
+	}
+	in, err := decode(`{"source":"link","preferences":{"name":"Renamed","user_agent":"sing-box","filters":null,"allow_local_fallback":true,"rules":"template"}}`)
+	if err != nil {
+		t.Fatal("preferences with a routing choice refused", err)
+	}
+	if _, _, err := run(t.Context(), st, "preferences", in, sub.Fetcher{}); err != nil {
+		t.Fatal(err)
+	}
+	s, err := st.Status("link")
+	if err != nil || s.Rules != sub.RoutingOwn || s.Name != "Renamed" || s.Agent != "sing-box" || !s.LocalFallback {
+		t.Fatal("preferences with a routing choice", err, s.Rules, s.Name, s.Agent, s.LocalFallback)
 	}
 }
 
