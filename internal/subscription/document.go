@@ -330,7 +330,7 @@ func parseClash(p *Profile, m map[string]any) error {
 	for i, e := range list(m["rules"]) {
 		s, _ := e.(string)
 		if kind, name, _, ok := geoRule(s); ok && !clashDefaultGeo(m, kind) {
-			p.notice("rule_provider_custom_geo", kind+" "+name, strings.Contains(strings.ToUpper(s), "REJECT"))
+			p.notice("rule_provider_custom_geo", kind+" "+name, rejects(s))
 			continue
 		}
 		parseMihomoRule(p, s, i+1)

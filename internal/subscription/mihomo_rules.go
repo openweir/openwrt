@@ -17,7 +17,7 @@ const (
 func parseMihomoRule(p *Profile, raw string, index int) {
 	line := strings.TrimSpace(raw)
 	at := fmt.Sprintf("rule %d", index)
-	danger := strings.Contains(strings.ToUpper(line), "REJECT")
+	danger := rejects(line)
 	reject := func() { p.notice("mihomo_unsupported_rule", at, danger) }
 	if len(line) > maxClashRuleLine || strings.ContainsAny(line, "\r\n\x00") {
 		reject()

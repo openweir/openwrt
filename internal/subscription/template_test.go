@@ -361,6 +361,30 @@ func TestRouterDropsLeaveFixedRoutingAlone(t *testing.T) {
 	}
 }
 
+// A rule the router drops is dangerous as one subconv drops: when it rejected traffic.
+func TestRejectedRulesAreWeighedByTheirTarget(t *testing.T) {
+	for rule, want := range map[string]bool{
+		"GEOSITE,category-ads-all,REJECT":              true,
+		"GEOIP,AD,REJECT-DROP,no-resolve":              true,
+		"IP-CIDR,10.0.0.0/8,reject-200,no-resolve,src": true,
+		"DOMAIN-SUFFIX,reject.example,Proxy":           false,
+		"RULE-SET,reject,DIRECT":                       false,
+	} {
+		if rejects(rule) != want || dropsRejection(rule+": rule type") != want {
+			t.Error(rule)
+		}
+	}
+	// Custom geodata, and a rule type the router does not compile.
+	p := mustParse(t, mirrorRules("GEOSITE,category-ads-all,REJECT", "GEOSITE,reject-list,Proxy", "PROCESS-NAME,ads,REJECT", "PROCESS-NAME,reject-helper,DIRECT", "MATCH,Proxy"))
+	var got []string
+	for _, n := range p.Notices {
+		got = append(got, fmt.Sprint(n.Code, " ", n.At, " ", n.Dangerous))
+	}
+	if !slices.Equal(got, []string{"rule_provider_custom_geo GEOSITE category-ads-all true", "rule_provider_custom_geo GEOSITE reject-list false", "mihomo_unsupported_rule rule 3 true", "mihomo_unsupported_rule rule 4 false"}) {
+		t.Fatal(got)
+	}
+}
+
 // The template's rules mean the default geodata, whatever the subscription chose for its own,
 // and a script the subscription routed by is gone with its rules.
 func TestTemplateIgnoresTheSubscriptionsGeodataAndScript(t *testing.T) {

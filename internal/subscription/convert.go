@@ -196,18 +196,26 @@ func warningNotice(w subconv.Warning) Notice {
 }
 
 // dropsRejection reports whether a dropped rule, given as "<rule as written>: <problem>" or
-// "rule <n> to <target>: <problem>", rejected traffic. The target is the last field, or the one
-// before a trailing option.
+// "rule <n> to <target>: <problem>", rejected traffic (rejects).
 func dropsRejection(detail string) bool {
 	line, _, _ := strings.Cut(detail, ": ")
 	// A rule dropped with its rule set reads "rule <n> to <target>".
 	if i := strings.LastIndex(line, " to "); i >= 0 && !strings.Contains(line, ",") {
 		line = line[i+4:]
 	}
-	fields := strings.Split(line, ",")
-	target := strings.TrimSpace(fields[len(fields)-1])
-	if (strings.EqualFold(target, "no-resolve") || strings.EqualFold(target, "src")) && len(fields) > 1 {
-		target = strings.TrimSpace(fields[len(fields)-2])
+	return rejects(line)
+}
+
+// rejects reports whether a rule as written rejects traffic: whether its target, the last field
+// before any trailing options, is REJECT or a variant. A rule the router drops itself is weighed
+// the same way.
+func rejects(rule string) bool {
+	fields := strings.Split(rule, ",")
+	target := ""
+	for i := len(fields) - 1; i >= 0; i-- {
+		if target = strings.TrimSpace(fields[i]); !strings.EqualFold(target, "no-resolve") && !strings.EqualFold(target, "src") {
+			break
+		}
 	}
 	// REJECT and its variants: REJECT-DROP, Surge's REJECT-TINYGIF, Quantumult X's reject-200...
 	return strings.HasPrefix(strings.ToUpper(target), "REJECT")
