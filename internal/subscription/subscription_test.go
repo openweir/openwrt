@@ -375,7 +375,7 @@ func TestProviderExpansionAndIndependentCredentials(t *testing.T) {
 		t.Fatal(p)
 	}
 	f := Fetcher{}
-	if _, _, e := f.expandSourceProviders(context.Background(), map[string]any{"proxy-providers": map[string]any{"id": map[string]any{"type": "http", "url": srv.URL}}}, "", nil); e == nil {
+	if _, _, e := f.expandSourceProviders(context.Background(), map[string]any{"proxy-providers": map[string]any{"id": map[string]any{"type": "http", "url": srv.URL}}}, "", nil, nil); e == nil {
 		t.Fatal("untrusted nested provider reached router loopback")
 	}
 }

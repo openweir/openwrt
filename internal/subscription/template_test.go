@@ -904,6 +904,34 @@ func TestTemplateStageCoversTheAutomaticChoice(t *testing.T) {
 	}
 }
 
+// The subscription's providers download once in a refresh, however many times it reads the
+// subscription: with the template the router's drops sent it to, or with the router's copy
+// after the hosts' version.
+func TestReadingsShareTheProviderDownloads(t *testing.T) {
+	b := serveBranch(t, 42)
+	var downloads atomic.Int32
+	nodes := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		downloads.Add(1)
+		w.Write([]byte("proxies:\n  - {name: P1, type: ss, server: p1.example.com, port: 8388, cipher: aes-128-gcm, password: p}\n"))
+	}))
+	defer nodes.Close()
+	store, id := fileSource(t, RoutingOwn)
+	f := b.fetcher()
+	f.ruleImportRoot = t.TempDir()
+	body := "proxy-providers:\n  extra: {type: http, url: " + nodes.URL + "/nodes, interval: 3600}\n" +
+		mirrorRules("GEOSITE,google,Proxy", "GEOSITE,youtube,Proxy", "GEOSITE,cn,DIRECT", "GEOIP,CN,DIRECT", "DOMAIN-SUFFIX,a.example,Proxy", "MATCH,Proxy")
+	c, err := f.Refresh(t.Context(), store, id, []byte(body), Policy{})
+	if err != nil || c.Profile.Template == nil || c.Profile.Template.Reason != subconv.TemplateDropped || len(c.Profile.Nodes) != 3 || downloads.Load() != 1 {
+		t.Fatal(err, c.Profile.Template, len(c.Profile.Nodes), downloads.Load())
+	}
+	b.version, b.set = 43, unusableSet
+	downloads.Store(0)
+	c, err = f.Refresh(t.Context(), store, id, []byte(body), Policy{})
+	if !routesByCopy(c, err) || len(c.Profile.Nodes) != 3 || downloads.Load() != 1 {
+		t.Fatal(err, c.Profile.Template, c.Notices, downloads.Load())
+	}
+}
+
 // The stage starts at its first request, and ends before the refresh's reserve.
 func TestTemplateStageDeadline(t *testing.T) {
 	start := time.Now()

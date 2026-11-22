@@ -243,7 +243,7 @@ rules:
   - RULE-SET,empty,REJECT
   - MATCH,DIRECT
 `, srv.URL, prefix))
-	sets, notices, err := (Fetcher{Client: srv.Client()}).expandSourceProviders(t.Context(), c.doc, srv.URL, nil)
+	sets, notices, err := (Fetcher{Client: srv.Client()}).expandSourceProviders(t.Context(), c.doc, srv.URL, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

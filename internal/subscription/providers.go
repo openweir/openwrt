@@ -72,7 +72,10 @@ type providers struct {
 	f             Fetcher
 	ctx           context.Context
 	cache         map[string][]byte
-	notices       []Notice
+	// kept is what the refresh's next reading of the subscription takes from this one: the
+	// proxy providers, which every reading downloads (expandSourceProviders). nil keeps none.
+	kept    map[string][]byte
+	notices []Notice
 	// template holds the rule sets of subconv's routing template, when the document uses it.
 	template map[string][]byte
 }
@@ -136,7 +139,16 @@ func (s *providers) prefetchInputs(inputs []providerInput, budget int) error {
 		}
 	}
 	jobs := make(chan providerInput, len(seen))
+	total := 0
 	for _, input := range seen {
+		// An earlier reading of the subscription in this refresh downloaded it.
+		if b, ok := s.kept[input.key()]; ok && int64(len(b)) <= input.limit {
+			if total += len(b); total > budget {
+				return providerFailure(input.kind, input.raw, errors.New("provider_size_limit"))
+			}
+			s.cache[input.key()] = b
+			continue
+		}
 		jobs <- input
 	}
 	close(jobs)
@@ -145,7 +157,6 @@ func (s *providers) prefetchInputs(inputs []providerInput, budget int) error {
 	var wg sync.WaitGroup
 	var mu sync.Mutex
 	var failure error
-	total := 0
 	for range min(providerWorkers, len(seen)) {
 		wg.Go(func() {
 			for input := range jobs {
@@ -163,6 +174,9 @@ func (s *providers) prefetchInputs(inputs []providerInput, budget int) error {
 				}
 				if failure == nil {
 					s.cache[input.key()] = b
+					if input.kind == "node" && s.kept != nil {
+						s.kept[input.key()] = b
+					}
 					total += len(b)
 				}
 				mu.Unlock()
@@ -186,9 +200,12 @@ func (e templateSetError) Unwrap() error { return e.error }
 // expandSourceProviders downloads a converted document's providers into it. It returns the rule
 // sets the document gained and notices about provider content and options. The rule sets of
 // subconv's routing template come with it (template, by provider name; fetchTemplateSets), and
-// make up all of its rule sets then: their failures are templateSetErrors.
-func (f Fetcher) expandSourceProviders(ctx context.Context, m map[string]any, origin string, template map[string][]byte) ([]BinarySet, []Notice, error) {
-	s := &providers{trustedOrigin: strings.TrimSuffix(providerAddress(origin), "/"), trusted: f, ctx: ctx, cache: map[string][]byte{}, template: template}
+// make up all of its rule sets then: their failures are templateSetErrors. downloads keeps the
+// proxy providers downloaded, by providerInput.key, for the next reading of the subscription in
+// the refresh, which downloads none of them again (nil: none does). Its rule providers are not
+// kept: a later reading routes by the template, or by default.
+func (f Fetcher) expandSourceProviders(ctx context.Context, m map[string]any, origin string, template map[string][]byte, downloads map[string][]byte) ([]BinarySet, []Notice, error) {
+	s := &providers{trustedOrigin: strings.TrimSuffix(providerAddress(origin), "/"), trusted: f, ctx: ctx, cache: map[string][]byte{}, kept: downloads, template: template}
 	var done func()
 	s.f, done = f.embeddedFetcher()
 	defer done()

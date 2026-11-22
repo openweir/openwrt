@@ -656,6 +656,9 @@ func (f Fetcher) readConverted(ctx context.Context, s Source, body []byte, heade
 	// template; unusable, that the router cannot use the template's rule sets, nor its copy's.
 	var switched *TemplateUse
 	unusable := false
+	// The subscription's proxy providers download once: the readings after the first, which the
+	// template stage leaves within the refresh's reserve, take what the first got.
+	downloads := map[string][]byte{}
 	for {
 		c, err := convert(ctx, body, s.Rules, branch.Client)
 		if err != nil {
@@ -683,7 +686,7 @@ func (f Fetcher) readConverted(ctx context.Context, s Source, body []byte, heade
 			c.notices = append(c.notices, Notice{Code: "subconv_template_unavailable"})
 		}
 		f.sourceID = s.ID
-		sets, expansion, err := f.expandSourceProviders(ctx, c.doc, origin, template)
+		sets, expansion, err := f.expandSourceProviders(ctx, c.doc, origin, template, downloads)
 		if errors.As(err, new(templateSetError)) {
 			// The router cannot use the rule sets of the version the hosts serve, which subconv
 			// and the manifest accepted: as when they did not arrive, the router's copy, and
