@@ -161,6 +161,7 @@ type logSink struct {
 	r        *Records
 	line     []byte
 	terminal string // read after the process and its stderr reader have exited
+	crashed  bool   // the Go runtime began a crash report (crashHeader); the process ends with it
 }
 
 // os/exec can deliver partial lines and multiple lines in one write. Keep a
@@ -191,6 +192,16 @@ func (s *logSink) flush() {
 
 // Mihomo may color its log headers even when stderr is a pipe.
 var logColor = regexp.MustCompile("\x1b\\[[0-9;]*m")
+
+// A Go crash report starts with a line of its own, without a log header: an unrecovered panic, a
+// fatal runtime error or a signal (SIGSEGV: segmentation violation, SIGABRT: abort). The runtime
+// then writes the goroutines' stacks until the process ends: their headers, frames (a function and
+// its arguments), file positions, the signal and the registers. crashDump knows those lines
+// without the report's first line too.
+var (
+	crashHeader = regexp.MustCompile(`^(panic: |fatal error: |sig[a-z]+: )`)
+	crashDump   = regexp.MustCompile(`^(goroutine \d+ |created by |runtime stack:|\[signal |\.\.\.additional frames elided|pc=0x|[a-z0-9]{2,6}\s+0x[0-9a-f]+$|\S+\.go:\d+( |$)|[a-z0-9_./*()\[\],-]+\(.*\)$)`)
+)
 
 // corePermissionReason names what the core was denied. The core runs as root with every
 // capability (coreCommand), so a denial comes from the firewall or a kernel setting (such as
@@ -252,8 +263,19 @@ func (s *logSink) recordLine(line string) {
 	}
 	original := line
 	line = strings.ToLower(line)
+	// A crash report's first line is logged; the stack dump after it is not. Its frames and file
+	// names hold words the reasons below look for (dns, sniffer, geodata, dial).
+	if s.crashed && !strings.Contains(line, "level=") || crashDump.MatchString(line) {
+		return
+	}
+	crash := crashHeader.MatchString(line)
+	s.crashed = s.crashed || crash
 	level := "warn"
-	fatal := false
+	fatal := crash
+	// The runtime's own words before a crash (runtime: program exceeds 10000-thread limit).
+	if crash || strings.HasPrefix(line, "runtime: ") || strings.HasPrefix(line, "runtime/cgo: ") {
+		level = "error"
+	}
 	// Only a leading log level (optionally after a timestamp) can classify a
 	// process exit. Free-form DNS names, server names and paths stay private.
 	for i, field := range strings.Fields(line) {
@@ -304,11 +326,13 @@ func (s *logSink) recordLine(line string) {
 		// bad entry, a rule-set reference), not a word that a longer phrase may hold. They come
 		// first: they say what failed, and the error words after them how. The plugin's
 		// configurations carry no proxy providers (the subscription helper expands them into
-		// nodes), so the fetcher's "[Provider] <name>" lines name rule sets.
-		for _, x := range []struct{ needle, reason string }{{"initial proxy provider ", "node_provider_issue"}, {"parse proxy provider ", "node_provider_issue"},
+		// nodes), so the fetcher's "[Provider] <name>" lines name rule sets. Running out of memory
+		// (the runtime's "fatal error: runtime: out of memory", or ENOMEM) comes before them all.
+		for _, x := range []struct{ needle, reason string }{{"out of memory", "core_out_of_memory"}, {"cannot allocate memory", "core_out_of_memory"},
+			{"initial proxy provider ", "node_provider_issue"}, {"parse proxy provider ", "node_provider_issue"},
 			{"initial rule provider ", "rule_provider_issue"}, {"[provider] ", "rule_provider_issue"}, {"from rule provider:", "rule_provider_issue"}, {"rule provider type error", "rule_provider_issue"},
 			{"parse classical rule [", "rule_provider_issue"}, {"invalid ipcidr:[", "rule_provider_issue"}, {"rule-set", "rule_provider_issue"}, {"rule set [", "rule_provider_issue"},
-			{"address already in use", "listen_address_in_use"}, {"connection refused", "connection_refused"}, {"network is unreachable", "network_unreachable"}, {"i/o timeout", "io_timeout"}, {"context deadline exceeded", "deadline_exceeded"}, {"no such host", "dns_name_not_found"}, {"certificate", "tls_certificate_error"}, {"handshake", "handshake_failed"}, {"no space left", "disk_full"}, {"invalid config", "invalid_configuration"}, {"failed to create new os thread", "core_thread_creation_failed"}, {"pthread_create failed", "core_thread_creation_failed"},
+			{"address already in use", "listen_address_in_use"}, {"connection refused", "connection_refused"}, {"network is unreachable", "network_unreachable"}, {"i/o timeout", "io_timeout"}, {"context deadline exceeded", "deadline_exceeded"}, {"no such host", "dns_name_not_found"}, {"certificate", "tls_certificate_error"}, {"handshake", "handshake_failed"}, {"no space left", "disk_full"}, {"invalid config", "invalid_configuration"}, {"failed to create new os thread", "core_thread_creation_failed"}, {"pthread_create failed", "core_thread_creation_failed"}, {"thread exhaustion", "core_thread_creation_failed"}, {"-thread limit", "core_thread_creation_failed"},
 			{"no route to host", "network_unreachable"}, {"connection reset", "connection_reset"}, {"broken pipe", "connection_reset"}, {"unexpected eof", "connection_closed"}, {": eof", "connection_closed"},
 			{"geoip", "geodata_unavailable"}, {"geosite", "geodata_unavailable"}, {"mmdb", "geodata_unavailable"},
 			{"sniff", "sniffer_issue"}, {"[tun]", "core_tun_issue"}, {"tun device", "core_tun_issue"}, {"/dev/net/tun", "core_tun_issue"}, {"dial", "dial_failed"}, {"dns", "dns_query_failed"}} {

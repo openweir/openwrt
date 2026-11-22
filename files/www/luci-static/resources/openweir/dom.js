@@ -203,6 +203,7 @@ const diagnosticText = {
     core_listener_permission: '内核没有权限绑定监听端口',
     core_route_mark_permission: '内核没有权限设置套接字路由标记',
     core_thread_creation_failed: '内核无法创建工作线程',
+    core_out_of_memory: '路由器内存不足，内核无法再分配内存，可能已退出',
     core_file_limit_reached: '内核打开的连接和文件数达到上限（too many open files），新连接会失败或被断开',
     core_file_limit_low: '无法把内核的文件描述符上限提高到 1000000，连接较多时可能出现“too many open files”',
     core_outbound_blocked: '内核的出站连接被系统拒绝，常见原因是防火墙拦截了路由器自身发出的流量',

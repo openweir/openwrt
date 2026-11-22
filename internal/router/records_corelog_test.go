@@ -202,3 +202,59 @@ func TestDeniedOperationRedacts(t *testing.T) {
 		t.Errorf("not capped: %q", long)
 	}
 }
+
+// A Go crash report logs its first line once; the stack dump after it, whose frames name the dns,
+// sniffer and geodata packages, logs nothing, nor does a dump without that first line.
+func TestCoreLogSkipsCrashDumps(t *testing.T) {
+	const dump = `[signal SIGSEGV: segmentation violation code=0x1 addr=0x0 pc=0x1234]
+
+goroutine 123 [running]:
+github.com/metacubex/mihomo/dns.(*Resolver).exchange(0xc000123456, {0x1, 0x2})
+	/home/runner/work/mihomo/mihomo/dns/resolver.go:123 +0x45
+github.com/metacubex/mihomo/component/sniffer.(*Dispatcher).TCPSniff(...)
+	/home/runner/work/mihomo/mihomo/component/sniffer/dispatcher.go:77 +0x1f fp=0xc0001 sp=0xc0002 pc=0x47
+github.com/metacubex/mihomo/listener/sing_tun.(*ListenerHandler).dial(...)
+github.com/metacubex/mihomo/component/geodata.LoadGeoSiteMatcher(...)
+github.com/metacubex/mihomo/common/queue.New[go.shape.int,go.shape.string](...)
+created by github.com/metacubex/mihomo/tunnel.handleTCPConn in goroutine 77
+goroutine 1 gp=0xc000002380 m=0 mp=0x1 [select, 5 minutes]:
+...additional frames elided...
+rax    0x0
+rip    0x47a1c1
+`
+	for _, c := range []struct {
+		report, reason, detail, terminal string
+		count                            int
+	}{
+		{"panic: runtime error: invalid memory address or nil pointer dereference\n" + dump,
+			"core_diagnostic", "runtime error: invalid memory address or nil pointer dereference", "", 1},
+		{"fatal error: runtime: out of memory\n\nruntime stack:\nruntime.throw({0x1, 0x2})\n\t/usr/local/go/src/runtime/panic.go:1023 +0x5c\n" + dump,
+			"core_out_of_memory", "", "core_out_of_memory", 1},
+		{"runtime: program exceeds 10000-thread limit\nfatal error: thread exhaustion\n" + dump,
+			"core_thread_creation_failed", "", "core_thread_creation_failed", 2},
+		{"SIGABRT: abort\nPC=0x47a1c1 m=3 sigcode=18446744073709551610\nruntime: g 0: unexpected return pc for runtime.sigtramp called from 0x0\n" + dump,
+			"core_diagnostic", "sigabrt: abort", "", 1},
+		{dump, "", "", "", 0},
+	} {
+		r := NewRecords()
+		s := logSink{r: r}
+		_, _ = s.Write([]byte(c.report))
+		logs := r.Logs(0, 10, "", "", "")
+		if c.reason == "" {
+			if len(logs) != 0 {
+				t.Errorf("a dump without its report logged %+v", logs)
+			}
+			continue
+		}
+		if len(logs) != 1 || logs[0].Message != c.reason || logs[0].Detail != c.detail || logs[0].Level != "error" || max(logs[0].Count, 1) != c.count || s.terminal != c.terminal {
+			t.Errorf("%s\n got %+v, terminal %q\nwant %s %q ×%d, terminal %q", c.report[:40], logs, s.terminal, c.reason, c.detail, c.count, c.terminal)
+		}
+	}
+	// A core log line after the report still counts; the core's own log lines name no frames.
+	r := NewRecords()
+	s := logSink{r: r}
+	_, _ = s.Write([]byte("panic: boom\ngoroutine 1 [running]:\nlevel=error msg=\"cannot allocate memory\"\n"))
+	if logs := r.Logs(0, 10, "", "", ""); len(logs) != 2 || logs[0].Message != "core_out_of_memory" {
+		t.Errorf("%+v", logs)
+	}
+}
