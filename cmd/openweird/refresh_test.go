@@ -58,6 +58,24 @@ func TestScheduledRefreshWaitsForFirstManualImport(t *testing.T) {
 	}
 }
 
+// A ready source without an update date, as an update interrupted before its status file left
+// one in an earlier version, is due with automatic updates on, after the usual spacing, so that
+// the refresh dates it again.
+func TestReadySourceWithoutUpdateDateIsDue(t *testing.T) {
+	now := time.Now().UTC()
+	st := subscription.Status{Kind: "external", Ready: true}
+	if !dueForRefresh(st, now, time.Time{}, 6*time.Hour) {
+		t.Fatal("ready source without a date never refreshed")
+	}
+	if dueForRefresh(st, now, now.Add(-time.Minute), 6*time.Hour) || dueForRefresh(st, now, time.Time{}, 0) {
+		t.Fatal("refreshed within the spacing, or with automatic updates off")
+	}
+	st.Attempts, st.AttemptedAt = 1, now.Add(-time.Minute).Format(time.RFC3339)
+	if dueForRefresh(st, now, time.Time{}, 6*time.Hour) || !dueForRefresh(st, now.Add(14*time.Minute), time.Time{}, 6*time.Hour) {
+		t.Fatal("back-off of the attempt")
+	}
+}
+
 func TestMigrateRemoteSourceEvenWithAutomaticUpdatesDisabled(t *testing.T) {
 	now := time.Now()
 	src := subscription.Status{Kind: "external", NeedsRefresh: true}

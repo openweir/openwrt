@@ -219,7 +219,8 @@ func dueForRefresh(src subscription.Status, now, attempt time.Time, interval tim
 	updated, err := time.Parse(time.RFC3339, src.UpdatedAt)
 	// Persisted timestamps are wall clock dates; an in-process attempt also
 	// carries a monotonic reading so a clock step cannot bypass its backoff.
-	return err == nil && (updated.After(now) || now.Sub(updated) >= interval)
+	// A ready source without a date, its status lost, is due: the refresh dates it.
+	return err != nil || updated.After(now) || now.Sub(updated) >= interval
 }
 
 func recoveredClock(src subscription.Status, now time.Time) bool {
