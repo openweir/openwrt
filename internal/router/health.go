@@ -100,9 +100,15 @@ func (s *System) verify(ctx context.Context) error {
 	if e := s.ready(ctx); e != nil {
 		return e
 	}
-	_, e := command(ctx, networkHelper, "verify")
+	// A helper stuck on the firewall or a resolver would otherwise hold the check until the
+	// start deadline; even slow routers finish a healthy verify in a few seconds.
+	c, stop := context.WithTimeout(ctx, verifyTimeout)
+	defer stop()
+	_, e := command(c, networkHelper, "verify")
 	return e
 }
+
+const verifyTimeout = 20 * time.Second
 
 // SideRouter reports a takeover on a side router (旁路由): the network helper found the IPv4
 // default route on a managed LAN, so devices must use this router as gateway and DNS.

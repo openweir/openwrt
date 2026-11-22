@@ -545,7 +545,7 @@ function errorMessage(text) {
         if (m) return fn(m);
     }
     const network = /^network (\w+) failed at (\w+)$/.exec(text);
-    if (network) return diagnosticText[text] || '网络' + (network[1] === 'apply' ? '接管' : '恢复') + '在 ' + network[2] + ' 步骤失败';
+    if (network) return diagnosticText[text] || '网络' + ({ apply: '接管', verify: '检查', release: '恢复', repair: '修复', refresh: '更新' }[network[1]] || '处理') + '在 ' + network[2] + ' 步骤失败';
     const wrapped = /^([^:]{1,80}): (.+)$/s.exec(text);
     if (wrapped && (errorText[wrapped[2]] || diagnosticText[wrapped[2]])) return errorMessage(wrapped[2]);
     return text;
