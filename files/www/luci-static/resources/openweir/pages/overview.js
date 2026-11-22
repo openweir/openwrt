@@ -463,7 +463,10 @@ export async function overview(ui) {
 							const before = look;
 							show('disconnecting');
 							try {
-								await ui.run('stop', { revision: intent.revision });
+								// An open dialog holds the page's redraws back, so a change saved
+								// meanwhile is not in the page: the stop names the revision now current.
+								const { saved } = await ui.rpc('status');
+								await ui.run('stop', { revision: saved.revision });
 							} catch (error) {
 								show(before);
 								throw error;
