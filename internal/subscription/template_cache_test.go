@@ -517,3 +517,93 @@ func TestTemplateConcurrentRefreshes(t *testing.T) {
 		t.Fatal("after a sweep:", got)
 	}
 }
+
+func floorOf(t *testing.T, dir string) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(dir, rules.FloorKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+// Two refreshes that began on the same copy: one got a version from a single operator, which
+// leaves the floor, and the other got it, or an older one, trusted, which raises the floor. The
+// floor the trusted one raised stays, whichever promotes first, with its version.
+func TestTemplateFloorNeverGoesBack(t *testing.T) {
+	v2 := map[string]string{rules.TemplatePath: "t2", "providers/a.txt": "a"}
+	v3 := map[string]string{rules.TemplatePath: "t3", "providers/a.txt": "a"}
+	for _, tc := range []struct {
+		name           string
+		untrusted      int64
+		files          map[string]string
+		version, floor int64
+		untrustedFirst bool
+	}{
+		{name: "same version, untrusted first", untrusted: 2, files: v2, version: 2, floor: 2, untrustedFirst: true},
+		{name: "same version, trusted first", untrusted: 2, files: v2, version: 2, floor: 2},
+		{name: "newer untrusted version first", untrusted: 3, files: v3, version: 2, floor: 2, untrustedFirst: true},
+		{name: "newer untrusted version after", untrusted: 3, files: v3, version: 3, floor: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			s := &templateStage{root: root}
+			stageVersion(t, s, 1, version1)
+			s.promote()
+			s.close()
+			untrusted, trusted := &templateStage{root: root}, &templateStage{root: root}
+			untrusted.Get(rules.FloorKey)
+			trusted.Get(rules.FloorKey)
+			untrusted.Put(rules.ManifestPath, branchManifest(t, tc.untrusted, tc.files))
+			for path, data := range tc.files {
+				untrusted.Put(path, []byte(data))
+			}
+			stageVersion(t, trusted, 2, v2)
+			first, second := trusted, untrusted
+			if tc.untrustedFirst {
+				first, second = untrusted, trusted
+			}
+			first.promote()
+			first.close()
+			second.promote()
+			second.close()
+			gen := current(t, root)
+			n := &templateStage{root: root}
+			if v := manifestVersion(t, n); v != tc.version || floorOf(t, gen) != fmt.Sprintln(tc.floor) {
+				t.Fatalf("version %d, floor %q", v, floorOf(t, gen))
+			}
+			n.close()
+		})
+	}
+}
+
+// The copy before generations goes once a generation is current, but not with a floor higher
+// than the generation's, which a helper of the version before generations may have raised.
+func TestTemplateSweepKeepsTheHigherFloor(t *testing.T) {
+	root := t.TempDir()
+	write := func(path, data string) {
+		t.Helper()
+		os.MkdirAll(filepath.Dir(filepath.Join(root, path)), 0700)
+		if err := os.WriteFile(filepath.Join(root, path), []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(rules.ManifestPath, string(branchManifest(t, 1, version1)))
+	write(rules.FloorKey, "1\n")
+	for path, data := range version1 {
+		write(path, data)
+	}
+	s := &templateStage{root: root}
+	stageVersion(t, s, 2, map[string]string{rules.TemplatePath: "t2", "providers/a.txt": "a"})
+	// Meanwhile, an older helper got version 3 trusted.
+	write(rules.FloorKey, "3\n")
+	s.promote()
+	s.close()
+	gen := current(t, root)
+	if floor := floorOf(t, gen); floor != "3\n" {
+		t.Fatalf("floor %q", floor)
+	}
+	if got := dirNames(t, root); !slices.Equal(got, []string{templateCurrent, filepath.Base(gen), templateLock}) {
+		t.Fatal(got)
+	}
+}

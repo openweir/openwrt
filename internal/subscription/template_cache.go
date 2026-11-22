@@ -135,7 +135,8 @@ func (s *templateStage) close() {
 // floor and the files the manifest lists takes the place of the current one. Files the refresh
 // did not change are links to the base's; the rest of the base, which the manifest no longer
 // lists, is left behind with it. When another refresh promoted the same version or a newer one
-// since this one began, that stays. The stage is spent.
+// since this one began, with the same floor or a higher one, that stays; otherwise the copy
+// keeps the higher floor of the two. The stage is spent.
 func (s *templateStage) promote() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -163,16 +164,15 @@ func (s *templateStage) promote() {
 	defer unlock(lock)
 	if current, _ := currentGeneration(s.root); current != s.name {
 		other := filepath.Join(s.root, current)
+		theirs, _ := readGeneration(other, rules.FloorKey)
+		ours, _ := get(rules.FloorKey)
 		if b, ok := readGeneration(other, rules.ManifestPath); ok {
-			if om, err := rules.ParseManifest(b); err == nil && om.Version >= m.Version {
+			if om, err := rules.ParseManifest(b); err == nil && om.Version >= m.Version && floorVersion(theirs) >= floorVersion(ours) {
 				return
 			}
 		}
-		// Keep the higher floor of the two.
-		if theirs, ok := readGeneration(other, rules.FloorKey); ok {
-			if ours, _ := get(rules.FloorKey); floorVersion(theirs) > floorVersion(ours) {
-				staged[rules.FloorKey] = theirs
-			}
+		if floorVersion(theirs) > floorVersion(ours) {
+			staged[rules.FloorKey] = theirs
 		}
 	}
 	dir, err := os.MkdirTemp(s.root, templateGeneration)
@@ -297,6 +297,21 @@ func readGeneration(dir, key string) ([]byte, bool) {
 func floorVersion(b []byte) int64 {
 	v, _ := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
 	return v
+}
+
+// keepFloor raises the floor of the generation in dir to the one in from, when that is higher,
+// and reports whether dir's floor is now the higher of the two. A floor only rises, so a refresh
+// reading the generation meanwhile may read either; the file, which may be a link to another
+// generation's, is replaced rather than written over.
+func keepFloor(dir, from string) bool {
+	theirs, ok := readGeneration(from, rules.FloorKey)
+	if !ok {
+		return true
+	}
+	if ours, _ := readGeneration(dir, rules.FloorKey); floorVersion(theirs) <= floorVersion(ours) {
+		return true
+	}
+	return atomicfile.WriteFile(filepath.Join(dir, rules.FloorKey), theirs, 0600, templateTemp+"*") == nil
 }
 
 // lockTemplate takes the copy's lock, exclusively, waiting for it at most templateLockWait and
@@ -425,6 +440,10 @@ func sweepTemplate(root string) (string, bool) {
 	switch {
 	case before && current != "":
 		ifUnheld(root, func() {
+			// Not a floor higher than the generation's, which an older helper may have raised.
+			if !keepFloor(filepath.Join(root, current), root) {
+				return
+			}
 			for _, e := range entries {
 				if !strings.HasPrefix(e.Name(), "@") {
 					os.RemoveAll(filepath.Join(root, e.Name()))
