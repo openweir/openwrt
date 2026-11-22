@@ -19,9 +19,10 @@ jobs:
   # develop run skips every check and the preview workflow publishes nothing.
   # The version and the package revisions are worked out here once, so every job builds and
   # publishes the same ones.
-  # Every job here has a timeout of two to three times its usual length, so a hang fails in
-  # minutes instead of GitHub's six hours. A job that calls another workflow cannot take one;
-  # its limits belong on the called workflow's own jobs.
+  # Every job here has a timeout of two to three times its usual length, or more where a
+  # retried download needs room for its attempts, so a hang fails in minutes instead of
+  # GitHub's six hours. A job that calls another workflow cannot take one; its limits belong
+  # on the called workflow's own jobs.
   gate:
     runs-on: ubuntu-latest
     # A few API calls and one small Go program. Each call is bounded at two minutes an attempt,
