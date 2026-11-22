@@ -234,8 +234,9 @@ func TestShownChangeKeepsTheSnapshot(t *testing.T) {
 }
 
 // Records of the earlier format, the bookkeeping in the record file, read as they are. The
-// first update moves the bookkeeping to the status file; a status file older than the record
-// file does not count.
+// first update writes the status file, the record file keeping the bookkeeping until then, and
+// the next moves it out. Of a status file that names another record file only what it tells of
+// the source counts.
 func TestRecordFileOfTheEarlierFormat(t *testing.T) {
 	store := OpenStore(t.TempDir())
 	ticket, err := store.Begin("primary")
@@ -272,13 +273,20 @@ func TestRecordFileOfTheEarlierFormat(t *testing.T) {
 	if err != nil || next.Generation != 10 || n["record"] != 1 || n["status"] != 1 {
 		t.Fatal(err, next, n)
 	}
-	if b, _ := os.ReadFile(store.path(ticket.Source)); bytes.Contains(b, []byte("last_failure")) || bytes.Contains(b, []byte(`"attempts"`)) {
-		t.Fatal("bookkeeping left in the record file")
+	if b, _ := os.ReadFile(store.path(ticket.Source)); !bytes.Contains(b, []byte(`"last_failure"`)) || !bytes.Contains(b, []byte(`"attempts":3`)) {
+		t.Fatal("bookkeeping left only to the status file")
 	}
 	if st, _ := store.Status(ticket.Source); st.LastFailure != "subscription_request_failed" || st.Attempts != 3 || st.UpdatedAt != "2026-11-19T10:00:00Z" || st.Generation != 10 {
 		t.Fatal(st)
 	}
-	// Later updates leave the record file.
+	// The next update moves it out; later ones leave the record file.
+	clear(n)
+	if _, _, err := store.begin(t.Context(), ticket.Source, 0, true); err != nil || n["record"] != 1 || n["status"] != 1 {
+		t.Fatal(err, n)
+	}
+	if b, _ := os.ReadFile(store.path(ticket.Source)); bytes.Contains(b, []byte("last_failure")) || bytes.Contains(b, []byte(`"attempts"`)) {
+		t.Fatal("bookkeeping left in the record file")
+	}
 	clear(n)
 	if _, _, err := store.begin(t.Context(), ticket.Source, 0, true); err != nil || n["record"] != 0 || n["status"] != 1 {
 		t.Fatal(err, n)
@@ -300,8 +308,8 @@ func TestRecordFileOfTheEarlierFormat(t *testing.T) {
 	if err := os.WriteFile(store.statusPath(ticket.Source), stale, 0600); err != nil {
 		t.Fatal(err)
 	}
-	if st, _ := store.Status(ticket.Source); st.Generation != 20 || st.Attempts != 0 || st.LastFailure != "" || !st.Ready {
-		t.Fatal("stale status read", st)
+	if st, _ := store.Status(ticket.Source); st.Generation != 20 || st.Attempts != 5 || st.LastFailure != "subscription_request_failed" || st.UpdatedAt != "2026-11-19T10:00:00Z" || !st.Ready {
+		t.Fatal("stale status", st)
 	}
 	// A broken status file leaves the record file's.
 	if err := os.WriteFile(store.statusPath(ticket.Source), []byte("{"), 0600); err != nil {

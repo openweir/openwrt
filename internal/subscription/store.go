@@ -43,10 +43,14 @@ type Ticket struct {
 // content it changed (save), so a refresh that finds nothing new rewrites a few hundred bytes
 // of status rather than the profiles.
 //
-// The record file keeps the generation it was written at, and a status file older than that is
-// not read with it: the record file was written after it, by an update interrupted before its
-// status file, or by an earlier version that kept everything in the record file. Its own fields
-// count then, the bookkeeping included in the earlier format.
+// The record file is written first, and the status file names the record file it was written
+// with by its digest. A status file that names another record file is older: the record file was
+// written after it, by an update interrupted before its status file, or by an earlier version
+// that kept everything in the record file. The record file's own bookkeeping counts then, as in
+// the earlier format. When the record file has none, the older status file still tells when the
+// source last updated and how many attempts followed, but not what it held of the profiles it
+// was written with (bookkeeping.older). Until a status file names it, the record file carries
+// the bookkeeping itself (save).
 type record struct {
 	legacy          bool
 	disk            recordDisk
@@ -91,10 +95,22 @@ type bookkeeping struct {
 	CheckedTemplate *TemplateUse `json:"checked_template,omitempty"`
 }
 
-// statusFile is the content of a record's status file.
+// older is what a status file still tells of a source once the record file was written after
+// it: when it last updated, the attempts since, the last failure, the update waiting. What
+// described the profiles it was written with, the provider receipt, the template last found and
+// the counts of the change, does not reach the record file's.
+func (b bookkeeping) older() bookkeeping {
+	b.Providers, b.CheckedTemplate, b.LastChange = nil, nil, nil
+	return b
+}
+
+// statusFile is the content of a record's status file. Record is the hex SHA-256 of the record
+// file it was written with; the status files of the previous version name only the generation.
 type statusFile struct {
 	Source     string `json:"source"`
+	Epoch      uint64 `json:"epoch,omitempty"`
 	Generation uint64 `json:"generation"`
+	Record     string `json:"record,omitempty"`
 	bookkeeping
 }
 
@@ -102,7 +118,8 @@ type statusFile struct {
 // it did not change.
 type recordDisk struct {
 	generation uint64 // of the record file
-	status     []byte // the status file, when it was read with the record file
+	digest     []byte // SHA-256 of the record file
+	status     []byte // the status file, when it names the record file
 }
 
 const maxRecord = 64 << 20
@@ -144,9 +161,7 @@ func (s *Store) updateContext(ctx context.Context, id string, fn func(*record) e
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	read := sha256.New()
-	r, e := s.readWithChecksum(id, read)
-	exists := e == nil
+	r, e := s.read(id)
 	if errors.Is(e, os.ErrNotExist) {
 		r = &record{SchemaVersion: SchemaVersion, Source: id, Epoch: 1}
 	} else if e != nil {
@@ -157,18 +172,16 @@ func (s *Store) updateContext(ctx context.Context, id string, fn func(*record) e
 	} else if e != nil {
 		return e
 	}
-	var sum []byte
-	if exists {
-		sum = read.Sum(nil)
-	}
-	return s.save(ctx, r, sum)
+	return s.save(ctx, r)
 }
 
-// save writes what an update changed of a record (read is the digest of the record file it
-// was read from, nil for a new one): the record file when its content changed, then the status
-// file when the bookkeeping or the generation did. The record file is written with the
-// generation, so that a status file left from before it does not count (record).
-func (s *Store) save(ctx context.Context, r *record, read []byte) error {
+// save writes what an update changed of a record: the record file when its content changed,
+// then the status file, naming the record file, when the bookkeeping, the generation or the
+// record file did. The record file is written with the generation. While no status file names
+// the record (one of the earlier format, or one this update creates), the record file carries
+// the bookkeeping too, so that an update interrupted before the status file keeps it; the next
+// update writes the record file without it.
+func (s *Store) save(ctx context.Context, r *record) error {
 	file := *r
 	file.bookkeeping = bookkeeping{}
 	file.Generation = r.disk.generation
@@ -178,19 +191,25 @@ func (s *Store) save(ctx context.Context, r *record, read []byte) error {
 	if err := json.NewEncoder(same).Encode(&file); err != nil {
 		return err
 	}
-	status, err := json.Marshal(statusFile{r.Source, r.Generation, r.bookkeeping})
+	sum := r.disk.digest
+	if !bytes.Equal(same.Sum(nil), sum) {
+		file.Generation = r.Generation
+		if r.disk.status == nil {
+			file.bookkeeping = r.bookkeeping
+		}
+		written := sha256.New()
+		if err := s.replace(ctx, s.path(r.Source), maxRecord, func(w io.Writer) error { return json.NewEncoder(io.MultiWriter(w, written)).Encode(&file) }); err != nil {
+			return err
+		}
+		sum = written.Sum(nil)
+		// The status file belongs with the record file now published.
+		ctx = context.WithoutCancel(ctx)
+	}
+	status, err := json.Marshal(statusFile{r.Source, r.Epoch, r.Generation, hex.EncodeToString(sum), r.bookkeeping})
 	if err != nil {
 		return err
 	}
 	status = append(status, '\n')
-	if !bytes.Equal(same.Sum(nil), read) {
-		file.Generation = r.Generation
-		if err := s.replace(ctx, s.path(r.Source), maxRecord, func(w io.Writer) error { return json.NewEncoder(w).Encode(&file) }); err != nil {
-			return err
-		}
-		// The status file belongs with the record file now published.
-		ctx = context.WithoutCancel(ctx)
-	}
 	if bytes.Equal(status, r.disk.status) {
 		return nil
 	}
@@ -259,17 +278,18 @@ func (s *Store) decode(path string, checksum io.Writer) (*record, error) {
 		return nil, e
 	}
 	defer f.Close()
-	reader := io.LimitReader(f, maxRecord+1)
+	sum := sha256.New()
+	var hashed io.Writer = sum
 	if checksum != nil {
-		reader = io.TeeReader(reader, checksum)
+		hashed = io.MultiWriter(sum, checksum)
 	}
-	d := json.NewDecoder(reader)
+	d := json.NewDecoder(io.TeeReader(io.LimitReader(f, maxRecord+1), hashed))
 	d.UseNumber()
 	var r record
 	if d.Decode(&r) != nil || d.Decode(new(any)) != io.EOF || (r.SchemaVersion != SchemaVersion && r.SchemaVersion != 1) || !sourceIDValid(r.Source) || s.path(r.Source) != path || r.Epoch == 0 {
 		return nil, errors.New("invalid subscription state")
 	}
-	r.disk.generation = r.Generation
+	r.disk.generation, r.disk.digest = r.Generation, sum.Sum(nil)
 	if r.SchemaVersion == 1 {
 		r.legacy = true
 		r.NeedsRefresh = r.Config != nil && !r.Revoked
@@ -294,9 +314,11 @@ func (s *Store) decode(path string, checksum io.Writer) (*record, error) {
 	return &r, nil
 }
 
-// readStatus reads a record's status file into it, unless the record file is newer (record).
-// A status file that is missing, unreadable or older leaves the record file's own fields; the
-// next update writes it again.
+// readStatus reads a record's status file into it when it names the record file, or, of the
+// previous version, names none and is no older than the record file. An older one leaves the
+// record file's bookkeeping, or gives what it still tells of the source when the record file has
+// none (record). A status file that is missing or unreadable leaves the record file's own
+// fields; the next update writes it again.
 func (s *Store) readStatus(r *record) {
 	f, err := os.Open(s.statusPath(r.Source))
 	if err != nil {
@@ -313,10 +335,16 @@ func (s *Store) readStatus(r *record) {
 	d := json.NewDecoder(bytes.NewReader(raw))
 	d.UseNumber()
 	var v statusFile
-	if d.Decode(&v) != nil || d.Decode(new(any)) != io.EOF || v.Source != r.Source || v.Generation < r.Generation {
+	if d.Decode(&v) != nil || d.Decode(new(any)) != io.EOF || v.Source != r.Source {
 		return
 	}
-	r.Generation, r.bookkeeping, r.disk.status = v.Generation, v.bookkeeping, raw
+	if v.Record == hex.EncodeToString(r.disk.digest) || v.Record == "" && v.Generation >= r.Generation {
+		r.Generation, r.bookkeeping, r.disk.status = v.Generation, v.bookkeeping, raw
+	} else if v.Epoch == r.Epoch && r.bookkeeping == (bookkeeping{}) {
+		// The generation stays the record file's, so that a reader that found the record file
+		// before a commit and the commit's status file holds a ticket the commit superseded.
+		r.bookkeeping = v.older()
+	}
 }
 func (s *Store) Begin(id string) (Ticket, error) {
 	t, _, err := s.begin(context.Background(), id, 0, false)
