@@ -125,6 +125,15 @@ export async function pages(ui, source, action) {
 }
 
 const diagnosticText = {
+    // Failed subscription updates, read alike on the subscriptions and log pages.
+    subscription_empty: '订阅内容为空',
+    subscription_web_page: '服务商返回的是网页（错误、登录或验证页面），不是订阅。请检查订阅链接，或稍后重试',
+    subscription_message: '服务商返回了一条提示而不是订阅，例如链接过期或流量用尽。请到服务商处查看',
+    unsupported_format: '无法识别的订阅格式',
+    no_usable_nodes: '订阅中没有可用的节点',
+    subscription_tls_untrusted: '路由器不信任此订阅服务的 HTTPS 证书，请检查固件的 CA 证书和服务商的证书链',
+    subscription_link_unavailable: '服务商未提供可用的套餐订阅链接，或链接暂时无法下载，请稍后重试',
+    invalid_plan_detail: '服务商返回的套餐详情不完整或与当前套餐不匹配',
     starting: '正在启动代理',
     releasing: '正在清理接管规则',
     fail_open: '局域网已回退直连',
