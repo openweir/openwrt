@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/openweir/openwrt/internal/atomicfile"
 	"github.com/openweir/openwrt/internal/mirror"
 	"io"
 	"net/http"
@@ -105,7 +106,7 @@ func PrepareGeodata(ctx context.Context, rules []string, dir, manifest string) e
 		if pinnedFile(dst, p) {
 			continue
 		}
-		if err := acquireGeo(ctx, client, dir, dst, p); err != nil {
+		if err := acquireGeo(ctx, client, dst, p); err != nil {
 			return err
 		}
 	}
@@ -113,10 +114,10 @@ func PrepareGeodata(ctx context.Context, rules []string, dir, manifest string) e
 }
 
 // acquireGeo tries GitHub and the download mirrors in turn; each copy must match the pin.
-func acquireGeo(ctx context.Context, c *http.Client, dir, dst string, p geoPin) error {
+func acquireGeo(ctx context.Context, c *http.Client, dst string, p geoPin) error {
 	var first error
 	for _, m := range mirror.Candidates(p.url, mirror.Configured(ctx)) {
-		err := acquireGeoFrom(ctx, c, dir, dst, p, m.URL)
+		err := acquireGeoFrom(ctx, c, dst, p, m.URL)
 		if err == nil {
 			mirror.Remember(m.Prefix)
 			return nil
@@ -130,7 +131,7 @@ func acquireGeo(ctx context.Context, c *http.Client, dir, dst string, p geoPin) 
 	}
 	return first
 }
-func acquireGeoFrom(ctx context.Context, c *http.Client, dir, dst string, p geoPin, address string) error {
+func acquireGeoFrom(ctx context.Context, c *http.Client, dst string, p geoPin, address string) error {
 	req, e := http.NewRequestWithContext(ctx, http.MethodGet, address, nil)
 	if e != nil {
 		return e
@@ -143,28 +144,12 @@ func acquireGeoFrom(ctx context.Context, c *http.Client, dir, dst string, p geoP
 	if r.StatusCode != http.StatusOK {
 		return errors.New("geodata_download_failed")
 	}
-	f, e := os.CreateTemp(dir, ".geodata-*")
-	if e != nil {
-		return e
-	}
-	defer os.Remove(f.Name())
-	defer f.Close()
-	h := sha256.New()
-	n, e := io.Copy(io.MultiWriter(f, h), io.LimitReader(r.Body, p.size+1))
-	if e != nil || n != p.size || hex.EncodeToString(h.Sum(nil)) != p.digest {
-		return errors.New("geodata_digest_mismatch")
-	}
-	if e = f.Chmod(0644); e != nil {
-		return e
-	}
-	if e = f.Sync(); e != nil {
-		return e
-	}
-	if e = f.Close(); e != nil {
-		return e
-	}
-	if e = os.Rename(f.Name(), dst); e != nil {
-		return e
-	}
-	return syncDirectory(dir)
+	return atomicfile.Write(dst, 0644, ".geodata-*", func(f *os.File) error {
+		h := sha256.New()
+		n, e := io.Copy(io.MultiWriter(f, h), io.LimitReader(r.Body, p.size+1))
+		if e != nil || n != p.size || hex.EncodeToString(h.Sum(nil)) != p.digest {
+			return errors.New("geodata_digest_mismatch")
+		}
+		return nil
+	})
 }

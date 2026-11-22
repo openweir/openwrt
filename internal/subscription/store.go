@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/openweir/openwrt/internal/atomicfile"
 	"github.com/openweir/openwrt/internal/tlsdiag"
 )
 
@@ -196,42 +197,28 @@ func (s *Store) save(ctx context.Context, r *record, read []byte) error {
 	return s.replace(ctx, s.statusPath(r.Source), maxStatus, func(w io.Writer) error { _, err := w.Write(status); return err })
 }
 
-// replace writes a file whole or not at all: a synced temporary file renamed over it, then the
-// directory synced, so that a later write never reaches flash before it. A cancelled update
-// publishes nothing.
+// replace writes a file whole or not at all (atomicfile.Write): a synced temporary file, named
+// as sweep expects, renamed over it, then the directory synced, so that a later write never
+// reaches flash before it. A cancelled update publishes nothing.
 func (s *Store) replace(ctx context.Context, path string, limit int64, write func(io.Writer) error) error {
-	f, e := os.CreateTemp(s.dir, ".snapshot-*")
-	if e != nil {
-		return e
-	}
-	name := f.Name()
-	defer os.Remove(name)
-	err := write(f)
-	if err == nil {
-		var st os.FileInfo
-		st, err = f.Stat()
-		if err == nil && st.Size() > limit {
-			err = errors.New("snapshot exceeds storage limit")
+	err := atomicfile.Write(path, 0600, ".snapshot-*", func(f *os.File) error {
+		if err := write(f); err != nil {
+			return err
 		}
-	}
-	if err == nil {
-		err = f.Sync()
-	}
-	closeErr := f.Close()
+		st, err := f.Stat()
+		if err != nil {
+			return err
+		}
+		if st.Size() > limit {
+			return errors.New("snapshot exceeds storage limit")
+		}
+		return ctx.Err()
+	})
 	if err != nil {
 		return err
 	}
-	if closeErr != nil {
-		return closeErr
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if err = os.Rename(name, path); err != nil {
-		return err
-	}
 	replaced(path)
-	return s.syncDir()
+	return nil
 }
 
 // replaced learns of each file an update writes, for tests to count them.

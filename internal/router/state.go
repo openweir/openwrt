@@ -5,10 +5,10 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
 	"os"
 	"path/filepath"
+
+	"github.com/openweir/openwrt/internal/atomicfile"
 )
 
 var ErrNotReady = errors.New("state not ready")
@@ -118,40 +118,11 @@ func (s Disk) save(v Intent, write func(string, []byte, os.FileMode) error) erro
 	return nil
 }
 
-// Atomic publishes only a completely written file on the same volume.
+// Atomic publishes only a completely written file on the same volume (atomicfile.WriteFile),
+// creating its directory, private, if missing.
 func Atomic(path string, b []byte, mode os.FileMode) error {
-	parent := filepath.Dir(path)
-	if e := os.MkdirAll(parent, 0700); e != nil {
+	if e := os.MkdirAll(filepath.Dir(path), 0700); e != nil {
 		return e
 	}
-	f, e := os.CreateTemp(parent, ".openweir-")
-	if e != nil {
-		return e
-	}
-	defer os.Remove(f.Name())
-	defer f.Close()
-	if e = f.Chmod(mode); e == nil {
-		_, e = io.Copy(f, bytes.NewReader(b))
-	}
-	if e == nil {
-		e = f.Sync()
-	}
-	if e != nil {
-		return e
-	}
-	if e = f.Close(); e != nil {
-		return e
-	}
-	if e = os.Rename(f.Name(), path); e != nil {
-		return e
-	}
-	d, e := os.Open(parent)
-	if e != nil {
-		return e
-	}
-	defer d.Close()
-	if e = d.Sync(); e != nil {
-		return fmt.Errorf("sync state directory: %w", e)
-	}
-	return nil
+	return atomicfile.WriteFile(path, b, mode, ".openweir-")
 }

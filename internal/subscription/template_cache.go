@@ -243,6 +243,7 @@ func switchGeneration(root, name string) error {
 	return syncDirectory(root)
 }
 
+// writeSynced is not atomicfile: it fills a new generation, which switchGeneration publishes whole.
 func writeSynced(path string, data []byte) error {
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0600)
 	if err != nil {

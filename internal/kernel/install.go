@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"syscall"
+
+	"github.com/openweir/openwrt/internal/atomicfile"
 )
 
 func (m *Manager) saveMeta(tag string, mat material) error {
@@ -114,25 +116,9 @@ func cacheArchive(root, tag string, a Asset, input string) error {
 		return e
 	}
 	defer in.Close()
-	out, e := os.CreateTemp(dir, ".asset-")
-	if e != nil {
-		return e
-	}
-	defer os.Remove(out.Name())
-	defer out.Close()
-	if e = copyChecked(out, in, a.Size, a.SHA256); e != nil {
-		return e
-	}
-	if e = out.Sync(); e != nil {
-		return e
-	}
-	if e = out.Close(); e != nil {
-		return e
-	}
-	if e = os.Rename(out.Name(), file); e != nil {
-		return e
-	}
-	return syncDir(dir)
+	return atomicfile.Write(file, 0600, ".asset-", func(out *os.File) error {
+		return copyChecked(out, in, a.Size, a.SHA256)
+	})
 }
 
 // Serialize payload writers across processes without holding the intent lock

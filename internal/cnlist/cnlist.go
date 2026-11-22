@@ -248,6 +248,7 @@ func (u *Updater) update(ctx context.Context, list string) (bool, error) {
 
 // write replaces a download in one rename, so the core and the firewall helper only ever
 // read a complete file. Both read it under their own accounts.
+// Not atomicfile: its fixed temporary name means a crash leaves at most one on flash, reused next time.
 func write(list string, data []byte) error {
 	if err := os.MkdirAll(Dir, 0o755); err != nil {
 		return err

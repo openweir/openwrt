@@ -125,6 +125,8 @@ func MaterializeSets(p Profile, dir string) error {
 	}
 	return syncDirectory(dir)
 }
+
+// writeSet is not atomicfile.WriteFile: MaterializeSets syncs the directory once for the whole batch.
 func writeSet(dir, dst string, b []byte) error {
 	// CreateTemp makes the file 0600, private to root like its directory.
 	f, e := os.CreateTemp(dir, ".rule-set-")

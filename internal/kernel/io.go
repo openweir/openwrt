@@ -12,6 +12,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/openweir/openwrt/internal/atomicfile"
 	"github.com/openweir/openwrt/internal/mirror"
 	"io"
 	"net"
@@ -249,30 +250,10 @@ func (s Source) metadata(ctx context.Context, tag, target, key string) (material
 	v, e := Verify(key, tag, target, m.manifest, m.sig, m.caps)
 	return m, v, e
 }
+
+// writeAtomic replaces a file whole or not at all (atomicfile.WriteFile).
 func writeAtomic(file string, data []byte, mode os.FileMode) error {
-	dir := filepath.Dir(file)
-	f, e := os.CreateTemp(dir, ".write-")
-	if e != nil {
-		return e
-	}
-	defer os.Remove(f.Name())
-	defer f.Close()
-	if e = f.Chmod(mode); e != nil {
-		return e
-	}
-	if _, e = f.Write(data); e != nil {
-		return e
-	}
-	if e = f.Sync(); e != nil {
-		return e
-	}
-	if e = f.Close(); e != nil {
-		return e
-	}
-	if e = os.Rename(f.Name(), file); e != nil {
-		return e
-	}
-	return syncDir(dir)
+	return atomicfile.WriteFile(file, data, mode, ".write-")
 }
 func syncDir(dir string) error {
 	f, e := os.Open(dir)

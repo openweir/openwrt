@@ -202,7 +202,7 @@ func TestGeodataPinnedOfflineAndInterruptedDownload(t *testing.T) {
 	client := &http.Client{Transport: setFixtureTransport(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader("damaged"))}, nil
 	})}
-	if e := acquireGeo(t.Context(), client, dir, file, p); e == nil {
+	if e := acquireGeo(t.Context(), client, file, p); e == nil {
 		t.Fatal("digest mismatch accepted")
 	}
 	if !pinnedFile(file, p) {
