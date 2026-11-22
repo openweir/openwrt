@@ -309,12 +309,29 @@ export async function records(ui) {
 						trust_ready: kernel.trust_ready,
 					},
 					environment: env,
-					sources: ui.sources.map((s) => ({
-						kind: s.kind,
-						ready: s.ready,
-						node_count: s.node_count,
-						rule_count: s.rule_count,
-					})),
+					// Codes, counts and settings only: no names, links, servers or notice details.
+					sources: ui.sources.map((s) => {
+						const t = s.template;
+						return {
+							kind: s.kind,
+							ready: s.ready,
+							format: s.format || null,
+							node_count: s.node_count,
+							rule_count: s.rule_count,
+							// The 分流规则 setting (unset: the subscription's own rules, or the built-in
+							// template when they are missing or too lossy) and what the current profile
+							// routes by: its own rules, the template, or the router's local default.
+							routing: s.rules || 'auto',
+							routing_in_effect: !s.ready ? null : s.local ? 'local' : t ? 'template' : 'subscription',
+							local: !!s.local,
+							local_fallback: !!s.local_fallback,
+							template: t
+								? { version: t.version, reason: t.reason, cached: !!t.cached, dropped: t.dropped || 0, total: t.total || 0 }
+								: null,
+							last_failure: s.last_failure || null,
+							notices: [...new Set((s.notices || []).map((n) => n.code))],
+						};
+					}),
 					events: events.map(({ time, source, level, message, detail }) => ({ time, source, level, message, detail })),
 				};
 				download('openweir-diagnostics.json', JSON.stringify(report, null, 2));
