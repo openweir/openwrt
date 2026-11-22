@@ -106,6 +106,7 @@ const diagnosticText = {
     uninstall: '准备卸载',
     node_failover_requested: '当前节点不可用，已请求切换节点',
     firewall_rules_restored: '防火墙重启或其他程序清除了代理规则，已自动恢复',
+    conflict_services_stopped: '已停用冲突的代理插件',
     connections_not_reset: '未能断开旧连接，已打开的页面可能仍走原线路，刷新或重开即可',
     dns_intercept: 'DNS 劫持未生效',
     dns_issue: 'DNS 配置存在问题',
@@ -187,7 +188,6 @@ const taskText = {
     kernel_read: '读取内核',
     kernel: '内核',
     conflicts: '检查插件冲突',
-    confirm_conflicts: '确认接管冲突',
     configure: '应用配置',
     latency: '节点测速',
 };
@@ -305,9 +305,28 @@ const errorText = {
     'context deadline exceeded': '操作超时',
     'context canceled': '操作已取消',
 };
+// The proxy plugins OpenWeir stops when it starts, by their init script names.
+const pluginNames = {
+    openclash: 'OpenClash', passwall: 'PassWall', passwall2: 'PassWall 2', homeproxy: 'HomeProxy',
+    v2raya: 'v2rayA', shadowsocksr: 'ShadowSocksR Plus+', nikki: 'Nikki', momo: 'Momo',
+};
+export const pluginName = (id) => pluginNames[id] || id;
+const conflictKinds = {
+    service: '服务', process: '进程', nft: 'nftables', xtables: 'iptables', route: '策略路由', listener: '端口',
+    dnsmasq: 'dnsmasq 配置', interface: '网络接口', autostart: '无法关闭开机自启', unverified: '无法检查',
+};
+// One thing the conflict scan found holding the network.
+export function conflictItem(kind, name) {
+    if (kind === 'service' || kind === 'autostart') name = pluginName(name);
+    return conflictKinds[kind] ? conflictKinds[kind] + ' ' + name : name;
+}
 const errorPatterns = [
     [/^local health: (.+)$/s, (m) => '内核健康检查连续失败 · ' + errorMessage(m[1])],
     [/^(.+) \(release failed: (.+)\)$/s, (m) => errorMessage(m[1]) + ' · 清理接管规则也失败：' + errorMessage(m[2])],
+    [/^network takeover blocked by: (.+)$/s, (m) => '仍有无法自动处理的冲突：' + m[1].split('; ').map((item) => {
+        const [kind, ...name] = item.split(' ');
+        return conflictItem(kind, name.join(' '));
+    }).join('、')],
     [/^member unavailable in (.+)$/s, (m) => '策略组 ' + m[1] + ' 中的所选节点不可用'],
     [/^saved member unavailable for (.+)$/s, (m) => '策略组 ' + m[1] + ' 保存的节点不可用'],
     [/^unavailable (?:device|rule) target (.+)$/s, (m) => '规则指向的策略组 ' + m[1] + ' 不可用'],
@@ -339,6 +358,15 @@ export function diagnosticMessage(text) {
     if (dns && diagnosticText[dns[1]]) return 'dnsmasq 实例 ' + dns[2] + ' · ' + diagnosticText[dns[1]];
     const prefix = /^(starting|releasing|release_failed|protected|fail_open|running) (.+)$/s.exec(text);
     return prefix ? diagnosticText[prefix[1]] + ' · ' + diagnosticMessage(prefix[2]) : errorMessage(text);
+}
+
+// Log entries whose detail completes the sentence.
+const detailSentences = {
+    conflict_services_stopped: (d) => diagnosticText.conflict_services_stopped + '：' + d.split(', ').map(pluginName).join('、'),
+};
+export function eventMessage(v) {
+    const sentence = v.detail && detailSentences[v.message];
+    return sentence ? sentence(v.detail) : diagnosticMessage(v.message);
 }
 
 export function tlsMessage(detail) {

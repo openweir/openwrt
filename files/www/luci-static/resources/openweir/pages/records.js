@@ -1,4 +1,4 @@
-import { card, h, select, segment, empty, clock, download, resultName, diagnosticMessage, datetime } from '../dom.js';
+import { card, h, select, segment, empty, clock, download, resultName, eventMessage, datetime } from '../dom.js';
 
 const levels = { info: '信息', warn: '警告', error: '错误' };
 const sources = {
@@ -124,7 +124,7 @@ export async function records(ui) {
 					(!state.category ||
 						(state.category === 'warn' ? ['warn', 'error'].includes(v.level) : v.level === state.category)) &&
 					(!state.source || v.source === state.source) &&
-					(!q || (v.message + ' ' + diagnosticMessage(v.message) + ' ' + v.source + ' ' + (sources[v.source] || '')).toLocaleLowerCase().includes(q))
+					(!q || (v.message + ' ' + eventMessage(v) + ' ' + v.source + ' ' + (sources[v.source] || '')).toLocaleLowerCase().includes(q))
 				);
 			const type =
 				v.result === 'failed'
@@ -169,7 +169,7 @@ export async function records(ui) {
 							{},
 							h('time', {}, clock(v.time)),
 							h('span', { class: 'ow-level ' + v.level }, levels[v.level] || v.level),
-							h('span', {}, diagnosticMessage(v.message) + (v.count > 1 ? ' ×' + v.count : '')),
+							h('span', {}, eventMessage(v) + (v.count > 1 ? ' ×' + v.count : '')),
 						),
 						h(
 							'div',

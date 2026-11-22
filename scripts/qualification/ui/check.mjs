@@ -187,6 +187,8 @@ try {
 		assert.equal(await page.title(), 'OpenWeir · LuCI');
 		const setup = page.getByRole('dialog', { name: '启用全屋代理' });
 		await setup.waitFor();
+		const plugins = setup.locator('.ow-environment > div').filter({ hasText: '其他代理插件' }).locator('strong');
+		assert.equal(await plugins.textContent(), 'OpenClash · 启动时自动停用');
 		await centered(setup, { width, height });
 		await page.screenshot({ path: path.join(output, 'onboarding-' + width + '.png') });
 		await page.keyboard.press('Escape');
@@ -484,6 +486,9 @@ try {
 					await row.waitFor();
 				}
 				await filter.fill('');
+				const stopped = page.locator('.ow-log').filter({has:page.getByText('已停用冲突的代理插件：OpenClash、PassWall 2', {exact:true})});
+				await stopped.locator('summary').click();
+				assert.equal(await stopped.locator('.ow-log-detail').textContent(), 'openclash, passwall2');
 			}
 			await page.screenshot({ path: path.join(output, name + '-' + width + '.png'), fullPage: true });
 			assert.equal(

@@ -48,6 +48,7 @@ export function fixture(empty = false, preparing = false) {
 		trace = [];
 	let serial = 0,
 		logs = [
+			{ time: Date.now(), source: 'service', level: 'warn', message: 'conflict_services_stopped', detail: 'openclash, passwall2' },
 			{ time: Date.now(), source: 'service', level: 'info', message: 'running' },
 			{ time: Date.now(), source: 'watchdog', level: 'warn', message: 'local_core_unavailable' },
 			{ time: Date.now(), source: 'core', level: 'error', message: 'network_unreachable', count: 3 },
@@ -238,7 +239,13 @@ export function fixture(empty = false, preparing = false) {
 				kernel.selected = r.args.tag;
 				return job({ selected: kernel.selected });
 			case 'conflicts':
-				return { resources: [], blocked: false };
+				// A fresh router often still runs the plugin it replaces.
+				return empty
+					? { blocked: true, resources: [
+						{ kind: 'nft', name: 'inet table openclash', service: 'openclash' },
+						{ kind: 'service', name: 'openclash', service: 'openclash' },
+					] }
+					: { resources: [], blocked: false };
 			case 'rule_hits':
 				return { Streaming: { count: 3, last: Date.now() } };
 			case 'routes':

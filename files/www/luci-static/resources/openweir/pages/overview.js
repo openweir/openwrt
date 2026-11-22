@@ -1,4 +1,4 @@
-import { diagnosticMessage, day } from '../dom.js';
+import { diagnosticMessage, day, pluginName, conflictItem } from '../dom.js';
 import { h, card, bytes, select, field, empty, segment, modeNames, clock, resultName } from '../dom.js';
 import { installLatest, kernelMessage, kernelStorage, kernelSummary } from './versions.js';
 
@@ -115,6 +115,16 @@ function firewallDetails(env) {
 		if (env.firewall_packages?.length) fields.push(['可提供所缺功能的软件包', env.firewall_packages.join('、')]);
 	}
 	return fields;
+}
+// Starting the proxy stops and disables other proxy plugins; only the rest needs a hand.
+function conflictSummary(found) {
+	if (!found) return '暂时无法检查';
+	if (!found.blocked) return '未检测到';
+	const resources = found.resources || [];
+	const plugins = [...new Set(resources.filter((x) => x.service).map((x) => pluginName(x.service)))];
+	const manual = [...new Set(resources.filter((x) => !x.service).map((x) => conflictItem(x.kind, x.name)))];
+	return [plugins.length && plugins.join('、') + ' · 启动时自动停用', manual.length && '需手动处理：' + manual.join('、')]
+		.filter(Boolean).join('；') || '暂时无法检查';
 }
 function environmentRows(fields) {
 	return h('div', { class: 'ow-environment' },
@@ -280,11 +290,10 @@ function deviceCard(ui, devices) {
 export async function overview(ui) {
 	const intent = ui.status.intent,
 		running = ui.status.phase === 'running';
-	const [prefs, devices, initialKernel, conflicts, cat, routes] = await Promise.all([
+	const [prefs, devices, initialKernel, cat, routes] = await Promise.all([
 		ui.rpc('network_preferences'),
 		ui.rpc('devices').catch(() => ({unavailable:true,items:[]})),
 		ui.kernelStatus(),
-		ui.rpc('conflicts').catch(() => ({unavailable:true})),
 		ui.catalog(),
 		ui.rpc('routes', { limit: 12 }),
 	]);
@@ -710,13 +719,13 @@ export async function overview(ui) {
 	);
 	const content = h('div', { class: 'ow-stack' });
 	if (!ui.sources.some((s) => !s.revoked)) {
-		const [{ onboarding }, env] = await Promise.all([
-			import('./sources.js'), ui.rpc('environment').catch(() => null),
+		const [{ onboarding }, env, conflicts] = await Promise.all([
+			import('./sources.js'), ui.rpc('environment').catch(() => null), ui.rpc('conflicts').catch(() => null),
 		]);
 		const environment = environmentRows([
 			['内核', kernelSummary(ui, kernel, kernelUpdates, true)],
 			...firewallDetails(env),
-			['其他代理插件', conflicts.unavailable ? '暂时无法检查' : conflicts.blocked ? '检测到冲突' : '未检测到'],
+			['其他代理插件', conflictSummary(conflicts)],
 			['可用存储', bytes(env?.free_bytes)],
 		]);
 		const open = () => onboarding(ui, environment, setup);
@@ -731,35 +740,6 @@ export async function overview(ui) {
 			try { sessionStorage.setItem(key, '1'); } catch (_) {}
 		};
 	}
-	if (conflicts.blocked)
-		content.append(
-			h(
-				'section',
-				{ class: 'ow-warning' },
-				h('strong', {}, '检测到其他服务正在接管流量'),
-				h('span', {}, [...new Set((conflicts.resources || []).map((x) => x.name))].join('、')),
-				ui.button('查看并处理', () => {
-					const d = ui.dialog(
-						'接管冲突',
-						h(
-							'div',
-							{ class: 'ow-stack' },
-							h('p', {}, '停止所列服务并重新检查残留规则。'),
-							...(conflicts.resources || []).map((x) => h('div', {}, x.name + ' · ' + x.kind)),
-							ui.button(
-								'确认停止并检查',
-								async () => {
-									await ui.run('confirm_conflicts', { token: conflicts.token });
-									d.close();
-									await ui.refresh();
-								},
-								'ow-primary',
-							),
-						),
-					);
-				}),
-			),
-		);
 	if (ui.status.error)
 		content.append(
 			h(
