@@ -9,7 +9,11 @@ import (
 	"syscall"
 )
 
-const ruleImportRoot = "/etc/openweir/imports/rulesets"
+// ImportDir holds the files a user copies to the router for its subscriptions to read, such as
+// the local rule files under rulesets/source-<id>.
+const ImportDir = "/etc/openweir/imports"
+
+const ruleImportRoot = ImportDir + "/rulesets"
 
 var sidecarBase = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_.-]{0,120}\.(yaml|yml|txt|list|mrs)$`)
 

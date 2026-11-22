@@ -31,7 +31,7 @@ opkg install ./luci-app-openweir_*.ipk                          # 23.05 / 24.10
 apk add --no-network --allow-untrusted ./luci-app-openweir-*.apk  # 25.12
 ```
 
-Later updates install from LuCI with **检查更新** (Check for updates). Removing the package restores the direct network; run `openweird purge` first to also delete the downloaded core and subscriptions.
+Later updates install from LuCI with **检查更新** (Check for updates). Removing the package restores the direct network; run `openweird purge` first to also delete the downloaded core, subscriptions, rule sets and geodata, and the rule files you imported.
 
 ## Getting started
 

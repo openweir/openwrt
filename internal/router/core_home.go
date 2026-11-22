@@ -21,6 +21,10 @@ import (
 const coreHome = RunDir + "/mihomo"
 const packagedRules = "/usr/share/openweir/rules"
 
+// GeodataDir keeps the geodata files the core's GEOIP and GEOSITE rules need, downloaded on
+// demand (subscription.PrepareGeodata).
+const GeodataDir = Root + "/geodata"
+
 // The core runs as root (coreCommand), so its home and device lists, like the rule sets
 // (subscription.MaterializeSets), are private to root: 0700 directories and 0600 files.
 func privateDir(path string) error {
@@ -75,7 +79,7 @@ func prepareMihomo(p subscription.Profile) error {
 	}
 	for name, target := range map[string]string{
 		"rulesets": Root + "/rulesets", "builtin": packagedRules, "cnlists": cnlist.Dir,
-		"GeoSite.dat": Root + "/geodata/GeoSite.dat", "GeoIP.dat": Root + "/geodata/GeoIP.dat", "country.mmdb": Root + "/geodata/country.mmdb", "ASN.mmdb": Root + "/geodata/ASN.mmdb",
+		"GeoSite.dat": GeodataDir + "/GeoSite.dat", "GeoIP.dat": GeodataDir + "/GeoIP.dat", "country.mmdb": GeodataDir + "/country.mmdb", "ASN.mmdb": GeodataDir + "/ASN.mmdb",
 	} {
 		path := filepath.Join(coreHome, name)
 		if err := os.Symlink(target, path); err != nil {
@@ -111,7 +115,7 @@ func prepareGeo(ctx context.Context, config []byte, p subscription.Profile) erro
 		}
 	}
 	cfg.Rules = append(cfg.Rules, subscription.GeoRules(active)...)
-	return subscription.PrepareGeodata(ctx, cfg.Rules, Root+"/geodata", packagedRules+"/GEODATA")
+	return subscription.PrepareGeodata(ctx, cfg.Rules, GeodataDir, packagedRules+"/GEODATA")
 }
 
 func macProviderName(mac string) string { return "openweir-device-" + strings.ReplaceAll(mac, ":", "") }

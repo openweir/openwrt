@@ -31,7 +31,7 @@ opkg install ./luci-app-openweir_*.ipk                          # 23.05 / 24.10
 apk add --no-network --allow-untrusted ./luci-app-openweir-*.apk  # 25.12
 ```
 
-之后在 LuCI 里点「检查更新」即可升级。卸载会自动恢复直连；如需同时删除已下载的内核和订阅，先运行 `openweird purge`。
+之后在 LuCI 里点「检查更新」即可升级。卸载会自动恢复直连；如需同时删除已下载的内核、订阅、规则集和地理数据，以及你导入的规则文件，先运行 `openweird purge`。
 
 ## 快速上手
 

@@ -689,6 +689,15 @@ func uninstall(ctx context.Context) error {
 	}
 	return nil
 }
+
+// purgePaths lists what `openweird purge` deletes once the network is direct again: the
+// kernels, subscriptions and accounts, private state, rule sets, CN lists, the routing
+// template cache, geodata, the files the user imported and pending uploads.
+func purgePaths() []string {
+	return []string{router.Root + "/kernel", "/tmp/openweir/kernel", router.Root + "/mihomo-kernel", router.Root + "/sources", router.Root + "/private", router.Root + "/rulesets", cnlist.Dir, "/tmp/openweir/mihomo-kernel", uploadRoot,
+		subscription.TemplateDir, router.GeodataDir, subscription.ImportDir}
+}
+
 func runDaemon() {
 	ctx, end := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer end()
@@ -708,7 +717,7 @@ func runDaemon() {
 		e = uninstall(c)
 		stop()
 		if e == nil {
-			for _, p := range []string{router.Root + "/kernel", "/tmp/openweir/kernel", router.Root + "/mihomo-kernel", router.Root + "/sources", router.Root + "/private", router.Root + "/rulesets", cnlist.Dir, "/tmp/openweir/mihomo-kernel", uploadRoot} {
+			for _, p := range purgePaths() {
 				if e = os.RemoveAll(filepath.Clean(p)); e != nil {
 					break
 				}
