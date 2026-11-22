@@ -149,16 +149,16 @@ export async function proxy(ui) {
 		const used = memberRoute.at(-1) || id;
 		const unavailable = node?.availability === 'unsupported' ? '当前内核不支持' :
 			node?.availability === 'unverified' ? '待选择内核后确认' : '';
-		const detail = h(
-			'small',
-			{ class: 'ow-muted' },
-			unavailable || (memberRoute.length
+		const detailText =
+			unavailable ||
+			(memberRoute.length
 				? '→ ' + memberRoute.map(label).join(' → ')
 				: protocolNames[node?.protocol] ||
-						node?.protocol ||
-						kindName[node?.kind] ||
-						(id === '@direct' ? '直连' : id === '@reject' ? '拦截' : '策略组')),
-		);
+					node?.protocol ||
+					kindName[node?.kind] ||
+					(id === '@direct' ? '直连' : id === '@reject' ? '拦截' : '策略组'));
+		// The narrow card shortens this line; the title keeps it whole.
+		const detail = h('small', { class: 'ow-muted', title: detailText }, detailText);
 		const status = active
 			? global
 				? '当前出口'
@@ -297,7 +297,7 @@ export async function proxy(ui) {
 					h(
 						'span',
 						{ class: 'ow-group-title' },
-						h('strong', {}, g.name),
+						h('strong', { title: g.name }, g.name),
 						h('small', {}, (kindName[g.kind] || g.kind) + ' · ' + g.members.length),
 					),
 					h('span', { class: 'ow-truncate ow-group-route', title: routeText }, routeText),
