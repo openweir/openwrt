@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -49,6 +50,24 @@ func main() {
 			panic(fmt.Sprintf("DNS via %s %s: %v (%v)", os.Args[2], os.Args[3], ips, err))
 		}
 		fmt.Println(ips[0])
+		return
+	}
+	if os.Args[1] == "refused" {
+		// refused NETWORK HOST PORT: succeed only when the router refuses the connection outright,
+		// as a reject rule does: a listener accepting it or a drop timing it out both fail.
+		c, e := net.DialTimeout(os.Args[2], net.JoinHostPort(os.Args[3], os.Args[4]), 3*time.Second)
+		if e == nil {
+			defer c.Close()
+			_ = c.SetDeadline(time.Now().Add(3 * time.Second))
+			// UDP has no handshake: the ICMP error answering the first datagram fails the read.
+			if _, e = c.Write([]byte("origin")); e == nil {
+				var b [64]byte
+				_, e = c.Read(b[:])
+			}
+		}
+		if !errors.Is(e, syscall.ECONNREFUSED) {
+			panic(fmt.Sprintf("%s to %s port %s was not refused: %v", os.Args[2], os.Args[3], os.Args[4], e))
+		}
 		return
 	}
 	if os.Args[1] == "server" {

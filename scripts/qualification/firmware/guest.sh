@@ -40,7 +40,9 @@ check_clean() {
   ! nft list table inet openweir >/dev/null 2>&1 && nft list table inet unrelated >/dev/null
  else
   for xt in iptables-legacy ip6tables-legacy; do
-   "$xt" -S unrelated >/dev/null && ! "$xt" -t mangle -S OPENWEIR_LAN >/dev/null 2>&1 || return 1
+   # The TProxy listener guard and the allowances are owned INPUT rules.
+   "$xt" -S unrelated >/dev/null && ! "$xt" -t mangle -S OPENWEIR_LAN >/dev/null 2>&1 &&
+    ! "$xt" -S INPUT | grep -q openweir-owned-v1 || return 1
   done
  fi
 }

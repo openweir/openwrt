@@ -228,6 +228,20 @@ start_core() {
   sleep 1
  done
 }
+# Only packets the takeover marked reach the transparent listener (fw4's listener_guard chain,
+# fw3's INPUT guard): a device connecting to it straight is refused, never served by the core.
+listener_refused() {
+ for target in 192.168.50.1 fd00:50::1; do
+  case "$target" in *:*) family=6 ;; *) family=4 ;; esac
+  for protocol in tcp udp; do
+   ip netns exec lan /tmp/peer refused "$protocol$family" "$target" 19762 ||
+    { echo "direct $protocol$family connection to the TProxy listener was not refused" >&2; return 1; }
+  done
+ done
+}
+listener_guard() {
+ "$1" -w 2 "$2" INPUT ! -i lo -p "$3" --dport 19762 -m mark ! --mark 0x4f57/0xffff -m comment --comment openweir-owned-v1 -j REJECT
+}
 blocked_queries() {
  pids=
  for family in 4 6; do
@@ -293,11 +307,24 @@ CFG
  "$helper" apply "gid=$core_gid" || { sh -x "$helper" apply "gid=$core_gid"; exit 1; }
  rm -f /tmp/reload-fw4; wait "$reloader"
  wire proxy
+ if [ "$method" = tproxy ]; then listener_refused; fi
  grep -q '192.168.50.1:80' /var/run/openweir/network/management.json
  [ ! -e /tmp/instance-unmanaged/99-openweir-upstream.conf ]
  dns_wire intercept
  reload_firewall
  "$helper" verify
+ if [ "$method" = tproxy ] && [ "${TEST_FIREWALL:-fw4}" = fw3 ]; then
+  # A guard deleted by hand is a missing rule like any other: verify notices it in either
+  # family and repair puts it back.
+  for xt in iptables-legacy ip6tables-legacy; do
+   listener_guard "$xt" -D udp
+   if "$helper" verify; then echo "verify missed the listener guard deleted from $xt" >&2; exit 1; fi
+   [ "$("$helper" repair)" = repaired ]
+   listener_guard "$xt" -C udp
+   listener_guard "$xt" -C tcp
+  done
+  listener_refused
+ fi
  wire proxy
  dns_wire intercept
  # The ordinary stop path must return both dnsmasq and hand-set DNS to the
@@ -369,6 +396,7 @@ NFT
    "$xt" -S unrelated >/dev/null
    "$xt" -t nat -C PREROUTING -i unmanaged-r -p udp --dport 65053 -m comment --comment fixture-foreign -j RETURN
    if "$xt" -t nat -S | grep -q openweir-owned-v1; then echo 'owned NAT rule remained after release' >&2; exit 1; fi
+   if "$xt" -S INPUT | grep -q openweir-owned-v1; then echo 'owned INPUT rule remained after release' >&2; exit 1; fi
    "$xt" -C INPUT -i guest-r -m mark --mark 0x4f57/0xffff -j DROP
    if "$xt" -t mangle -S OPENWEIR_LAN >/dev/null 2>&1; then exit 1; fi
   done
@@ -473,6 +501,9 @@ if [ "${TEST_FIREWALL:-fw4}" = fw3 ]; then
  "$xt" -t mangle -X OPENWEIR_LAN
  legacy_prepare
  legacy_apply
+ for protocol in tcp udp; do listener_guard "$xt" -C "$protocol"; done
+ # Without the IPv6 takeover the core listens on IPv4 alone; IPv6 is left untouched.
+ if ip6tables-legacy -S INPUT | grep -q openweir-owned-v1; then echo 'IPv6 guard without the IPv6 takeover' >&2; exit 1; fi
  "$xt" -t mangle -A OPENWEIR_LAN -m comment --comment fixture-foreign -j RETURN
  "$xt" -t mangle -N fixture_ref
  "$xt" -t mangle -A fixture_ref -j OPENWEIR_LAN
@@ -480,4 +511,5 @@ if [ "${TEST_FIREWALL:-fw4}" = fw3 ]; then
  "$xt" -t mangle -C OPENWEIR_LAN -m comment --comment fixture-foreign -j RETURN
  "$xt" -t mangle -C fixture_ref -j OPENWEIR_LAN
  if "$xt" -t mangle -S PREROUTING | grep -q OPENWEIR_LAN; then exit 1; fi
+ if "$xt" -S INPUT | grep -q openweir-owned-v1; then echo 'listener guard remained after removal' >&2; exit 1; fi
 fi
