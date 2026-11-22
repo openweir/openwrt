@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -79,15 +80,67 @@ func TestSetFileLimitReachesChildren(t *testing.T) {
 	if got := child(); got != hard+" "+hard {
 		t.Fatal(got, hard)
 	}
-	if os.Geteuid() == 0 {
+	if os.Geteuid() != 0 {
+		// Refused: children still get the soft limit raised to the hard one.
+		if err := setFileLimit(lim.Max + 1); !errors.Is(err, syscall.EPERM) {
+			t.Fatal(err)
+		}
+		if got := child(); got != hard+" "+hard {
+			t.Fatal(got, hard)
+		}
 		return
 	}
-	// Refused: children still get the soft limit raised to the hard one.
-	if err := setFileLimit(lim.Max + 1); !errors.Is(err, syscall.EPERM) {
+	// Root may hold up to fs.nr_open but no more: asked for more, children get that ceiling.
+	b, err := os.ReadFile("/proc/sys/fs/nr_open")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if got := child(); got != hard+" "+hard {
-		t.Fatal(got, hard)
+	nrOpen, err := strconv.ParseUint(strings.TrimSpace(string(b)), 10, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Later tests start processes of their own: hand them the limit this test began with.
+	t.Cleanup(func() { _ = syscall.Setrlimit(syscall.RLIMIT_NOFILE, &lim) })
+	if setFileLimit(nrOpen) != nil {
+		t.Skip("this root cannot raise its hard limit (no CAP_SYS_RESOURCE)")
+	}
+	// Start from procd's default hard limit, which it leaves when its own setrlimit fails.
+	if err := setFileLimit(min(nrOpen, 4096)); err != nil {
+		t.Fatal(err)
+	}
+	if err := setFileLimit(nrOpen + 1); !errors.Is(err, syscall.EPERM) {
+		t.Fatal(err)
+	}
+	if got, want := child(), strings.TrimSpace(string(b)); got != want+" "+want {
+		t.Fatal(got, want)
+	}
+}
+
+func TestFileLimitFallbacks(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		nrOpen string
+		hard   uint64
+		want   []uint64
+	}{
+		// fs.nr_open below n: root can still set both limits to it, before keeping procd's 4096.
+		{"nr_open below n", "524288\n", 4096, []uint64{524288, 4096}},
+		{"nr_open at hard", "65536\n", 65536, []uint64{65536}},
+		// n was refused for another reason (no CAP_SYS_RESOURCE): retrying it is pointless.
+		{"nr_open above n", "1048576\n", 4096, []uint64{4096}},
+		{"nr_open equal to n", "1000000\n", 4096, []uint64{4096}},
+		{"nr_open unreadable", "", 4096, []uint64{4096}},
+		{"nr_open malformed", "lots\n", 4096, []uint64{4096}},
+		{"nr_open zero", "0\n", 4096, []uint64{4096}},
+		// A hard limit of 0 would leave the core no descriptor; one at n or above was refused.
+		{"hard unknown", "524288\n", 0, []uint64{524288}},
+		{"hard above n", "", 2000000, nil},
+		{"nothing to try", "", 0, nil},
+	} {
+		got := fileLimitFallbacks(coreFiles, []byte(c.nrOpen), c.hard)
+		if !slices.Equal(got, c.want) {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
 	}
 }
 
