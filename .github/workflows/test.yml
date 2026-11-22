@@ -1,6 +1,11 @@
 name: Router service CI
+# Pushes run only for the two long-lived branches, which publish (develop a preview, main a
+# release), and for release tags (the release job below); any other branch is checked through
+# its pull request, so it does not run twice. workflow_dispatch runs any branch on demand.
 on:
   push:
+    branches: [main, develop]
+    tags: ['v*']
   pull_request:
   workflow_dispatch:
 permissions:
