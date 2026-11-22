@@ -43,7 +43,7 @@ apk add --no-network --allow-untrusted ./luci-app-openweir-*.apk  # 25.12
 
 ## 常见问题
 
-**能和 OpenClash、PassWall、HomeProxy 一起用吗？** 不能。检测到它们在运行时不会启动，请先停用。
+**能和 OpenClash、PassWall、HomeProxy 一起用吗？** 不能。OpenWeir 启动时会自动停止它们并关闭开机自启；无法自动清理的残留会在启动错误里列出。
 
 **AdGuard Home、SmartDNS 怎么办？** 开启 DNS 保护期间，它们作为 dnsmasq 上游会被暂时摘下，停止后自动恢复。想继续用它们，关闭 DNS 保护即可。
 

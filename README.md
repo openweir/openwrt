@@ -43,7 +43,7 @@ If the start is refused, **检查运行环境** (Check environment) tells you wh
 
 ## FAQ
 
-**Can it run with OpenClash, PassWall or HomeProxy?** No. They are detected, and OpenWeir won't start until they are stopped.
+**Can it run with OpenClash, PassWall or HomeProxy?** No. OpenWeir stops them and disables their autostart when it starts. Anything they leave behind that it cannot remove is listed in the start error.
 
 **AdGuard Home or SmartDNS?** While DNS protection is on, they are set aside as dnsmasq's upstream and restored afterwards. Turn DNS protection off to keep them in charge.
 
