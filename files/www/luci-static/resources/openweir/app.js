@@ -151,7 +151,9 @@ export function mount(root, invoke) {
 	function button(text, handler, cls = '') {
 		const el = h('button', { type: 'button', class: cls }, text);
 		el.addEventListener('click', async (ev) => {
-			if (el.disabled || el.hasAttribute('aria-busy')) {
+			// A control the view marks aria-disabled stays focusable and ignores presses, as it
+			// does while its own action runs.
+			if (el.disabled || el.hasAttribute('aria-busy') || el.getAttribute('aria-disabled') === 'true') {
 				ev.preventDefault();
 				return;
 			}

@@ -360,6 +360,10 @@
 .ow button.ow-power[aria-busy='true'] {
 	opacity: 1;
 }
+/* Disconnecting, a press waits for the router (aria-disabled, still focusable). */
+.ow button.ow-power[aria-disabled='true'] {
+	cursor: default;
+}
 /* Each pulse rests on this ring, so it starts and stops without a jump. */
 .ow button.ow-power.pulse {
 	box-shadow: 0 0 0 7px color-mix(in srgb, var(--ow-accent) 24%, transparent);

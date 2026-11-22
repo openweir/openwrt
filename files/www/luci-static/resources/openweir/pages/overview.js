@@ -377,6 +377,10 @@ function paintPower(el, look, [text, name], before, motion) {
 	}
 	word.textContent = text;
 	el.setAttribute('aria-label', name);
+	// Disconnecting, a press would do nothing until the router lets go: the button says so and
+	// stays in the tab order. While its own press runs, the press keeps it marked (app.js button).
+	if (look === 'disconnecting') el.setAttribute('aria-disabled', 'true');
+	else if (!el.hasAttribute('aria-busy')) el.removeAttribute('aria-disabled');
 	return { look, since, text };
 }
 // Runs fn on the first frame el is in the page, before that frame is painted. The wait ends when
@@ -439,7 +443,7 @@ export async function overview(ui) {
 		ui.memory.power = { ...shown, el: power };
 	};
 	const start = async () => {
-		// Disconnecting: a press waits for the router to let go.
+		// Disconnecting: a press waits for the router to let go (the button is aria-disabled).
 		if (look === 'disconnecting') return;
 		if (look !== 'off') {
 			const d = ui.dialog(
