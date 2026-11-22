@@ -11,6 +11,7 @@ on:
 jobs:
   qualify:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
     concurrency:
@@ -62,6 +63,7 @@ jobs:
     needs: qualify
     if: needs.qualify.outputs.publish == 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       actions: read
       contents: write
