@@ -22,10 +22,10 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       HEAD_SHA: ${{ github.sha }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
       - name: Use the version CI worked out
@@ -47,7 +47,7 @@ jobs:
             echo "publish=false" >> "$GITHUB_OUTPUT"
             echo "A later develop commit has superseded this CI run." >> "$GITHUB_STEP_SUMMARY"
           fi
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         if: steps.current.outputs.publish == 'true'
         with:
           pattern: preview-installer-*

@@ -40,12 +40,12 @@ jobs:
             echo "main is at this commit; its CI run covers it." >> "$GITHUB_STEP_SUMMARY"
           fi
           echo "run=$run" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: steps.same.outputs.run == 'true'
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         if: steps.same.outputs.run == 'true'
         with:
           go-version-file: go.mod
@@ -67,17 +67,17 @@ jobs:
     env:
       MIHOMO_REF: 15fb245e92789566cff12e3060ae861534dcf892
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
       # The pinned core only changes with its commit or the Go toolchain.
       - id: core-cache
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/mihomo
           key: mihomo-linux-arm64-${{ env.MIHOMO_REF }}-${{ hashFiles('go.mod') }}
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: steps.core-cache.outputs.cache-hit != 'true'
         with:
           repository: openweir/mihomo
@@ -144,12 +144,12 @@ jobs:
     env:
       PLAYWRIGHT_VERSION: 1.62.1
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
       # The browser download is reused; its system libraries are still installed every run.
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: playwright-chromium-${{ runner.os }}-${{ env.PLAYWRIGHT_VERSION }}
@@ -166,7 +166,7 @@ jobs:
     # test's own 10-minute limit per package to fire first and print the hung goroutines.
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check router shell scripts
         run: |
           set -eu
@@ -179,7 +179,7 @@ jobs:
             files/usr/libexec/openweir/procd-delete files/usr/libexec/rpcd/openweir \
             files/etc/init.d/openweir files/etc/hotplug.d/*/*-openweir \
             packaging/openwrt/{activate-runtime,runtime-abi,package-update,package-recovery}
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
       - run: go test -race ./...
@@ -197,8 +197,8 @@ jobs:
     # One cross-compiled Go program per ABI.
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-go@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
       - name: Cross-compile the bundled management commands
@@ -207,7 +207,7 @@ jobs:
           ABI: ${{ matrix.abi }}
           VERSION: ${{ needs.gate.outputs.version }}
         run: packaging/openwrt/build-runtime.sh "$ABI" "$VERSION" dist/runtime
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: runtime-${{ matrix.abi }}
           path: dist/runtime/
