@@ -54,7 +54,9 @@ func NewSystem() *System { return &System{records: NewRecords()} }
 // confirmPeriod is how long a start must stay healthy before it counts as running.
 const confirmPeriod = 3 * time.Second
 
-// The confirmation starts after core listeners and the network takeover are in place.
+// The confirmation starts after core listeners and the network takeover are in place. The
+// countdown runs to the end of the current healthy streak: a failed check starts it again, at
+// most twice (confirmFailures), and the start's end clears it.
 func (s *System) ConfirmationSeconds() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -412,7 +414,9 @@ func (s *System) Start(ctx context.Context, i Intent) (err error) {
 	s.method = n.Method
 	s.family6 = n.Family6
 	s.mu.Unlock()
-	if e = waitCoreReady(ctx, done, 350*time.Millisecond, s.ready); e != nil {
+	// A core that exits before the start counts as running fails it with the reason its last
+	// lines gave, if any.
+	exitReason := func(e error) error {
 		select {
 		case <-done:
 			if ctx.Err() == nil && coreLog.terminal != "" {
@@ -421,6 +425,9 @@ func (s *System) Start(ctx context.Context, i Intent) (err error) {
 		default:
 		}
 		return e
+	}
+	if e = waitCoreReady(ctx, done, 350*time.Millisecond, s.ready); e != nil {
+		return exitReason(e)
 	}
 	validateAuthorization := func() error {
 		return checkStartupSources(i, sources, startupSources, config, compile)
@@ -485,13 +492,15 @@ applyLoop:
 	// Every start, not only a new core's trial, holds four healthy checks in a row (checked
 	// every second) before it counts as running: a core or takeover that comes up and falls
 	// over at once fails the start here instead of after the page already shows it connected.
-	window := confirmPeriod
-	s.mu.Lock()
-	s.confirmUntil = time.Now().Add(window)
-	s.mu.Unlock()
+	// The core exiting fails it at once, and so does a third failed check (confirmFailures),
+	// so a broken start is retried in seconds rather than after the start deadline.
 	defer func() { s.mu.Lock(); s.confirmUntil = time.Time{}; s.mu.Unlock() }()
-	if e = confirmWindow(ctx, window, time.Second, time.Second, s.verify, s.beat); e != nil {
-		return e
+	if e = confirmWindow(ctx, confirmation{
+		window: confirmPeriod, interval: time.Second, heartbeat: time.Second,
+		check: s.verify, beat: s.beat, exited: done,
+		until: func(t time.Time) { s.mu.Lock(); s.confirmUntil = t; s.mu.Unlock() },
+	}); e != nil {
+		return exitReason(e)
 	}
 	if e = validateAuthorization(); e != nil {
 		return e

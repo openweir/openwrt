@@ -259,6 +259,10 @@ func startupTimeout(ctx context.Context, stage string, last error) error {
 	return fmt.Errorf("%s: %w (last failed check: %w)", stage, ctx.Err(), last)
 }
 
+// errCoreExited fails a start whose core exits before it counts as running; Start reports the
+// reason the core's last lines gave instead, when they gave one.
+var errCoreExited = errors.New("core exited during startup")
+
 func waitCoreReady(ctx context.Context, exited <-chan struct{}, interval time.Duration, ready func(context.Context) error) error {
 	t := time.NewTicker(interval)
 	defer t.Stop()
@@ -266,7 +270,7 @@ func waitCoreReady(ctx context.Context, exited <-chan struct{}, interval time.Du
 	for {
 		select {
 		case <-exited:
-			return errors.New("core exited during startup")
+			return errCoreExited
 		default:
 		}
 		err := ready(ctx)
@@ -284,16 +288,35 @@ func waitCoreReady(ctx context.Context, exited <-chan struct{}, interval time.Du
 		case <-ctx.Done():
 			return startupTimeout(ctx, "waiting for local core readiness", last)
 		case <-exited:
-			return errors.New("core exited during startup")
+			return errCoreExited
 		case <-t.C:
 		}
 	}
 }
 
-// Full-path checks establish the confirmation window. The core and network
-// have already passed startup and apply checks on entry. A slow first LAN
-// check must keep renewing the independent heartbeat while the core is ready.
-func confirmWindow(ctx context.Context, window, interval, heartbeat time.Duration, check, beat func(context.Context) error) error {
+// confirmFailures is how many failed checks fail a confirmation. A failed check, or a heartbeat
+// failed since the last one, restarts the healthy streak: one or two are a takeover settling
+// (dnsmasq restarting), and the third, in a row or not, fails the start with what failed. A
+// takeover that stays broken thus fails in about three seconds and one that flaps within three
+// streaks, not at the start deadline. It counts checks, not time, so a slow router's slow but
+// healthy checks never run out a clock.
+const confirmFailures = 3
+
+// A confirmation holds a start until full-path checks stay healthy for a whole window. The core
+// and network have already passed startup and apply checks on entry. A slow first LAN check must
+// keep renewing the independent heartbeat while the core is ready.
+type confirmation struct {
+	window, interval, heartbeat time.Duration
+	check                       func(context.Context) error // the core and the LAN path
+	beat                        func(context.Context) error // the core alone, between checks
+	// exited closes when the core exits: the confirmation fails at once, and a check or
+	// heartbeat in progress is canceled.
+	exited <-chan struct{}
+	// until, if set, is told when the current healthy streak completes, for the countdown.
+	until func(time.Time)
+}
+
+func confirmWindow(ctx context.Context, w confirmation) error {
 	c, stop := context.WithCancel(ctx)
 	done := make(chan struct{})
 	var mayHeartbeat atomic.Bool
@@ -301,15 +324,18 @@ func confirmWindow(ctx context.Context, window, interval, heartbeat time.Duratio
 	var beatFailure atomic.Pointer[error]
 	go func() {
 		defer close(done)
-		t := time.NewTicker(heartbeat)
+		t := time.NewTicker(w.heartbeat)
 		defer t.Stop()
 		for {
 			select {
 			case <-c.Done():
 				return
+			case <-w.exited:
+				stop()
+				return
 			case <-t.C:
 				if mayHeartbeat.Load() {
-					if err := beat(c); err != nil && c.Err() == nil {
+					if err := w.beat(c); err != nil && c.Err() == nil {
 						beatFailure.Store(&err)
 					}
 				}
@@ -317,15 +343,27 @@ func confirmWindow(ctx context.Context, window, interval, heartbeat time.Duratio
 		}
 	}()
 	defer func() { stop(); <-done }()
-	t := time.NewTicker(interval)
+	report := func(t time.Time) {
+		if w.until != nil {
+			w.until(t)
+		}
+	}
+	report(time.Now().Add(w.window))
+	t := time.NewTicker(w.interval)
 	defer t.Stop()
 	var since time.Time
 	var lastFailure error
+	failures := 0
 	for {
-		err := check(ctx)
-		if failure := beatFailure.Swap(nil); failure != nil {
-			since = time.Time{}
-			lastFailure = *failure
+		select {
+		case <-w.exited:
+			return errCoreExited
+		default:
+		}
+		err := w.check(c)
+		beat := beatFailure.Swap(nil)
+		if beat != nil {
+			lastFailure = *beat
 		}
 		if ctx.Err() != nil {
 			if lastFailure == nil {
@@ -333,21 +371,38 @@ func confirmWindow(ctx context.Context, window, interval, heartbeat time.Duratio
 			}
 			return startupTimeout(ctx, "confirming core and LAN health", lastFailure)
 		}
+		// A check the exit canceled, or one that failed because the core went away, is not
+		// the cause.
+		select {
+		case <-w.exited:
+			return errCoreExited
+		default:
+		}
 		mayHeartbeat.Store(err == nil)
+		if err != nil {
+			if w.window == 0 {
+				return err
+			}
+			lastFailure = err
+		}
+		if err != nil || beat != nil {
+			since = time.Time{}
+			if failures++; failures >= confirmFailures {
+				return fmt.Errorf("local health: %w", lastFailure)
+			}
+		}
+		now := time.Now()
 		if err == nil {
-			now := time.Now()
 			if since.IsZero() {
 				since = now
+				report(since.Add(w.window))
 			}
-			if now.Sub(since) >= window {
+			if now.Sub(since) >= w.window {
 				return nil
 			}
 		} else {
-			if window == 0 {
-				return err
-			}
-			since = time.Time{}
-			lastFailure = err
+			// The next check, an interval away, can start a new streak at the earliest.
+			report(now.Add(w.interval + w.window))
 		}
 		select {
 		case <-ctx.Done():
@@ -355,6 +410,8 @@ func confirmWindow(ctx context.Context, window, interval, heartbeat time.Duratio
 				lastFailure = *failure
 			}
 			return startupTimeout(ctx, "confirming core and LAN health", lastFailure)
+		case <-w.exited:
+			return errCoreExited
 		case <-t.C:
 		}
 	}
