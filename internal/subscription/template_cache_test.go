@@ -9,9 +9,11 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/openweir/openwrt/internal/atomicfile"
 	"github.com/openweir/subconv/rules"
 )
 
@@ -209,5 +211,78 @@ func TestTemplateSweep(t *testing.T) {
 	}
 	if !slices.Equal(left, []string{templateCurrent, filepath.Base(gen), templateLock}) {
 		t.Fatal(left)
+	}
+}
+
+// failSyncs makes the copy's directory syncs fail with EIO while fail says so, until the test
+// ends.
+func failSyncs(t *testing.T, fail func(dir string) bool) {
+	t.Helper()
+	templateSyncDir = func(dir string) error {
+		if fail(dir) {
+			return syscall.EIO
+		}
+		return atomicfile.SyncDir(dir)
+	}
+	t.Cleanup(func() { templateSyncDir = atomicfile.SyncDir })
+}
+
+func manifestVersion(t *testing.T, s *templateStage) int64 {
+	t.Helper()
+	raw, ok := s.Get(rules.ManifestPath)
+	if !ok {
+		return 0
+	}
+	m, err := rules.ParseManifest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return m.Version
+}
+
+// A sync that fails after the link moved leaves the new generation, which the link names, and
+// the one it replaced until a later sweep; one that fails before leaves the copy as it was.
+func TestTemplatePromotionSurvivesAFailedSync(t *testing.T) {
+	root := t.TempDir()
+	s := &templateStage{root: root}
+	stageVersion(t, s, 1, version1)
+	s.promote()
+	s.close()
+	gen1 := current(t, root)
+
+	// The generation's own sync fails: nothing changes.
+	failSyncs(t, func(dir string) bool { return dir != root })
+	s = &templateStage{root: root}
+	stageVersion(t, s, 2, map[string]string{rules.TemplatePath: "t2", "providers/a.txt": "a"})
+	s.promote()
+	s.close()
+	if names, _ := os.ReadDir(root); current(t, root) != gen1 || len(names) != 3 {
+		t.Fatal("a generation that failed its sync was kept or published", names)
+	}
+
+	// The root's sync after the rename fails (the link is in place, its replacement gone).
+	failSyncs(t, func(dir string) bool {
+		_, err := os.Lstat(filepath.Join(root, templateCurrentNext))
+		return dir == root && err != nil
+	})
+	s = &templateStage{root: root}
+	stageVersion(t, s, 2, map[string]string{rules.TemplatePath: "t2", "providers/a.txt": "a"})
+	s.promote()
+	s.close()
+	gen2 := current(t, root)
+	if _, err := os.Stat(gen2); gen2 == gen1 || err != nil {
+		t.Fatal("the link names a generation that is gone", err)
+	}
+	if _, err := os.Stat(gen1); err != nil {
+		t.Fatal("the generation a power cut may bring back went", err)
+	}
+	failSyncs(t, func(string) bool { return false })
+	next := &templateStage{root: root}
+	if v := manifestVersion(t, next); v != 2 {
+		t.Fatal("the next refresh reads version", v)
+	}
+	next.close()
+	if _, err := os.Stat(gen1); err == nil {
+		t.Fatal("a later sweep left the replaced generation")
 	}
 }

@@ -164,10 +164,11 @@ func (s *templateStage) promote() {
 	if err != nil {
 		return
 	}
+	published := false
 	if err = fillGeneration(dir, base, staged, m); err == nil {
-		err = switchGeneration(s.root, filepath.Base(dir))
+		published, err = switchGeneration(s.root, filepath.Base(dir))
 	}
-	if err != nil {
+	if !published {
 		os.RemoveAll(dir)
 		return
 	}
@@ -175,6 +176,11 @@ func (s *templateStage) promote() {
 	if s.base != nil {
 		s.base.Close()
 		s.base = nil
+	}
+	// The link names the new generation, but the sync after the rename failed: a power cut may
+	// still bring back the one it replaced, which stays until a later sweep.
+	if err != nil {
+		return
 	}
 	sweepTemplate(s.root)
 }
@@ -219,30 +225,35 @@ func fillGeneration(dir, base string, staged map[string][]byte, m *rules.Manifes
 		}
 	}
 	for d := range dirs {
-		if err := atomicfile.SyncDir(d); err != nil {
+		if err := templateSyncDir(d); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// switchGeneration points the link at a generation, in one rename.
-func switchGeneration(root, name string) error {
+// switchGeneration points the link at a generation, in one rename. published tells that the
+// rename was done: the link names the generation from then on, even when the sync of the
+// directory after it fails (err), and the generation must stay.
+func switchGeneration(root, name string) (published bool, err error) {
 	next := filepath.Join(root, templateCurrentNext)
 	os.Remove(next)
-	err := os.Symlink(name, next)
+	err = os.Symlink(name, next)
 	if err == nil {
-		err = atomicfile.SyncDir(root)
+		err = templateSyncDir(root)
 	}
 	if err == nil {
 		err = os.Rename(next, filepath.Join(root, templateCurrent))
 	}
 	if err != nil {
 		os.Remove(next)
-		return err
+		return false, err
 	}
-	return atomicfile.SyncDir(root)
+	return true, templateSyncDir(root)
 }
+
+// templateSyncDir syncs a directory of the copy; tests make it fail.
+var templateSyncDir = atomicfile.SyncDir
 
 // writeSynced is not atomicfile: it fills a new generation, which switchGeneration publishes whole.
 func writeSynced(path string, data []byte) error {
