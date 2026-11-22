@@ -26,6 +26,7 @@ type input struct {
 	ClockRetryGeneration uint64            `json:"clock_retry_generation,omitempty"`
 	Scheduled            bool              `json:"scheduled,omitempty"`
 	ReplacementURL       string            `json:"replacement_url,omitempty"`
+	Rules                *string           `json:"rules,omitempty"`
 	RuleSet              string            `json:"rule_set,omitempty"`
 	Query                string            `json:"query,omitempty"`
 	Source               string            `json:"source"`
@@ -194,7 +195,7 @@ func run(ctx context.Context, store *sub.Store, method string, in input, f sub.F
 		e := store.Preferences(in.Source, *in.Preferences)
 		return nil, []string{in.Source}, e
 	case "refresh":
-		f.ReplacementURL = in.ReplacementURL
+		f.ReplacementURL, f.Routing = in.ReplacementURL, in.Rules
 		c, e := f.Refresh(ctx, store, in.Source, []byte(in.Content), sub.Policy{ClockRetryGeneration: in.ClockRetryGeneration, Scheduled: in.Scheduled, ActiveIDs: in.ActiveIDs, Choices: in.Choices, Confirm: in.Confirm})
 		if e != nil {
 			var withdrawn *sub.AccountWithdrawal

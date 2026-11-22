@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -182,28 +183,118 @@ func TestRoutingChoice(t *testing.T) {
 	if err != nil || c.Profile.Template != nil || c.Profile.Groups[0].Name != "Mine" {
 		t.Fatal("usable rules gave way to the template", err, c.Profile.Template)
 	}
+	// The choice comes with the update read with it (a file imported again), and is saved with it.
 	template := RoutingTemplate
-	if err := store.Preferences(id, Preferences{Rules: &template}); err != nil {
-		t.Fatal(err)
-	}
-	if st, _ := store.Status(id); st.Rules != RoutingTemplate {
-		t.Fatal("choice not saved")
-	}
-	c, err = b.fetcher().Refresh(t.Context(), store, id, []byte(ownRules), Policy{AllowLocalFallback: true})
+	switched := b.fetcher()
+	switched.Routing = &template
+	c, err = switched.Refresh(t.Context(), store, id, []byte(ownRules), Policy{})
 	if err != nil || c.Decision != "ready" || c.Profile.Template == nil || c.Profile.Template.Reason != subconv.TemplateRequested || c.Profile.Groups[0].Name != "🚀 Proxy" {
 		t.Fatal(err, c.Decision, c.Profile.Template, c.Notices)
 	}
-	// An older client leaves the choice as it was; an unknown one is refused.
+	if st, _ := store.Status(id); st.Rules != RoutingTemplate {
+		t.Fatal("choice not saved with its update")
+	}
+	// Preferences leave the choice as it was; a refresh that asks for none reads with it.
 	if err := store.Preferences(id, Preferences{}); err != nil {
 		t.Fatal(err)
 	}
-	if st, _ := store.Status(id); st.Rules != RoutingTemplate {
-		t.Fatal("choice lost")
+	if c, err = b.fetcher().Refresh(t.Context(), store, id, []byte(ownRules), Policy{}); err != nil || c.Profile.Template == nil {
+		t.Fatal("choice lost", err, c.Decision)
 	}
+	// An unknown choice is refused before the refresh starts.
 	bad := "sometimes"
-	if err := store.Preferences(id, Preferences{Rules: &bad}); err == nil {
+	switched.Routing = &bad
+	if _, err := switched.Refresh(t.Context(), store, id, []byte(ownRules), Policy{}); err == nil {
 		t.Fatal("unknown routing choice accepted")
 	}
+	if st, _ := store.Status(id); st.Rules != RoutingTemplate || st.LastFailure != "" {
+		t.Fatal("refused choice reached the source", st.Rules, st.LastFailure)
+	}
+}
+
+// ownRejectingRules route by the subscription's own rules, which block a domain the template
+// does not: switching to the template asks for confirmation.
+const ownRejectingRules = `proxies:
+  - {name: HK 01, type: ss, server: hk.example.com, port: 8388, cipher: aes-128-gcm, password: p}
+proxy-groups:
+  - {name: Mine, type: select, proxies: [HK 01]}
+rules:
+  - DOMAIN-SUFFIX,ads.example,REJECT
+  - DOMAIN-SUFFIX,a.example,Mine
+  - MATCH,Mine
+`
+
+// A routing choice is saved only with the update read with it. A switch whose confirmation is
+// never given, or that is blocked, leaves the source on the routing it uses: its scheduled
+// refreshes go on reading with that, and an update one of them could not apply stays pending.
+// Confirmed, the switch is saved with its update.
+func TestRoutingChoiceSavedOnlyWithItsUpdate(t *testing.T) {
+	b := serveBranch(t, 42)
+	store := OpenStore(t.TempDir())
+	src := Source{ID: "sub", Name: "sub", Kind: "external", URL: "https://example.com/feed"}
+	if err := store.Configure(src); err != nil {
+		t.Fatal(err)
+	}
+	body := ownRejectingRules
+	scheduled := b.fetcher()
+	scheduled.Client = &http.Client{Transport: setFixtureTransport(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})}
+	template := RoutingTemplate
+	switched := scheduled
+	switched.Routing = &template
+	refresh := func(f Fetcher, policy Policy, decision string) Candidate {
+		t.Helper()
+		c, err := f.Refresh(t.Context(), store, src.ID, nil, policy)
+		if err != nil || c.Decision != decision {
+			t.Fatal(err, c.Decision, c.Notices)
+		}
+		return c
+	}
+	inUse := func(what, rules string) Status {
+		t.Helper()
+		st, err := store.Status(src.ID)
+		current, _ := store.Load(src.ID)
+		if err != nil || st.Rules != rules || (current.Template != nil) != (rules == RoutingTemplate) || (st.Template != nil) != (rules == RoutingTemplate) {
+			t.Fatal(what, err, st.Rules, current.Template)
+		}
+		return st
+	}
+	own := refresh(scheduled, Policy{}, "ready")
+
+	// The template drops the REJECT rule: the switch waits for the administrator, who cancels.
+	c := refresh(switched, Policy{}, "confirmation_required")
+	if c.Profile.Template == nil || !slices.ContainsFunc(c.Notices, func(n Notice) bool { return n.Code == "rejection_removed" }) {
+		t.Fatal(c.Profile.Template, c.Notices)
+	}
+	inUse("a cancelled switch", RoutingOwn)
+	// A custom rule routes by one of the subscription's own groups, which the template lacks.
+	refresh(switched, Policy{ActiveIDs: []string{own.Profile.Groups[0].ID}}, "blocked")
+	inUse("a blocked switch", RoutingOwn)
+
+	// The provider drops the REJECT rule. A scheduled refresh reads with the subscription's
+	// own rules and keeps the update for the administrator; a switch they leave unapplied
+	// does not settle it.
+	body = strings.Replace(ownRejectingRules, "  - DOMAIN-SUFFIX,ads.example,REJECT\n", "", 1)
+	if c := refresh(scheduled, Policy{Scheduled: true}, "confirmation_required"); c.Profile.Template != nil {
+		t.Fatal("a scheduled refresh read with the switch left unapplied")
+	}
+	refresh(switched, Policy{}, "confirmation_required")
+	if st := inUse("a second cancelled switch", RoutingOwn); st.PendingUpdate == nil || st.PendingUpdate.Code != PendingConfirmation {
+		t.Fatal("a switch left unapplied settled the scheduled update", st.PendingUpdate)
+	}
+
+	// Confirmed, the switch is saved with its update, which settles the pending one; scheduled
+	// refreshes now read with the template.
+	c = refresh(switched, Policy{}, "confirmation_required")
+	refresh(switched, Policy{Confirm: c.ConfirmationID}, "ready")
+	if st := inUse("a confirmed switch", RoutingTemplate); st.PendingUpdate != nil {
+		t.Fatal("applied switch left the update pending", st.PendingUpdate)
+	}
+	if c := refresh(scheduled, Policy{Scheduled: true}, "ready"); c.Profile.Template == nil {
+		t.Fatal("a scheduled refresh lost the saved choice")
+	}
+	inUse("a scheduled refresh", RoutingTemplate)
 }
 
 func TestTemplateSurvivesHostsThatDoNotAnswer(t *testing.T) {

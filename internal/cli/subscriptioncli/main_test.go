@@ -98,3 +98,32 @@ func TestRefreshReturnsPendingUpdate(t *testing.T) {
 		}
 	}
 }
+
+// A routing choice comes with the refresh request and is saved with the update it commits.
+// Preferences no longer carry one: a page that still sends it there is refused, as Main
+// decodes requests, rather than having the choice saved ahead of its update.
+func TestRefreshCarriesRoutingChoice(t *testing.T) {
+	st := sub.OpenStore(t.TempDir())
+	if err := st.Configure(sub.Source{ID: "file", Kind: "file", Name: "File"}); err != nil {
+		t.Fatal(err)
+	}
+	decode := func(raw string) (input, error) {
+		var in input
+		d := json.NewDecoder(strings.NewReader(raw))
+		d.DisallowUnknownFields()
+		return in, d.Decode(&in)
+	}
+	if _, err := decode(`{"source":"file","preferences":{"user_agent":"","filters":null,"allow_local_fallback":false,"rules":"template"}}`); err == nil {
+		t.Fatal("preferences accepted a routing choice")
+	}
+	in, err := decode(`{"source":"file","content":"http://edge.example:81#Edge","rules":"template"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := run(t.Context(), st, "refresh", in, sub.Fetcher{}); err != nil {
+		t.Fatal(err)
+	}
+	if s, err := st.Status("file"); err != nil || s.Rules != sub.RoutingTemplate {
+		t.Fatal("routing choice not saved with its update", err, s.Rules)
+	}
+}

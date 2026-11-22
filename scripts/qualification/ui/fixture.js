@@ -155,6 +155,13 @@ export function fixture(empty = false, preparing = false) {
 					const { id, kind, name } = r.args.config;
 					sources.push({ source: id, kind, name, ready: false });
 				}
+				// The helper decodes requests strictly. A routing choice is no preference: it comes
+				// with the refresh read with it, and is saved with the update that applies.
+				if (r.action === 'preferences' && 'rules' in (r.args.preferences || {})) {
+					const refused = job({});
+					tasks.set(refused.task, {stage:'failed', error:'invalid_request'});
+					return refused;
+				}
 				if (r.action === 'preferences' && r.args.preferences?.download_choice) {
 					controls.downloadChoice = r.args.preferences.download_choice;
 					return job({ok:true,data:{}});
@@ -185,6 +192,11 @@ export function fixture(empty = false, preparing = false) {
 						const failed = job({});
 						tasks.set(failed.task, {stage:'failed',error:'subscription_request_failed'});
 						return failed;
+					}
+					// The built-in rules lack the subscription's REJECT rule: switching to them asks first.
+					const routed = sources.find(s => s.source === r.args.source);
+					if (r.args.rules !== undefined && r.args.rules !== (routed?.rules || '') && r.args.confirm !== 'routing') {
+						return job({ok:true,data:{decision:'confirmation_required',confirmation_id:'routing',notices:[{code:'rejection_removed',dangerous:true}]}});
 					}
 					// Refreshed by the administrator, a pending update opens its review, which settles it.
 					const pendingRow = sources.find(s => s.source === r.args.source && s.pending_update);
@@ -219,6 +231,7 @@ export function fixture(empty = false, preparing = false) {
 					const row = sources.find(s => s.source === r.args.source);
 					if (row) {
 						row.ready = true;delete row.last_failure;delete row.last_provider;
+						if (r.args.rules !== undefined) row.rules = r.args.rules;
 						if (!saved.source) saved.source = row.source;
 						if (row.kind === 'platform') row.notices = [{code:'platform_routing_warnings', at:'STATIC_REJECT=2,NO_GROUP_NODES=3'}];
 					}

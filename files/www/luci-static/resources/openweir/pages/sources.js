@@ -261,7 +261,7 @@ function review(u, result) {
     moreRows(u, body, rows, row => u.h('p', {}, row.text), '提醒');
     return body;
 }
-async function retryDownload(u, source, group, content, feedback, replacementURL, needsFile) {
+async function retryDownload(u, source, group, content, feedback, change, needsFile) {
     const select = choice(u, group.options.map(option => [option.id, option.name]), group.selected, '规则下载出口');
     const controls = [field(u, group.name || '规则下载出口', select), muted(u, '此选择仅用于本订阅的规则下载。')];
     if (group.total > group.options.length) controls.push(muted(u, '显示 ' + group.options.length + ' / ' + group.total + ' 个成员。'));
@@ -275,13 +275,14 @@ async function retryDownload(u, source, group, content, feedback, replacementURL
         dialog.close();
     }));
     await new Promise(resolve => dialog.addEventListener('close', resolve, { once: true }));
-    return retry && !u.signal.aborted && importSource(u, source, content, feedback, undefined, replacementURL);
+    return retry && !u.signal.aborted && importSource(u, source, content, feedback, undefined, change);
 }
 // With a feedback element the outcome is written there, beside the control that started it: a
 // failure names it as shown so the page does not repeat it while it is on screen, and a blocked
 // version opens its review in place. Without one, or while 全部更新 queues reviews (present), the
-// review opens over the page.
-export async function importSource(u, source, content, feedback, confirmation, replacementURL, present) {
+// review opens over the page. A change ({replacement_url, rules}) is a link or routing choice the
+// update is read with: the router saves it with the update it applies, and only then.
+export async function importSource(u, source, content, feedback, confirmation, change, present) {
     const previous = (u.sources || []).some((s) => s.source === source && s.ready);
     if (feedback) {
         feedback.hidden = false;
@@ -293,7 +294,7 @@ export async function importSource(u, source, content, feedback, confirmation, r
             source,
             ...(content ? { content } : {}),
             ...(confirmation ? { confirm: confirmation } : {}),
-            ...(replacementURL ? { replacement_url: replacementURL } : {}),
+            ...change,
         });
         if (u.signal.aborted) return false;
         if (r?.decision === 'confirmation_required') {
@@ -309,7 +310,7 @@ export async function importSource(u, source, content, feedback, confirmation, r
                     review(u, r),
                 ),
                 r.retains_routing ? '保留其余分流并应用' : '应用此版本',
-                () => importSource(u, source, content, feedback, r.confirmation_id, replacementURL),
+                () => importSource(u, source, content, feedback, r.confirmation_id, change),
             );
             const ok = await (present ? present(ask) : ask());
             if (!ok && feedback) feedback.textContent = previous ? '已保留现有配置' : '已取消本次导入';
@@ -341,7 +342,7 @@ export async function importSource(u, source, content, feedback, confirmation, r
         }
         const group = err.provider?.download_group;
         if (group?.options?.length && !u.signal.aborted) {
-            const retry = () => retryDownload(u, source, group, content, feedback, replacementURL, false);
+            const retry = () => retryDownload(u, source, group, content, feedback, change, false);
             if (!feedback) return present ? present(retry) : retry();
             feedback.append(' ', u.button('选择规则下载出口', async () => { if (await retry()) await u.refresh(); }));
             return false;
@@ -623,7 +624,19 @@ async function editSource(u, s, agents) {
     const url = input(u, { type: 'url', value: previousURL, required: true, placeholder: 'https://', autocomplete: 'off' });
     const fallback = input(u, { type: 'checkbox' });
     fallback.checked = !!s.local_fallback;
+    // The routing choice in use (s.rules) changes only with an update read with the new one.
     const routing = choice(u, [['', '订阅自带'], ['template', '内置规则']], s.rules || '', '分流规则');
+    const switched = () => routing.value !== (s.rules || '');
+    // A file is not downloaded again: a new routing choice comes with the file imported again.
+    const file = s.kind === 'file' ? fileControl(u) : null;
+    if (file) {
+        const toggle = () => {
+            file.node.hidden = !switched();
+            file.input.disabled = !switched();
+        };
+        routing.addEventListener('change', toggle);
+        toggle();
+    }
     const controls = [];
     if (s.kind !== 'platform') controls.push(field(u, '名称', name));
     if (s.kind === 'external') controls.push(field(u, '订阅链接', url));
@@ -631,30 +644,35 @@ async function editSource(u, s, agents) {
     controls.push(
         field(u, '分流规则', routing),
         muted(u, s.kind === 'file'
-            ? '订阅自带：订阅没有可用的规则时改用内置规则。更改在重新导入文件后生效。'
+            ? '订阅自带：订阅没有可用的规则时改用内置规则。更改需重新导入配置文件，导入后生效。'
             : '订阅自带：订阅没有可用的规则时改用内置规则。'),
+        ...(file ? [file.node] : []),
         field(u, '可转换时允许使用本地分流', fallback),
     );
     const body = u.h('div', { class: 'ow-stack' });
     const dialog = u.dialog('编辑订阅', body);
     body.append(
         form(u, controls, '保存', async () => {
+            const content = file && switched() ? await file.text() : '';
             const preferences = {
                 ...(a ? a.values() : {}),
                 ...(s.kind === 'platform' ? {} : { name: name.value.trim() }),
                 allow_local_fallback: fallback.checked,
-                rules: routing.value,
             };
             await write(u, 'preferences', { source: s.source, preferences });
             const nextURL = url.value.trim();
-            // A changed link is verified by downloading it before it replaces the old one; a
-            // changed routing choice takes effect with the update it starts.
-            if (s.kind === 'external' && nextURL !== previousURL) {
-                const ok = await importSource(u, s.source, undefined, undefined, undefined, nextURL);
-                if (!ok) return;
-            } else if (s.kind !== 'file' && routing.value !== (s.rules || '')) {
-                const ok = await importSource(u, s.source, '');
-                if (!ok) return;
+            // A changed link is verified by downloading it before it replaces the old one, and a
+            // changed routing choice by the update read with it: the router saves either only
+            // with the update it applies.
+            const change = {
+                ...(s.kind === 'external' && nextURL !== previousURL ? { replacement_url: nextURL } : {}),
+                ...(switched() ? { rules: routing.value } : {}),
+            };
+            if (Object.keys(change).length && !(await importSource(u, s.source, content, undefined, undefined, change))) {
+                // Cancelled or not applied: the editor shows the routing still in use.
+                routing.value = s.rules || '';
+                routing.dispatchEvent(new Event('change'));
+                return;
             }
             dialog.close();
             await u.refresh();

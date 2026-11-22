@@ -630,6 +630,38 @@ try {
 				assert.equal(await address.inputValue(), 'https://fixture.invalid/replacement');
 				await page.keyboard.press('Escape');
 				await edit.waitFor({state: 'detached'});
+				// A routing choice is saved with the update read with it. Switched and then cancelled at
+				// its confirmation, the subscription keeps the routing it uses, and the editor shows that.
+				await external.getByRole('button', { name: '编辑' }).click();
+				const routing = edit.getByRole('combobox', { name: '分流规则', exact: true });
+				assert.equal(await routing.inputValue(), '');
+				await routing.selectOption('template');
+				await edit.getByRole('button', { name: '保存', exact: true }).click();
+				const routingReview = page.getByRole('dialog', { name: '确认订阅变更' });
+				await routingReview.getByText('会移除原有的拦截规则', { exact: true }).waitFor();
+				await routingReview.getByRole('button', { name: '取消', exact: true }).click();
+				await routingReview.waitFor({ state: 'detached' });
+				await edit.locator('button[type="submit"]:not([aria-busy])').waitFor();
+				assert.equal(await routing.inputValue(), '', 'a cancelled switch leaves the editor on the routing in use');
+				await page.keyboard.press('Escape');
+				await edit.waitFor({ state: 'detached' });
+				const keptCard = await external.elementHandle();
+				await page.getByRole('link', { name: '概览', exact: true }).click();
+				await page.waitForFunction(card => !card.isConnected, keptCard);
+				await page.getByRole('link', { name: '订阅', exact: true }).click();
+				await external.getByRole('button', { name: '编辑' }).click();
+				assert.equal(await routing.inputValue(), '', 'a cancelled switch is not saved');
+				// Applied, the switch is saved with its update.
+				await routing.selectOption('template');
+				const switchedCard = await external.elementHandle();
+				await edit.getByRole('button', { name: '保存', exact: true }).click();
+				await routingReview.getByRole('button', { name: '应用此版本', exact: true }).click();
+				await edit.waitFor({ state: 'detached' });
+				await page.waitForFunction(card => !card.isConnected, switchedCard);
+				await external.getByRole('button', { name: '编辑' }).click();
+				assert.equal(await routing.inputValue(), 'template', 'an applied switch is saved');
+				await page.keyboard.press('Escape');
+				await edit.waitFor({ state: 'detached' });
 				// Updated from its card, a version the router keeps back opens its review on the card.
 				await page.evaluate(() => { window.model.controls.longRefresh = true; });
 				await external.getByRole('button', { name: '更新', exact: true }).click();

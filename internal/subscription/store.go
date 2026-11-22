@@ -275,9 +275,12 @@ func check(r *record, t Ticket) error {
 func (s *Store) Commit(t Ticket, c Candidate) error {
 	// Only Refresh knows whether a profile matched this particular ticket.
 	c.unchanged = false
-	return s.commit(context.Background(), t, c, nil, "")
+	return s.commit(context.Background(), t, c, nil, "", nil)
 }
-func (s *Store) commit(ctx context.Context, t Ticket, c Candidate, recheck func() error, replacement string) error {
+
+// commit makes a ready candidate the source's profile. A replacement link and a routing choice
+// (Fetcher.Routing) the candidate was read with become the source's along with it.
+func (s *Store) commit(ctx context.Context, t Ticket, c Candidate, recheck func() error, replacement string, routing *string) error {
 	if c.Decision != "ready" || c.Profile.Source != t.Source || c.Profile.SchemaVersion != SchemaVersion {
 		return errors.New("invalid candidate")
 	}
@@ -304,6 +307,9 @@ func (s *Store) commit(ctx context.Context, t Ticket, c Candidate, recheck func(
 			r.Config.URL = replacement
 			r.Epoch++
 			r.Previous = nil
+		}
+		if routing != nil {
+			r.Config.Rules = *routing
 		}
 		r.LastFailure = ""
 		r.LastTLS = nil
@@ -601,7 +607,8 @@ func (s *Store) saveAccount(a Account, loginIntent string, changed *[]string) er
 	return nil
 }
 
-// UpdatePreferences cannot replace the authority, platform origin or bearer token.
+// UpdatePreferences cannot replace the authority, platform origin or bearer token, nor the
+// routing choice (Source.Rules): that changes only with an update read with it (Fetcher.Routing).
 type Preferences struct {
 	MainlandFallback   *bool             `json:"mainland_fallback,omitempty"`
 	DownloadChoice     *DownloadChoice   `json:"download_choice,omitempty"`
@@ -610,8 +617,6 @@ type Preferences struct {
 	UserAgent          string            `json:"user_agent"`
 	Filters            map[string]string `json:"filters"`
 	AllowLocalFallback bool              `json:"allow_local_fallback"`
-	// Rules is the routing choice (Source.Rules); an older client leaves it out.
-	Rules *string `json:"rules,omitempty"`
 }
 
 func (s *Store) Preferences(id string, p Preferences) error {
@@ -641,9 +646,6 @@ func (s *Store) Preferences(id string, p Preferences) error {
 			v.Name, v.AutoName = p.Name, false
 		}
 		v.AllowLocalFallback = p.AllowLocalFallback
-		if p.Rules != nil {
-			v.Rules = *p.Rules
-		}
 		if v.Kind == "platform" {
 			if p.Filters != nil {
 				v.Filters = p.Filters

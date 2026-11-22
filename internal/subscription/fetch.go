@@ -143,6 +143,11 @@ type Fetcher struct {
 	// Fallback retries a request that failed in transit once over the router's other way
 	// out (fallback.go).
 	Fallback bool
+	// Routing is a routing choice (Source.Rules) a refresh reads the subscription with in
+	// place of the source's. Like ReplacementURL, the source takes it only with the update the
+	// refresh commits: one cancelled, held for confirmation or blocked leaves the source's
+	// choice, which its scheduled refreshes go on reading with.
+	Routing *string
 }
 
 // withEgress lets the requests of one operation share what they learn about the way out.
@@ -737,6 +742,9 @@ func templateWarningSummary(headers http.Header) string {
 
 func (f Fetcher) Refresh(ctx context.Context, store *Store, id string, file []byte, policy Policy) (candidate Candidate, failure error) {
 	f = f.withEgress()
+	if f.Routing != nil && *f.Routing != RoutingOwn && *f.Routing != RoutingTemplate {
+		return Candidate{}, errors.New("invalid_source")
+	}
 	t, r, e := store.begin(ctx, id, policy.ClockRetryGeneration, policy.Scheduled)
 	if e != nil {
 		return Candidate{}, e
@@ -747,8 +755,9 @@ func (f Fetcher) Refresh(ctx context.Context, store *Store, id string, file []by
 		var reason string
 		// The subscription was read but its update not applied, which ends an earlier failure.
 		// A scheduled refresh leaves the update on the source for the administrator; one they
-		// ran themselves has shown it to them. A replacement link's update is not the source's.
-		reviewed := failure == nil && candidate.Decision != "ready" && f.ReplacementURL == ""
+		// ran themselves has shown it to them. The update of a replacement link or of another
+		// routing choice is not the source's.
+		reviewed := failure == nil && candidate.Decision != "ready" && f.ReplacementURL == "" && (f.Routing == nil || *f.Routing == r.Config.Rules)
 		switch {
 		case errors.Is(ctx.Err(), context.Canceled), errors.Is(failure, context.Canceled), errors.Is(failure, ErrSuperseded), errors.Is(failure, ErrRevoked):
 			return
@@ -807,6 +816,9 @@ func (f Fetcher) Refresh(ctx context.Context, store *Store, id string, file []by
 			return Candidate{}, err
 		}
 		src.URL = f.ReplacementURL
+	}
+	if f.Routing != nil {
+		src.Rules = *f.Routing
 	}
 	var usage *Usage
 	var receipt providerReceipt
@@ -873,7 +885,7 @@ func (f Fetcher) Refresh(ctx context.Context, store *Store, id string, file []by
 			return Candidate{}, errors.New("preflight_revision_missing")
 		}
 	}
-	e = store.commit(ctx, t, c, confirm, f.ReplacementURL)
+	e = store.commit(ctx, t, c, confirm, f.ReplacementURL, f.Routing)
 	if errors.Is(e, ErrRevoked) {
 		// Another operation withdrew or replaced the source during this download.
 		// It already owns the notification for that change.
