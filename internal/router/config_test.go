@@ -348,9 +348,8 @@ func TestDNSSplitsDomesticAndProxiedUpstreams(t *testing.T) {
 	if dns["respect-rules"] != true || dns["nameserver-policy"].(map[string]any)["rule-set:"+dnsDomesticSet] == nil || c["rule-providers"].(map[string]any)[dnsDomesticSet] == nil {
 		t.Fatal(dns)
 	}
-	// A device's own proxy app reaches its node: the sniffed name steers rules but is not dialled.
-	if sn := c["sniffer"].(map[string]any); sn["override-destination"] != false || sn["parse-pure-ip"] != true || !slices.Contains(c["rules"].([]any), any(quicBlock)) {
-		t.Fatal("sniffer must not rewrite destinations, or QUIC block missing")
+	if sn := c["sniffer"].(map[string]any); sn["parse-pure-ip"] != true || !slices.Contains(c["rules"].([]any), any(quicBlock)) {
+		t.Fatal("sniffer must parse bare addresses, or QUIC block missing")
 	}
 	// UDP 443 to mainland addresses is not refused, and the address check never resolves a name.
 	cnIP := c["rule-providers"].(map[string]any)[domesticIPSet].(map[string]any)
@@ -611,6 +610,21 @@ func TestGooglePlayRuleKeepsTheProfilesOwnRules(t *testing.T) {
 		"RULE-SET,geoip-cn": true, "RULE-SET,cncidr": false, "DOMAIN-SUFFIX,cn": false} {
 		if mainlandRule(subscription.Rule{Match: obj{"clash": line}}) != want {
 			t.Fatal(line)
+		}
+	}
+}
+
+// With DNS protection a device's own proxy app reaches its node: the sniffed name steers rules but
+// is not dialled. Without it devices may hold poisoned addresses, so the core dials the name.
+func TestSnifferDialsTheNameOnlyWithoutDNSProtection(t *testing.T) {
+	p := baseProfile(t, "p")
+	i := initial()
+	i.Source = p.Source
+	lan := map[string][]netip.Prefix{"br-lan": {netip.MustParsePrefix("192.168.3.1/24")}}
+	for _, dns := range []bool{true, false} {
+		c := configForTest(t, i, p, Network{Method: "tproxy", Resolver: "192.0.2.53", DNS: dns, LAN: lan})
+		if got := c["sniffer"].(map[string]any)["override-destination"]; got != !dns {
+			t.Fatalf("DNS protection %v: override-destination %v", dns, got)
 		}
 	}
 }

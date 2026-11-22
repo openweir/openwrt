@@ -359,13 +359,15 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 			"nameserver": foreignDNS, "proxy-server-nameserver": domesticDNS, "direct-nameserver": domesticDNS, "respect-rules": true,
 			"nameserver-policy": dnsPolicy(n.Resolver, domesticDNS, foreignDNS), "fake-ip-range": "172.30.254.1/30"},
 		"find-process-mode": "off", "tcp-concurrent": true, "unified-delay": true, "keep-alive-interval": 15, "keep-alive-idle": 600}
-	// The sniffed domain steers the rules, but the connection still goes to the address the
-	// device chose, as OpenClash's sniffer has it (override-destination false). A device's own
-	// proxy app dials its node by address with a TLS or QUIC name that is often a disguise
-	// (REALITY, Hysteria2 and TUIC with a borrowed SNI); dialling that name would reach the
-	// disguise site and break the device's tunnel. DNS protection already hands devices fake
-	// addresses the core maps back to their names, so poisoned answers rarely get this far.
-	config["sniffer"] = obj{"enable": true, "override-destination": false, "parse-pure-ip": true, "force-dns-mapping": true,
+	// With DNS protection the sniffed domain only steers the rules and the connection still goes
+	// to the address the device chose, as OpenClash's sniffer has it (override-destination
+	// false). A device's own proxy app dials its node by address with a TLS or QUIC name that is
+	// often a disguise (REALITY, Hysteria2 and TUIC with a borrowed SNI); dialling that name
+	// would reach the disguise site and break the device's tunnel, while DNS protection already
+	// hands devices fake addresses the core maps back to their names. Without it devices resolve
+	// through the ISP, blocked names come back poisoned and only the sniffed name reaches the
+	// real site, so the core dials that name instead.
+	config["sniffer"] = obj{"enable": true, "override-destination": !n.DNS, "parse-pure-ip": true, "force-dns-mapping": true,
 		// Push and smart-home services break when their destination is rewritten.
 		"skip-domain": []string{"+.push.apple.com", "Mijia Cloud", "+.mi.com", "+.xiaomi.net", "dlg.io.mi.com", "+.oray.com", "+.sunlogin.net"},
 		// The router's own programs on the mixed port name their destination or pin a checked
@@ -643,7 +645,9 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 				routedNames, routedRules = append(routedNames, names...), append(routedRules, filters...)
 			}
 			line, err := nativeRule(r.Match, coreTarget(r.Target))
-			if err == nil {
+			// Only a line that names a rule set can follow a moved one; skipping the regex for the
+			// rest keeps compiling subscriptions of many thousand rules cheap on slow routers.
+			if err == nil && strings.Contains(strings.ToUpper(line), "RULE-SET") {
 				// References follow the sets that moved, inside logical rules too.
 				line = ruleSetRef.ReplaceAllStringFunc(line, func(ref string) string {
 					m := ruleSetRef.FindStringSubmatch(ref)
