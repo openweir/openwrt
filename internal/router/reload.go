@@ -156,6 +156,13 @@ func (s *System) Reload(ctx context.Context, i Intent) error {
 	// the core anyway would pause new connections and reset its DNS clients.
 	digest, routing := sha256.Sum256(config), routingKey(i, profile)
 	if digest == last.config {
+		// The core runs this configuration already, so the choices behind it are the routes in
+		// effect: keep the key current, or a later change of nodes alone would close everything.
+		s.mu.Lock()
+		if s.applied == last {
+			s.applied.routing = routing
+		}
+		s.mu.Unlock()
 		return nil
 	}
 	if e = client.ReloadPayload(ctx, config); e != nil {
