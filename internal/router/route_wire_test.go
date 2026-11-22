@@ -110,6 +110,18 @@ func TestWireSharedOutbound(t *testing.T) {
 		}
 		time.Sleep(30 * time.Millisecond)
 	}
+	// The controller can answer before the mixed listener is up: wait until it accepts.
+	for {
+		conn, e := net.DialTimeout("tcp4", addr.String(), time.Second)
+		if e == nil {
+			conn.Close()
+			break
+		}
+		if ctx.Err() != nil {
+			t.Fatal(e)
+		}
+		time.Sleep(30 * time.Millisecond)
+	}
 	records := NewRecords()
 	records.Viewed()
 	go func() { _ = api.Connections(ctx, records.pollWait, records.Observe) }()

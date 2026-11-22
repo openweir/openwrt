@@ -81,8 +81,15 @@ func TestUpstreamCoreControl(t *testing.T) {
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
-	if e = probeDNS(ctx, DNSPort); e != nil {
-		t.Fatal(e)
+	// The controller can answer before the DNS listener is up: wait for it, not just the API.
+	for {
+		if e = probeDNS(ctx, DNSPort); e == nil {
+			break
+		}
+		if ctx.Err() != nil {
+			t.Fatal(e)
+		}
+		time.Sleep(25 * time.Millisecond)
 	}
 	wrong := control.Client{Secret: strings.Repeat("wrong", 8)}
 	if _, e := wrong.Version(ctx); e == nil {
