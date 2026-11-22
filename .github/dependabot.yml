@@ -1,12 +1,15 @@
 # The workflows pin every action to a commit SHA; this keeps the pins and their version comments
 # current. Dependabot reads this file from the default branch (main) but opens its pull requests
-# against develop, where day-to-day work goes.
+# against develop, where day-to-day work goes: once a month, every action update in one.
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
     target-branch: develop
     schedule:
-      interval: weekly
+      interval: monthly
+    groups:
+      github-actions:
+        patterns: ['*']
     commit-message:
       prefix: ci
