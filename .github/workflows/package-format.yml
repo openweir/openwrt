@@ -167,4 +167,7 @@ jobs:
             grep -Eq '^flags: [A-Z]*F' /proc/sys/fs/binfmt_misc/qemu-i386
           fi
       - name: Install offline, verify the Release update and uninstall
+        env:
+          # Reads the latest release through the API for the upgrade-from-release case.
+          GH_TOKEN: ${{ github.token }}
         run: packaging/openwrt/install-test.sh "${{ matrix.firmware }}" "${{ matrix.arch }}" "dist/feed/${{ matrix.arch }}"

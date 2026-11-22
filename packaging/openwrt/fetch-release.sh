@@ -10,24 +10,37 @@ base=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 case "$format" in ipk|apk) ;; *) echo "Unknown package format: $format" >&2; exit 2;; esac
 case "$arch" in ''|*[!a-z0-9_-]*) echo "Invalid package architecture: $arch" >&2; exit 2;; esac
 [ -d "$output" ] && [ -z "$(ls -A "$output")" ] || { echo "Expected an empty directory: $output" >&2; exit 2; }
-releases=https://github.com/openweir/openwrt/releases
+repo=${GITHUB_REPOSITORY:-openweir/openwrt}
+releases=https://github.com/$repo/releases
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 trap 'exit 1' INT TERM
 fetch() { curl -fsSL --proto '=https' --proto-redir '=https' --connect-timeout 20 --max-time "$1" --max-filesize "$2" -o "$3" "$4"; }
-# GitHub redirects /releases/latest to the newest release that is neither a draft nor a
-# pre-release. The page needs no token, and has no API rate limit to share with other jobs.
-latest() {
- _latest=$(curl -fsSIL --proto '=https' --proto-redir '=https' --connect-timeout 20 --max-time 60 \
-  -o /dev/null -w '%{url_effective}' "$releases/latest") || return 1
- printf '%s\n' "$_latest"
-}
-url=$(retry latest)
-tag=${url##*/}
-if [ "$url" != "$releases/tag/$tag" ] || ! printf '%s\n' "$tag" | grep -Eqx 'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'; then
- echo "Unexpected latest release page: $url" >&2; exit 1
+# In CI the job's token reads the release through the API: dozens of install jobs fetching the
+# public release pages at once get refused (403) and then time out. Elsewhere the public pages
+# need no token. Both name the newest release that is neither a draft nor a pre-release.
+if [ -n "${GH_TOKEN:-}" ] && command -v gh >/dev/null 2>&1; then
+ latest() { bounded 60 gh api "repos/$repo/releases/latest" --jq .tag_name; }
+ asset() { bounded "$1" gh release download "$tag" --repo "$repo" --pattern "$4" --output "$3" --clobber; }
+else
+ latest() {
+  _latest=$(curl -fsSIL --proto '=https' --proto-redir '=https' --connect-timeout 20 --max-time 60 \
+   -o /dev/null -w '%{url_effective}' "$releases/latest") || return 1
+  printf '%s\n' "${_latest##*/}"
+ }
+ asset() { fetch "$1" "$2" "$3" "$releases/download/$tag/$4"; }
 fi
-retry fetch 60 65536 "$work/SHA256SUMS" "$releases/download/$tag/SHA256SUMS"
+# Reaching GitHub is the test's precondition, not its result: when the release can't be read,
+# the upgrade from it is skipped with a warning instead of failing the whole matrix.
+unreachable() {
+ echo "::warning::Could not download the latest release ($1): skipping the upgrade from it" >&2
+ exit 0
+}
+tag=$(retry latest) || unreachable 'release lookup failed'
+if ! printf '%s\n' "$tag" | grep -Eqx 'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'; then
+ echo "Unexpected latest release tag: $tag" >&2; exit 1
+fi
+retry asset 60 65536 "$work/SHA256SUMS" SHA256SUMS || unreachable "SHA256SUMS of $tag"
 # The release names follow internal/release PackageName: the revision follows the last preview.
 version=$(printf '%s' "${tag#v}" | sed 's/\./\\./g')
 case "$format" in
@@ -42,12 +55,17 @@ case "$count" in
 esac
 line=$(grep -E "^[0-9a-f]{64}  $pattern\$" "$work/SHA256SUMS")
 name=${line#*  }
-# A truncated or corrupted copy is downloaded again.
+# A truncated or corrupted copy is downloaded again. A copy that arrives whole but never matches
+# the published checksum is a failure, not a skip.
 download() {
- fetch 300 268435456 "$work/$name" "$releases/download/$tag/$name" &&
-  (cd "$work" && printf '%s\n' "$line" | sha256sum -c -)
+ rm -f "$work/$name"
+ asset 300 268435456 "$work/$name" "$name" || { rm -f "$work/$name"; return 1; }
+ (cd "$work" && printf '%s\n' "$line" | sha256sum -c -)
 }
-retry download
+if ! retry download; then
+ [ -s "$work/$name" ] || unreachable "$name of $tag"
+ echo "$name from $tag does not match the release's SHA256SUMS" >&2; exit 1
+fi
 mv "$work/$name" "$output/$name"
 printf '%s\n' "$line" > "$output/SHA256SUMS"
 echo "Downloaded $name from $tag, matching the release's SHA256SUMS" >&2
