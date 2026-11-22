@@ -65,7 +65,8 @@ jobs:
     # Minutes with the cached core; a cache miss first builds mihomo, about ten more.
     timeout-minutes: 30
     env:
-      MIHOMO_REF: 15fb245e92789566cff12e3060ae861534dcf892
+      # The released kernel the loopback tests run against: openweir-v1.0.1.
+      MIHOMO_REF: 8d0770267d54c47e8ec72250ff8a5bb0be997269
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
@@ -121,8 +122,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # openweir/mihomo releases stable kernels as openweir-vX.Y.Z from main; its Alpha
-          # branch mirrors upstream and publishes no OpenWeir prerelease.
+          # openweir/mihomo releases stable kernels as openweir-vX.Y.Z from its Alpha branch
+          # (upstream Alpha plus OpenWeir's commits); upstream's own Build workflow there also
+          # publishes a Prerelease-Alpha, which is not an openweir-v tag and is never latest.
           gh api repos/openweir/mihomo/releases/latest > "$RUNNER_TEMP/release.json"
           tag=$(jq -er '.tag_name | select(test("^openweir-v[0-9]+\\.[0-9]+\\.[0-9]+$"))' "$RUNNER_TEMP/release.json")
           name="mihomo-linux-arm64-$tag.gz"
