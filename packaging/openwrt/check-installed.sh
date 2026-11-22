@@ -3,6 +3,55 @@ set -eu
 name=luci-app-openweir
 # install-test.sh copies the shared retry helper next to this script.
 . /tmp/openweir-retry
+# The installed OpenWeir version, as the package manager records it.
+installed_version() {
+ if command -v apk >/dev/null; then
+  apk query --installed --format json --fields version "$name" | jsonfilter -e '@[0].version'
+ else
+  opkg status "$name" | awk '$1=="Version:" {print $2}'
+ fi
+}
+# install-test.sh stages the latest release's package for this router in /tmp/openweir-release,
+# with its line of the release's SHA256SUMS, when the release has one. Keep it only when it is
+# older than the candidate, and name its dependencies to install from the online feeds.
+release_deps=
+stage_release() {
+ [ -d /tmp/openweir-release ] || return 0
+ (cd /tmp/openweir-release && sha256sum -c SHA256SUMS)
+ candidate=$(cat /tmp/test-candidate-version)
+ if command -v apk >/dev/null; then
+  apk --allow-untrusted adbdump --format json /tmp/openweir-release/*.apk > /tmp/release-info.json
+  published=$(jsonfilter -i /tmp/release-info.json -e '@.info.version')
+  relation=$(apk version -t "$published" "$candidate")
+  deps=$(jsonfilter -i /tmp/release-info.json -e '@.info.depends[*]')
+ else
+  tar -xzOf /tmp/openweir-release/*.ipk ./control.tar.gz | tar -xzO ./control > /tmp/release-control
+  published=$(sed -n 's/^Version: //p' /tmp/release-control)
+  # opkg reads a single < as <=.
+  relation='>='
+  if opkg compare-versions "$published" '<<' "$candidate"; then relation='<'; fi
+  deps=$(sed -n 's/^Depends: //p' /tmp/release-control | tr ',' ' ')
+ fi
+ if [ "$relation" != '<' ]; then
+  echo "Skipping the upgrade from the latest release: $published is not older than this build, $candidate" >&2
+  rm -r /tmp/openweir-release
+  return 0
+ fi
+ echo "$published" > /tmp/test-release-version
+ release_deps=$deps
+}
+# What an upgraded router holds, whichever version it came from.
+check_upgraded() {
+ version=$(installed_version)
+ [ "$version" = "$(cat /tmp/test-candidate-version)" ] || { echo "The upgrade left $version installed" >&2; exit 1; }
+ test "$(cat /etc/openweir/kernel/package-upgrade-test)" = upgrade-state-preserved
+ test -s /usr/share/licenses/luci-app-openweir/LICENSE
+ for cli in openweird openweir-net openweir-kernel openweir-subscription; do test -x "/usr/sbin/$cli"; done
+ test -x /etc/init.d/openweir && test -x /usr/libexec/openweir/network
+ # The core runs as root:nogroup; base-files brings the group, the package no account.
+ test "$(awk -F: '$1 == "nogroup" { print $3 }' /etc/group)" = 65534
+ test ! -e /usr/sbin/mihomo
+}
 case "$1" in reject-*|upgrade) PATH=/tmp/openweir-test-bin:$PATH; export PATH;; esac
 case "$1" in
  prepare)
@@ -36,15 +85,18 @@ FETCH
    test -n "$depends"
    # Stage dependencies declared by the old offline-upgrade fixture as well.
    baseline_deps=$(apk --allow-untrusted adbdump --format json /tmp/openweir-baseline/*.apk | jsonfilter -e '@.info.depends[*]')
+   # And those of the latest published release.
+   stage_release
    # Fetches from the firmware's own feeds; OpenWeir's packages are never retried.
    retry apk update
-   retry apk add $depends $baseline_deps firewall4 nftables-json kmod-nft-tproxy uhttpd uhttpd-mod-ubus curl
+   retry apk add $depends $baseline_deps $release_deps firewall4 nftables-json kmod-nft-tproxy uhttpd uhttpd-mod-ubus curl
   else
    tar -xzOf /tmp/verified-feed/*.ipk ./control.tar.gz | tar -xzO ./control > /tmp/package-control
    test "$(sed -n 's/^Architecture: //p' /tmp/package-control)" = "${OPENWEIR_PACKAGE_ARCH:-all}"
    sed -n 's/^Version: //p' /tmp/package-control > /tmp/test-candidate-version
    depends=$(sed -n 's/^Depends: //p' /tmp/package-control | tr ',' ' ')
    test -n "$depends"
+   stage_release
    # Fetches from the firmware's own feeds; OpenWeir's packages are never retried.
    retry opkg update
    retry opkg install $depends firewall4 nftables-json kmod-nft-tproxy uhttpd uhttpd-mod-ubus curl
@@ -64,6 +116,8 @@ FETCH
    cmp /tmp/baseline-packages /tmp/other-packages
    opkg remove "$name"
    echo 'Native opkg installed only OpenWeir and retained the previous dependency set across upgrade'
+   # Only now the published release's dependencies, which must not hide the orphan check above.
+   [ -z "$release_deps" ] || retry opkg install $release_deps
   fi
   # Dependencies have been installed from the firmware's trusted repositories.
   for upstream in /etc/opkg/distfeeds.conf /etc/apk/repositories.d/distfeeds.list; do
@@ -136,19 +190,54 @@ FETCH
  upgrade)
   test "$(/usr/libexec/openweir/package-update check | jsonfilter -e '@.available')" = true
   /usr/libexec/openweir/package-update apply
+  check_upgraded
+  ;;
+ install-release)
+  # The latest published release, as a router has it before the upgrade.
+  (cd /tmp/openweir-release && sha256sum -c SHA256SUMS)
+  rm /tmp/openweir-release/SHA256SUMS
+  set -- /tmp/openweir-release/*
+  test "$#" = 1 && test -f "$1"
+  test ! -e /usr/sbin/openweird && test ! -e /usr/libexec/openweir/manager
+  rm -f /etc/openweir/kernel/package-upgrade-test
   if command -v apk >/dev/null; then
-   version=$(apk list -I "$name")
+   apk --no-network --repositories-file /dev/null add --allow-untrusted "$1"
   else
-   version=$(opkg list-installed "$name")
+   opkg install "$1"
   fi
-  case "$version" in ""|*0.0.0-*) echo 'upgrade did not select the new verified package' >&2; exit 1;; esac
-  test "$(cat /etc/openweir/kernel/package-upgrade-test)" = upgrade-state-preserved
-  test -s /usr/share/licenses/luci-app-openweir/LICENSE
-  for cli in openweird openweir-net openweir-kernel openweir-subscription; do test -x "/usr/sbin/$cli"; done
-  test -x /etc/init.d/openweir && test -x /usr/libexec/openweir/network
-  # The core runs as root:nogroup; base-files brings the group, the package no account.
-  test "$(awk -F: '$1 == "nogroup" { print $3 }' /etc/group)" = 65534
-  test ! -e /usr/sbin/mihomo
+  rm -r /tmp/openweir-release
+  test "$(installed_version)" = "$(cat /tmp/test-release-version)"
+  mkdir -p /etc/openweir/kernel
+  echo 'upgrade-state-preserved' > /etc/openweir/kernel/package-upgrade-test
+  # Up to 1.3.0 the core ran in a jail as openweir-core, which the package created, and a
+  # started core left its runtime directories to that account. Leave them as it did.
+  if id openweir-core >/dev/null 2>&1; then
+   mkdir -p /var/run/openweir
+   rm -rf /var/run/openweir/core /var/run/openweir/mihomo
+   mkdir -m 700 /var/run/openweir/core
+   chown openweir-core:openweir-core /var/run/openweir/core
+   mkdir -m 750 /var/run/openweir/mihomo /var/run/openweir/mihomo/devices
+   chgrp openweir-core /var/run/openweir/mihomo /var/run/openweir/mihomo/devices
+   (umask 077 && : > /var/run/openweir/mihomo/cache.db)
+   chown openweir-core:openweir-core /var/run/openweir/mihomo/cache.db
+   echo 'Left the core runtime directories to openweir-core, as a jail-era release does'
+  fi
+  ;;
+ upgrade-from-release)
+  # Users upgrade a published release with the package manager, as the release notes say.
+  (cd /tmp/openweir-candidate && sha256sum -c SHA256SUMS)
+  rm /tmp/openweir-candidate/SHA256SUMS
+  set -- /tmp/openweir-candidate/*
+  test "$#" = 1 && test -f "$1"
+  if command -v apk >/dev/null; then
+   apk --no-network --repositories-file /dev/null add --allow-untrusted "$1"
+  else
+   opkg install "$1"
+  fi
+  rm -r /tmp/openweir-candidate
+  check_upgraded
+  # Files only the release shipped go with it, such as the jail helper and apk's account request.
+  test ! -e /usr/libexec/openweir/tun-jail && test ! -e /lib/apk/packages/luci-app-openweir.rusers
   ;;
  reject-downgrade)
   candidate=$(/usr/libexec/openweir/package-update check | jsonfilter -e '@.candidate')
@@ -185,6 +274,8 @@ FETCH
   if command -v apk >/dev/null; then apk del "$name"; else opkg remove "$name"; fi
   test ! -e /usr/sbin/openweird && test ! -e /usr/libexec/openweir/network
   test ! -e /usr/libexec/openweir/manager
+  # The core's runtime directories go with the package, whichever account an older core left them to.
+  test ! -e /var/run/openweir/core && test ! -e /var/run/openweir/mihomo
   # Removal keeps the user's kernels and subscriptions; only a manual purge deletes them.
   [ "${2:-}" != preserved ] || test "$(cat /etc/openweir/kernel/package-upgrade-test)" = upgrade-state-preserved
   ;;

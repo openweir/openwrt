@@ -7,11 +7,13 @@ base=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 . "$base/retry.sh"
 response=$(mktemp)
 release_tool=$(mktemp)
+published=$(mktemp -d)
 network= server= target= generated=
 # Release packages declare their OpenWrt architecture (build.sh with OPENWEIR_PACKAGE_ARCH).
 package_arch=$arch
 cleanup() {
  rm -f "$response" "$release_tool"
+ rm -rf "$published"
  [ -z "$target" ] || docker rm -f "$target" >/dev/null
  [ -z "$server" ] || docker rm -f "$server" >/dev/null
  [ -z "$network" ] || docker network rm "$network" >/dev/null
@@ -47,6 +49,9 @@ if ! docker image inspect "$rootfs" >/dev/null 2>&1 && { ! retry pull_rootfs || 
  rootfs=$generated
 fi
 docker image inspect busybox:1.37 >/dev/null 2>&1 || retry bounded 300 docker pull --quiet busybox:1.37
+case "$release" in 25.*) ext=apk;; *) ext=ipk;; esac
+# The upgrade users make: the latest published release's package for this router, if it has one.
+sh "$base/fetch-release.sh" "$ext" "$arch" "$published"
 network=$(docker network create openweir-pkg-test-$$)
 server=$(docker create --network "$network" --network-alias feed busybox:1.37 httpd -f -p 8080 -h /srv)
 docker cp "$feed/." "$server:/srv"
@@ -79,6 +84,7 @@ case "$release" in
 esac
 for item do docker cp "$item" "$target:/tmp/verified-feed/"; done
 docker cp "$feed/baseline" "$target:/tmp/openweir-baseline"
+if [ -n "$(ls -A "$published")" ]; then docker cp "$published" "$target:/tmp/openweir-release"; fi
 in_target sh /tmp/check-installed prepare "$release" "$arch"
 sh "$base/test-nft.sh" "$target" "$release" "$arch"
 docker network disconnect "$network" "$target"
@@ -97,7 +103,6 @@ for invalid in digest tag origin url duplicate draft prerelease missing; do
  serve_release "" --invalid "$invalid"
  in_target sh /tmp/check-installed reject-invalid-release
 done
-case "$release" in 25.*) ext=apk;; *) ext=ipk;; esac
 set -- "$feed/baseline/"*."$ext"
 serve_release "" --contents "$1"
 in_server sh -ec 'for f in /srv/releases/download/v*/*; do ln -sf "/srv/baseline/$1" "$f"; done' sh "${1##*/}"
@@ -115,3 +120,16 @@ else
  in_target sh /tmp/check-installed uninstall preserved
 fi
 echo "Verified native package installation, GitHub digest/identity checks, upgrade and removal on OpenWrt $release ($arch)"
+# prepare keeps the published release only when it is older than this build.
+if [ "$(in_target sh -c 'if [ -d /tmp/openweir-release ]; then echo staged; fi')" = staged ]; then
+ in_target mkdir /tmp/openweir-candidate
+ set -- "$feed"/SHA256SUMS "$feed"/*."$ext"
+ for item do docker cp "$item" "$target:/tmp/openweir-candidate/"; done
+ in_target sh /tmp/check-installed install-release
+ in_target sh /tmp/check-installed upgrade-from-release
+ in_target sh /tmp/check-web
+ in_target sh /tmp/check-installed uninstall preserved
+ echo "Verified the upgrade from the latest published release to this build and its removal on OpenWrt $release ($arch)"
+else
+ echo "Skipped the upgrade from the latest published release on OpenWrt $release ($arch); the reason is above"
+fi
