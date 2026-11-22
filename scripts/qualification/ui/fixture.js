@@ -69,6 +69,9 @@ export function fixture(empty = false, preparing = false) {
 			{ time: Date.now(), source: 'service', level: 'info', message: 'running' },
 			{ time: Date.now(), source: 'kernel', level: 'warn', message: 'local_core_unavailable' },
 			{ time: Date.now(), source: 'core', level: 'error', message: 'network_unreachable', count: 3 },
+			// The core's own words, redacted (records.go coreDetail), and a refresh runJob logs as held.
+			{ time: Date.now(), source: 'core', level: 'warn', message: 'core_diagnostic', detail: 'tcp keepalive not supported on <addr>' },
+			{ time: Date.now(), source: 'task', level: 'info', message: 'subscription_write/refresh held 0123456789abcdef01234567 confirmation_required' },
 		],
 		connections = [
 			{
@@ -81,6 +84,22 @@ export function fixture(empty = false, preparing = false) {
 				network: 'tcp',
 				rule: 'domain_suffix',
 				result: 'traffic_observed',
+			},
+			// The router's rules: a mainland name the proxy must carry, a mainland name, and QUIC
+			// that would leave through the proxy, refused (router config.go).
+			{
+				id: 'c-play', created_at: Date.now(), device: '192.168.1.31', destination: 'play.googleapis.cn:443',
+				chain: [nodes[1].id, 'group:watch'], outbound: nodes[1].id, network: 'tcp',
+				rule: 'RuleSet,openweir-cn-proxied', result: 'traffic_observed',
+			},
+			{
+				id: 'c-cn', created_at: Date.now(), device: '192.168.1.31', destination: 'www.baidu.com:443',
+				chain: ['@direct'], outbound: '@direct', network: 'tcp', rule: 'RuleSet,openweir-dns-cn', result: 'traffic_observed',
+			},
+			{
+				id: 'c-quic', created_at: Date.now(), device: '192.168.1.23', destination: 'video.example:443',
+				chain: ['@reject'], outbound: '@reject', network: 'udp', result: 'routed',
+				rule: 'AND,((NETWORK,UDP),(DST-PORT,443),(NOT,((RULE-SET,openweir-dns-cn))),(NOT,((RULE-SET,openweir-ip-cn,no-resolve))))',
 			},
 		];
 	let prefs = {
@@ -117,7 +136,9 @@ export function fixture(empty = false, preparing = false) {
 				reads.push(action);
 				if (action === 'list') return { ok: true, data: sources };
 				if (action === 'url') return { ok: true, data: { url: 'https://fixture.invalid/current' } };
-				if (action === 'set_match') return { ok: true, data: { matched: /stream/i.test(r.args.query) } };
+				// The mainland domain list holds .cn and baidu.com names; the subscription's sets stream ones.
+				if (action === 'set_match')
+					return { ok: true, data: { matched: (r.args.rule_set === '@openweir-geosite-cn' ? /(\.cn|baidu\.com)$/ : /stream/i).test(r.args.query) } };
 				if (action === 'agents') return { ok: true, data: ['clash', 'sing-box', 'OpenWeir'] };
 				if (action === 'profile')
 					return {
@@ -134,9 +155,9 @@ export function fixture(empty = false, preparing = false) {
 					};
 				if (action === 'status') return { ok: true, data: sources.find((s) => s.source === r.args.source) };
                 if (action === 'rules') {
-                    // The subscription's own sets, then its GEOSITE,CN rule, which names the plugin's
-                    // mainland domain list by its tag.
-                    const tags = ['Streaming', 'Domestic', '@openweir-geosite-cn'];
+                    // The subscription's own sets, then its GEOSITE,CN and GEOIP,CN rules, which name the
+                    // plugin's mainland lists by their tags.
+                    const tags = ['Streaming', 'Domestic', '@openweir-geosite-cn', '@openweir-geoip-cn'];
 					const items = tags.filter(tag => !r.args.rule_set || tag === r.args.rule_set)
 						.map(tag => ({match:tag.startsWith('@') ? {clash:'RULE-SET,' + tag} : {rule_set:tag},rule_set:tag,target:'@direct'}));
 					const sets = Object.fromEntries(tags.map(tag => [tag,1])),
@@ -305,8 +326,9 @@ export function fixture(empty = false, preparing = false) {
 				// The core counts the mainland list's hits under the built-in set's name.
 				return { Streaming: { count: 3, last: Date.now() }, 'openweir-dns-cn': { count: 2, last: Date.now() } };
 			case 'routes':
+				// The overview's recent route: the first connection's.
 				return {
-					items: connections.map((v) => ({
+					items: connections.slice(0, 1).map((v) => ({
 						group: 'group:watch',
 						outbound: v.outbound,
 						time: v.created_at,

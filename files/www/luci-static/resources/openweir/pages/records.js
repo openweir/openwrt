@@ -1,4 +1,4 @@
-import { card, h, select, segment, empty, clock, download, resultName, eventMessage, datetime, attach, hush, setLabel } from '../dom.js';
+import { card, h, select, segment, empty, clock, download, resultName, eventMessage, datetime, attach, hush, setLabel, setRefs } from '../dom.js';
 
 const levels = { info: '信息', warn: '警告', error: '错误' };
 const sources = {
@@ -11,6 +11,13 @@ const sources = {
 	kernel: '内核',
 };
 const outcome = (v) => (v === 'traffic_observed' ? '已建立' : resultName[v] || v || '—');
+// The router's QUIC rules, as the core reports them (router config.go): QUIC the proxy would carry
+// is refused so that browsers fall back to TCP. Mainland names the proxy must carry count as foreign.
+const routerRules = {
+	'AND,((NETWORK,UDP),(DST-PORT,443),(RULE-SET,openweir-cn-proxied))': '拦截 QUIC · 需代理的大陆域名',
+	'AND,((NETWORK,UDP),(DST-PORT,443),(NOT,((RULE-SET,openweir-dns-cn))),(NOT,((RULE-SET,openweir-ip-cn,no-resolve))))':
+		'拦截境外 QUIC',
+};
 export async function records(ui) {
 	const logs = ui.page === 'logs',
 		title = logs ? '日志' : '连接记录';
@@ -32,10 +39,12 @@ export async function records(ui) {
 	const ruleSetOf = (rule) => /^RuleSet,(.+)$/.exec(rule || '')?.[1] || '';
 	const ruleLabel = (rule) => {
 		if (!rule) return '—';
+		if (Object.hasOwn(routerRules, rule)) return routerRules[rule];
 		const set = ruleSetOf(rule);
 		if (set) return '规则集 ' + setLabel(set);
+		// A logical rule names its rule sets inside its conditions.
 		const [type, ...payload] = rule.split(',');
-		return type === 'Match' ? '兜底' : type + (payload.length ? ' ' + payload.join(',') : '');
+		return type === 'Match' ? '兜底' : type + (payload.length ? ' ' + setRefs(payload.join(',')) : '');
 	};
 	const deviceNames = new Map();
 	if (!logs) {
@@ -163,20 +172,22 @@ export async function records(ui) {
 			display.replaceChildren(
 				...shown.slice(0, state.limit).map((v) => {
 					const row = h('details', { class: 'ow-log', 'data-level': v.level });
+					const message = eventMessage(v);
 					row.append(
 						h(
 							'summary',
 							{},
 							h('time', {}, clock(v.time)),
 							h('span', { class: 'ow-level ' + v.level }, levels[v.level] || v.level),
-							h('span', {}, eventMessage(v) + (v.count > 1 ? ' ×' + v.count : '')),
+							h('span', {}, message + (v.count > 1 ? ' ×' + v.count : '')),
 						),
 						h(
 							'div',
 							{ class: 'ow-muted' },
 							(sources[v.source] || v.source) + ' · ' + datetime(v.time) + ' · ' + v.message,
 						),
-						...(v.detail ? [h('code', { class: 'ow-log-detail' }, v.detail)] : []),
+						// A detail the sentence above quotes as it is, such as the core's words, shows once.
+						...(v.detail && !message.includes(v.detail) ? [h('code', { class: 'ow-log-detail' }, v.detail)] : []),
 					);
 					return row;
 				}),

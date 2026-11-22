@@ -1,5 +1,5 @@
 // The rules page: custom rules and the rule sets of the active subscription.
-import { attach, hush, diagnosticMessage, day, mainlandSets, isMainland, mainlandName, setLabel } from '../dom.js';
+import { attach, hush, diagnosticMessage, day, mainlandSets, isMainland, mainlandName, setLabel, setRefs } from '../dom.js';
 import { ids, actions, muted, badge, field, input, choice, read, date, form, confirm, importSource, reimport } from './sources.js';
 
 const matchType = {
@@ -34,7 +34,7 @@ const routeName = (u, target) =>
 // A rule set a rule names reads as the pages show it: the plugin's mainland lists by their labels.
 function setRef(key, value) {
     if (key === 'rule_set') return setLabel(value);
-    if (key === 'clash') return value.replace(/(RULE-SET,)([^,()]+)/gi, (_, kind, name) => kind + setLabel(name));
+    if (key === 'clash') return setRefs(value);
     return value;
 }
 function describeRule(match) {

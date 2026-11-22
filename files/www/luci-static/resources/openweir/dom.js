@@ -123,11 +123,17 @@ const mainlandTags = new Map(Object.entries(mainlandSets).map(([name, set]) => [
 export const isMainland = (name) => Object.hasOwn(mainlandSets, name);
 // A rule set's name in the core: a mainland tag reads as its list's.
 export const mainlandName = (tag) => mainlandTags.get(tag) || tag;
+// The router's other sets its rules match connections by (router config.go): the mainland names
+// the proxy must carry, such as Google Play's. They are no mainland list and have no card.
+const routerSets = { 'openweir-cn-proxied': '需代理的大陆域名' };
 // A rule set as the pages show it.
 export function setLabel(name) {
 	const core = mainlandName(name);
-	return isMainland(core) ? mainlandSets[core].label : name;
+	if (isMainland(core)) return mainlandSets[core].label;
+	return Object.hasOwn(routerSets, core) ? routerSets[core] : name;
 }
+// The rule sets a rule's text names (RULE-SET,name), as the pages show them.
+export const setRefs = (text) => text.replace(/(RULE-SET,)([^,()]+)/gi, (_, kind, name) => kind + setLabel(name));
 export const resultName = { routed: '已分流', established: '已建立', failed: '失败', closed: '已关闭' };
 export async function pages(ui, source, action) {
 	const items = [];

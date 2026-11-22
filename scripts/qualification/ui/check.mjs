@@ -824,6 +824,28 @@ try {
 				await china.getByText('内置',{exact:true}).waitFor();
 				assert.match(await china.locator('dl').innerText(), /条目\s*每周自动更新\s*命中连接\s*2 次\s*去向\s*直连/);
 				assert.equal(await page.locator('.ow-set-card h3').filter({hasText:'openweir'}).count(), 0, 'no rule set shows by an internal name');
+				// GEOIP,CN uses the mainland IP list, the other built-in card.
+				const chinaIP = setCard('大陆 IP');
+				await chinaIP.getByText('内置',{exact:true}).waitFor();
+				assert.match(await chinaIP.locator('dl').innerText(), /条目\s*每周自动更新\s*命中连接\s*—\s*去向\s*直连/);
+				// A mainland list's details look a name up in the list by its tag, list the rules that
+				// use it by its Chinese name, and lead to the connections the core reports for it.
+				await china.getByRole('button',{name:'详情'}).click();
+				const chinaDetail = page.getByRole('dialog',{name:'大陆域名'});
+				await chinaDetail.getByText('内置，每周自动更新',{exact:true}).waitFor();
+				await chinaDetail.getByRole('searchbox',{name:'检查是否命中'}).fill('www.baidu.com');
+				await chinaDetail.getByRole('button',{name:'检查',exact:true}).click();
+				await chinaDetail.getByText('www.baidu.com 命中此规则集',{exact:true}).waitFor();
+				await chinaDetail.locator('.ow-rule-row').filter({hasText:'RULE-SET,大陆域名'}).waitFor();
+				assert.doesNotMatch(await chinaDetail.innerText(), /openweir/);
+				await chinaDetail.getByRole('button',{name:'查看命中的连接 ›'}).click();
+				await page.locator('.ow-connections').getByText('www.baidu.com:443').waitFor();
+				const ruleSets = page.getByRole('combobox',{name:'命中规则集'});
+				assert.equal(await ruleSets.inputValue(), 'openweir-dns-cn');
+				assert.equal(await ruleSets.locator('option:checked').textContent(), '大陆域名');
+				assert.equal(await page.locator('.ow-connections tbody tr').count(), 1, 'only the mainland list\'s connections');
+				await page.getByRole('link',{name:'规则',exact:true}).click();
+				await page.getByRole('heading',{name:'规则集',exact:true}).waitFor();
 				await setCard('Streaming').getByRole('button',{name:'详情'}).click();
 				const detail = page.getByRole('dialog',{name:'Streaming'});
 				await detail.getByText('引用此规则集的规则').waitFor();
@@ -845,6 +867,23 @@ try {
 				const stopped = page.locator('.ow-log').filter({has:page.getByText('已停用冲突的代理插件：OpenClash、PassWall 2', {exact:true})});
 				await stopped.locator('summary').click();
 				assert.equal(await stopped.locator('.ow-log-detail').textContent(), 'openclash, passwall2');
+				// The core's own words show once, in the entry's sentence; a task's line reads by its
+				// name and stage, and the code it was held for.
+				const coreWords = page.locator('.ow-log').filter({has:page.getByText('内核报告：tcp keepalive not supported on <addr>', {exact:true})});
+				await coreWords.locator('summary').click();
+				await coreWords.getByText(/代理内核 · .*core_diagnostic/).waitFor();
+				assert.equal(await coreWords.locator('.ow-log-detail').count(), 0, 'the core\'s words show once');
+				await page.locator('.ow-log summary').getByText('更新订阅 · 未应用 · 订阅有变更待确认，请到订阅页查看并确认', {exact:true}).waitFor();
+			}
+			if (name === '连接记录') {
+				// The router's own set and QUIC rule read in Chinese, in the table and the set filter.
+				const ruleSets = page.getByRole('combobox', {name:'命中规则集'});
+				await ruleSets.selectOption({label:'全部规则集'});
+				const ruleCell = (target) => page.locator('.ow-connections tbody tr').filter({hasText:target}).locator('td[data-label="命中规则"]');
+				assert.equal(await ruleCell('play.googleapis.cn:443').textContent(), '规则集 需代理的大陆域名');
+				assert.equal(await ruleCell('video.example:443').textContent(), '拦截境外 QUIC');
+				assert.deepEqual(await ruleSets.locator('option').allTextContents(), ['全部规则集', '需代理的大陆域名', '大陆域名']);
+				assert.equal(await page.locator('.ow-connections').getByText(/openweir|RULE-SET/).count(), 0, 'no internal set or raw rule');
 			}
 			await page.screenshot({ path: path.join(output, name + '-' + width + '.png'), fullPage: true });
 			assert.equal(
