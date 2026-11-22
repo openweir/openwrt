@@ -626,9 +626,18 @@ func (f Fetcher) readProfile(ctx context.Context, s Source, file []byte, usage *
 		return p, err
 	}
 	f.sourceID = s.ID
-	var template *templateSets
+	var template map[string][]byte
 	if c.template != nil {
-		template = &templateSets{client: branch, version: c.template.Version}
+		template, err = fetchTemplateSets(ctx, branch, c.template.Version, object(c.doc["rule-providers"]))
+		if err := ctx.Err(); err != nil {
+			return Profile{}, err
+		}
+		if err != nil {
+			// Rule sets no host serves and the router never got: route by default this time,
+			// as without the template.
+			c.defaultRouting()
+			c.notices = append(c.notices, Notice{Code: "subconv_template_unavailable"})
+		}
 	}
 	sets, expansion, err := f.expandSourceProviders(ctx, c.doc, origin, template)
 	if err != nil {

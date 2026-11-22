@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"slices"
 	"strings"
 
 	"github.com/openweir/subconv"
@@ -60,14 +61,19 @@ func convert(ctx context.Context, body []byte, routing string, branch *rules.Cli
 		return conversion{}, errors.New("invalid_subscription")
 	}
 	c := conversion{format: formatName(result.Format)}
-	unavailable := false
+	unavailable := slices.ContainsFunc(result.Warnings, func(w subconv.Warning) bool { return w.Code == subconv.WarnTemplateUnavailable })
+	// Whether the subscription routes by its own groups and rules: the template and the
+	// router's default replace them, and what was lost of them no longer matters.
+	own := result.Template == nil && !unavailable
 	for _, w := range result.Warnings {
 		switch w.Code {
 		case subconv.WarnTemplateApplied:
 			// The profile records it (Profile.Template).
 			continue
-		case subconv.WarnTemplateUnavailable:
-			unavailable = true
+		case subconv.WarnUnsupportedRule, subconv.WarnUnsupportedRuleSet, subconv.WarnUnsupportedGroup, subconv.WarnEmptyGroup:
+			if !own {
+				continue
+			}
 		}
 		c.notices = append(c.notices, warningNotice(w))
 	}
@@ -84,17 +90,22 @@ func convert(ctx context.Context, body []byte, routing string, branch *rules.Cli
 		return c, err
 	}
 	if unavailable {
-		// Routing the subscription's own rules could not be trusted with, or that the source
-		// declined, gives way to the router's default: mainland direct, the rest proxied. A
-		// later refresh tries the template again.
-		for _, k := range []string{"proxy-groups", "rule-providers", "rules"} {
-			delete(c.doc, k)
-		}
+		c.defaultRouting()
 	}
 	if result.Format == subconv.FormatClash || result.Format == subconv.FormatStash {
-		c.notices = append(c.notices, clashFields(body, c.doc)...)
+		c.notices = append(c.notices, clashFields(body, c.doc, own)...)
 	}
 	return c, nil
+}
+
+// defaultRouting drops routing the subscription's own rules could not be trusted with, or that
+// the source declined, for the router's default: mainland direct, the rest proxied. A later
+// refresh tries the template again.
+func (c *conversion) defaultRouting() {
+	for _, k := range []string{"proxy-groups", "rule-providers", "rules"} {
+		delete(c.doc, k)
+	}
+	c.template = nil
 }
 
 // document decodes subconv's output as the router's YAML reads any Clash document.
@@ -168,9 +179,10 @@ func dropsRejection(detail string) bool {
 var routerFields = set("external-controller external-controller-tls external-controller-unix external-controller-pipe external-ui external-ui-url secret tun listeners iptables ebpf tunnels")
 
 // clashFields reports top-level fields of a Clash body that subconv leaves out without a word:
-// the router's own settings, a Clash Premium script, which routed by code, and custom geodata,
-// whose GEOIP and GEOSITE names the router cannot honor (clashDefaultGeo).
-func clashFields(body []byte, doc map[string]any) []Notice {
+// the router's own settings and, while the subscription routes by its own rules (own), a Clash
+// Premium script, which routed by code, and custom geodata, whose GEOIP and GEOSITE names the
+// router cannot honor (clashDefaultGeo).
+func clashFields(body []byte, doc map[string]any, own bool) []Notice {
 	var notices []Notice
 	lines := bufio.NewScanner(bytes.NewReader(body))
 	lines.Buffer(nil, MaxBody)
@@ -180,6 +192,7 @@ func clashFields(body []byte, doc map[string]any) []Notice {
 		case !ok || key != strings.TrimSpace(key):
 		case routerFields[key]:
 			notices = append(notices, Notice{Code: "mihomo_router_field_ignored", At: key})
+		case !own:
 		case key == "script":
 			notices = append(notices, Notice{Code: "script", At: key, Dangerous: true})
 		case key == "geox-url":

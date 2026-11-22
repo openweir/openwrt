@@ -73,8 +73,8 @@ type providers struct {
 	ctx           context.Context
 	cache         map[string][]byte
 	notices       []Notice
-	// template fetches the rule sets of subconv's routing template, when the document uses it.
-	template *templateSets
+	// template holds the rule sets of subconv's routing template, when the document uses it.
+	template map[string][]byte
 }
 
 type providerInput struct {
@@ -178,8 +178,8 @@ func (s *providers) prefetchInputs(inputs []providerInput, budget int) error {
 
 // expandSourceProviders downloads a converted document's providers into it. It returns the rule
 // sets the document gained and notices about provider content and options. The rule sets of
-// subconv's routing template come from the rules branch (template), checked against its manifest.
-func (f Fetcher) expandSourceProviders(ctx context.Context, m map[string]any, origin string, template *templateSets) ([]BinarySet, []Notice, error) {
+// subconv's routing template come with it (template, by provider name; fetchTemplateSets).
+func (f Fetcher) expandSourceProviders(ctx context.Context, m map[string]any, origin string, template map[string][]byte) ([]BinarySet, []Notice, error) {
 	s := &providers{trustedOrigin: strings.TrimSuffix(providerAddress(origin), "/"), trusted: f, ctx: ctx, cache: map[string][]byte{}, template: template}
 	var done func()
 	s.f, done = f.embeddedFetcher()
@@ -363,8 +363,8 @@ func (s *providers) clash(m map[string]any) error {
 		case "http":
 			if s.template == nil {
 				raw = s.cache[ruleInputs[name].key()]
-			} else if raw, err = s.template.fetch(s.ctx, field(v, "url")); err != nil {
-				return providerFailure("rule", field(v, "url"), err)
+			} else {
+				raw = s.template[name]
 			}
 		case "file":
 			if raw, err = s.trusted.localClashSet(field(v, "path")); err != nil {

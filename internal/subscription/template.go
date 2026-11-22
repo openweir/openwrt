@@ -183,54 +183,79 @@ func (f Fetcher) embeddedFetcher() (Fetcher, func()) {
 	return e, tr.CloseIdleConnections
 }
 
-// templateSets fetches the rule sets of the template a profile uses: from the hosts serving
-// that template's version, checked against its manifest, or else from the router's cache of it.
-type templateSets struct {
-	client  *rules.Client
-	version int64
-	once    sync.Once
-	snap    *rules.Snapshot
-	cached  *rules.Manifest
-}
+// Template rule sets download six at a time, and all of them within a share of the refresh's
+// time: a cold cache holds some seventy.
+const (
+	templateParallel = 6
+	templateTimeout  = 40 * time.Second
+)
 
 var errTemplateSet = errors.New("template_rule_set_unavailable")
 
-func (t *templateSets) fetch(ctx context.Context, url string) ([]byte, error) {
-	path, ok := t.path(url)
-	if !ok {
-		return nil, errors.New("invalid_provider_url")
-	}
-	t.once.Do(func() {
-		if snap, err := t.client.Latest(ctx); err == nil && snap.Manifest.Version == t.version {
-			t.snap = snap
-			return
-		}
-		if b, ok := t.client.Cache.Get(rules.ManifestPath); ok {
-			if m, err := rules.ParseManifest(b); err == nil && m.Version == t.version {
-				t.cached = m
-			}
-		}
-	})
-	switch {
-	case t.snap != nil:
-		data, err := t.snap.Fetch(ctx, path)
-		if err != nil && ctx.Err() == nil {
+// fetchTemplateSets gets the rule set of each of the template's providers (by provider name):
+// from the hosts serving the template's version, checked against its manifest, or else from the
+// router's cache of that version. It fails when any is unavailable.
+func fetchTemplateSets(ctx context.Context, client *rules.Client, version int64, providers map[string]any) (map[string][]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, templateTimeout)
+	defer cancel()
+	paths := map[string]string{}
+	for name, def := range providers {
+		path, ok := branchPath(client.Hosts, field(object(def), "url"))
+		if !ok {
 			return nil, errTemplateSet
 		}
-		return data, err
-	case t.cached != nil:
-		file, listed := t.cached.File(path)
-		if data, ok := t.client.Cache.Get(path); listed && ok && file.Matches(data) {
-			return data, nil
+		paths[name] = path
+	}
+	get := func(path string) ([]byte, error) { return nil, errTemplateSet }
+	if snap, err := client.Latest(ctx); err == nil && snap.Manifest.Version == version {
+		get = func(path string) ([]byte, error) { return snap.Fetch(ctx, path) }
+	} else if b, ok := client.Cache.Get(rules.ManifestPath); ok {
+		if m, err := rules.ParseManifest(b); err == nil && m.Version == version {
+			get = func(path string) ([]byte, error) {
+				file, listed := m.File(path)
+				if data, ok := client.Cache.Get(path); listed && ok && file.Matches(data) {
+					return data, nil
+				}
+				return nil, errTemplateSet
+			}
 		}
 	}
-	return nil, errTemplateSet
+	sets := make(map[string][]byte, len(paths))
+	var mu sync.Mutex
+	var failure error
+	slots := make(chan struct{}, templateParallel)
+	var wg sync.WaitGroup
+	for name, path := range paths {
+		wg.Go(func() {
+			slots <- struct{}{}
+			defer func() { <-slots }()
+			if ctx.Err() != nil {
+				return
+			}
+			data, err := get(path)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil && failure == nil {
+				failure = err
+				cancel()
+			}
+			sets[name] = data
+		})
+	}
+	wg.Wait()
+	if failure == nil {
+		failure = ctx.Err()
+	}
+	if failure != nil {
+		return nil, errTemplateSet
+	}
+	return sets, nil
 }
 
-// path is a template provider's place on the branch: its URL without the host the template was
-// filled in with.
-func (t *templateSets) path(url string) (string, bool) {
-	for _, h := range t.client.Hosts {
+// branchPath is a template provider's place on the branch: its URL without the host the
+// template was filled in with.
+func branchPath(hosts []rules.Host, url string) (string, bool) {
+	for _, h := range hosts {
 		if p, ok := strings.CutPrefix(url, h.Base+"/"); ok && rules.ValidPath(p) {
 			return p, true
 		}

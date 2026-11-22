@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -218,16 +219,106 @@ func TestTemplateRefusesARollback(t *testing.T) {
 	}
 }
 
+// A rule set unlike the manifest, or one no host serves, is not used: the subscription is
+// still updated, and routes by the router's default until a later refresh gets the set.
 func TestTemplateRuleSetsMustMatchTheManifest(t *testing.T) {
 	b := serveBranch(t, 42)
 	b.lan = "DOMAIN-SUFFIX,tampered.example\n"
 	store, id := fileSource(t, RoutingOwn)
-	_, err := b.fetcher().Refresh(t.Context(), store, id, []byte(twoLinks), Policy{})
-	if p := FailureProvider(err); p == nil || p.Kind != "rule" {
-		t.Fatal("a rule set unlike the manifest was used", err)
+	c, err := b.fetcher().Refresh(t.Context(), store, id, []byte(twoLinks), Policy{})
+	if err != nil || c.Decision != "ready" || !c.Profile.Local || c.Profile.Template != nil || len(c.Profile.Nodes) != 2 {
+		t.Fatal("a rule set unlike the manifest stopped or entered the update", err, c.Decision, c.Profile.Template)
+	}
+	if !slices.ContainsFunc(c.Notices, func(n Notice) bool { return n.Code == "subconv_template_unavailable" }) {
+		t.Fatal(c.Notices)
 	}
 	if _, err := os.Stat(filepath.Join(TemplateDir, "providers/dler/lan.classical.txt")); err == nil {
 		t.Fatal("tampered rule set cached")
+	}
+	b.lan = ""
+	if c, err = b.fetcher().Refresh(t.Context(), store, id, []byte(twoLinks), Policy{AllowLocalFallback: true}); err != nil || c.Profile.Template == nil {
+		t.Fatal("a later refresh did not take the template", err, c.Decision)
+	}
+}
+
+const lossyRejections = `proxies:
+  - {name: HK 01, type: ss, server: hk.example.com, port: 8388, cipher: aes-128-gcm, password: p}
+proxy-groups:
+  - {name: Mine, type: select, proxies: [HK 01]}
+rules:
+  - USER-AGENT,ads*,REJECT
+  - DOMAIN-SUFFIX,a.example,Mine
+  - MATCH,Mine
+`
+
+// Rules the template replaced no longer weigh: an automatic update does not stop for the
+// rejection a subscription always loses.
+func TestTemplateUpdatesNeedNoConfirmation(t *testing.T) {
+	b := serveBranch(t, 42)
+	store, id := fileSource(t, RoutingOwn)
+	for range 2 {
+		c, err := b.fetcher().Refresh(t.Context(), store, id, []byte(lossyRejections), Policy{Scheduled: true})
+		if err != nil || c.Decision != "ready" || c.Profile.Template == nil || c.Profile.Template.Reason != subconv.TemplateDropped {
+			t.Fatal(err, c.Decision, c.Notices)
+		}
+		if slices.ContainsFunc(c.Notices, func(n Notice) bool { return n.Dangerous || n.Code == "subconv_unsupported_rule" }) {
+			t.Fatal(c.Notices)
+		}
+	}
+}
+
+// The template's rules mean the default geodata, whatever the subscription chose for its own,
+// and a script the subscription routed by is gone with its rules.
+func TestTemplateIgnoresTheSubscriptionsGeodataAndScript(t *testing.T) {
+	b := serveBranch(t, 42)
+	store, id := fileSource(t, RoutingTemplate)
+	body := "geox-url:\n  geoip: https://example.org/my/geoip.dat\nscript:\n  code: |\n    def main(ctx, m): return 'DIRECT'\n" + ownRules
+	c, err := b.fetcher().Refresh(t.Context(), store, id, []byte(body), Policy{})
+	if err != nil || c.Decision != "ready" || c.Profile.Template == nil {
+		t.Fatal(err, c.Decision, c.Notices)
+	}
+	if !slices.ContainsFunc(c.Profile.Rules, func(r Rule) bool { return r.RuleSet == DomesticIPSet }) {
+		t.Fatal("the template's GEOIP,CN rule was dropped", c.Profile.Rules)
+	}
+	if slices.ContainsFunc(c.Notices, func(n Notice) bool { return n.Code == "script" || n.Code == "rule_provider_custom_geo" }) {
+		t.Fatal(c.Notices)
+	}
+}
+
+// Seventy rule sets arrive six at a time.
+func TestTemplateSetsDownloadInParallel(t *testing.T) {
+	var active, peak atomic.Int32
+	files := []rules.File{}
+	providers := map[string]any{}
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/"+rules.ManifestPath {
+			m, _ := json.Marshal(rules.Manifest{Version: 7, Files: files})
+			w.Write(m)
+			return
+		}
+		n := active.Add(1)
+		defer active.Add(-1)
+		for p := peak.Load(); n > p && !peak.CompareAndSwap(p, n); p = peak.Load() {
+		}
+		time.Sleep(20 * time.Millisecond)
+		w.Write([]byte("DOMAIN," + strings.TrimPrefix(r.URL.Path, "/") + "\n"))
+	}))
+	defer srv.Close()
+	files = append(files, rules.File{Path: rules.TemplatePath, Size: 1, SHA256: strings.Repeat("0", 64)})
+	for i := range 70 {
+		path := fmt.Sprintf("providers/set%d.txt", i)
+		data := "DOMAIN," + path + "\n"
+		sum := sha256.Sum256([]byte(data))
+		files = append(files, rules.File{Path: path, Size: int64(len(data)), SHA256: hex.EncodeToString(sum[:])})
+		providers[fmt.Sprintf("s%d", i)] = map[string]any{"type": "http", "url": srv.URL + "/" + path}
+	}
+	client := &rules.Client{HTTP: srv.Client(), Hosts: []rules.Host{{Base: srv.URL, Operator: "test"}}, Cache: templateCache{dir: t.TempDir()}}
+	sets, err := fetchTemplateSets(t.Context(), client, 7, providers)
+	if err != nil || len(sets) != 70 || string(sets["s3"]) != "DOMAIN,providers/set3.txt\n" {
+		t.Fatal(err, len(sets))
+	}
+	if p := peak.Load(); p < 2 || p > templateParallel {
+		t.Fatal("concurrent downloads:", p)
 	}
 }
 
