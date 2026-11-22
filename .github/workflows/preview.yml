@@ -97,12 +97,17 @@ jobs:
             --notes-file notes.md \
             --prerelease \
             --latest=false
-      # Only the newest preview stays; the older ones go, with their tags.
+      # Only the newest preview stays; the older ones go, with their tags. A release's createdAt
+      # is its commit's date, so after develop is reset to an older commit the new preview would
+      # count as old: order by publishedAt, and never delete the preview this run published.
       - name: Remove older previews
         if: steps.current.outputs.publish == 'true'
+        env:
+          TAG: ${{ steps.files.outputs.tag }}
         run: |
-          gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName,isPrerelease,createdAt \
-            --jq '[.[] | select(.isPrerelease and (.tagName | test("^v.+-preview\\.[0-9]+$")))] | sort_by(.createdAt) | reverse | .[1:] | .[].tagName' |
+          test -n "$TAG"
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName,isPrerelease,publishedAt \
+            --jq '[.[] | select(.isPrerelease and (.tagName | test("^v.+-preview\\.[0-9]+$")))] | sort_by(.publishedAt) | reverse | .[1:] | .[].tagName | select(. != env.TAG)' |
           while read -r tag; do
             gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --cleanup-tag --yes
           done
