@@ -244,53 +244,106 @@ async function setDetail(u, source, name, info) {
         list.replaceChildren(u.h('p', { class: 'ow-muted' }, e.message));
     }
 }
-// What the subscription or the plugin provides: its rule sets and how often each was hit.
+// Where the loaded rules send each rule set's matches. The page reads only the first rules, so a
+// set referenced further down has no known route here; its details list every rule that uses it.
+function setRoutes(items) {
+    const routes = new Map();
+    for (const rule of items || [])
+        for (const tag of new Set([rule.match?.rule_set, rule.rule_set].flat().filter(Boolean))) {
+            if (!routes.has(tag)) routes.set(tag, []);
+            if (rule.target && !routes.get(tag).includes(rule.target)) routes.get(tag).push(rule.target);
+        }
+    return routes;
+}
+// A route reads as text; a policy group links to its panel on the proxy page.
+function setRoute(u, routes) {
+    const shown = routes.slice(0, 2).map((id) =>
+        !id || id === '@direct' || id === '@reject'
+            ? u.h('span', {}, routeName(u, id))
+            : u.button(routeName(u, id) + ' ›', () => u.go('proxy', id), 'ow-link'),
+    );
+    return [
+        ...shown.flatMap((node, i) => (i ? ['、', node] : [node])),
+        routes.length > 2 ? muted(u, ' 等 ' + routes.length + ' 个') : null,
+    ];
+}
+let setCards = 0;
+// One rule set: its name and kind, then entries, hits and route, then where to look further.
+function setCard(u, name, info, hits, routes, open) {
+    const heading = 'ow-set-' + ++setCards;
+    const hit = hits?.[name]?.count;
+    const stat = (label, value, cls) =>
+        u.h('div', { class: cls }, u.h('dt', {}, label), u.h('dd', {}, value));
+    const link = (text, handler) => {
+        // Every card has these two; the set's name tells them apart.
+        const b = u.button(text, handler, 'ow-link');
+        b.setAttribute('aria-describedby', heading);
+        return b;
+    };
+    return u.h(
+        'li',
+        { class: 'ow-set-card', 'data-origin': info.builtIn ? 'builtin' : 'subscription' },
+        u.h(
+            'div',
+            { class: 'ow-set-title' },
+            u.h('h3', { id: heading }, name),
+            u.h(
+                'span',
+                { class: 'ow-set-tags' },
+                badge(u, info.builtIn ? '内置' : '订阅'),
+                info.binary
+                    ? u.h('span', { class: 'ow-badge ow-badge-plain', title: '二进制格式，无法逐条列出' }, '二进制')
+                    : null,
+            ),
+        ),
+        u.h(
+            'dl',
+            { class: 'ow-set-stats' },
+            stat('条目', info.builtIn ? '随插件更新' : (info.count ?? '—') + ' 条'),
+            stat('命中连接', hit ? hit + ' 次' : '—', hit ? 'ow-set-hit' : null),
+            routes?.length ? stat('去向', setRoute(u, routes), 'ow-set-route') : null,
+        ),
+        actions(
+            u,
+            link('连接记录', () => u.go('connections', 'rule:' + name)),
+            link('详情', open),
+        ),
+    );
+}
+// What the subscription or the plugin provides: its rule sets, one card each, and how often each was hit.
 function ruleSetCard(u, source, primary, initial, hits) {
     const mode = u.status.intent?.mode;
     const names = Object.keys(initial.sets || {});
     if (initial.local) names.push(...['geosite-cn', 'geoip-cn'].filter((s) => !names.includes(s)));
-    const head = ['规则集', '来源', '条目', '命中连接', ''];
-    const tbody = u.h('tbody', {});
+    const routes = setRoutes(initial.items);
     const feedback = u.h('div', { class: 'ow-muted', role: 'status', hidden: true });
     const btn = u.button('更新订阅规则集', () =>
         primary?.kind === 'file' ? reimport(u, source, feedback) : importSource(u, source, '', feedback),
     );
     btn.disabled = !primary?.ready || initial.local || !names.length;
-    for (const name of names) {
+    const cards = names.map((name) => {
         const builtIn = !!initial.local,
             binary = !!initial.binary?.[name],
             count = binary ? initial.entries?.[name] : initial.sets[name];
-        const cells = [
-            u.h('strong', {}, name),
-            builtIn ? '内置' : '订阅',
-            builtIn ? '随插件更新' : (count ?? '—') + ' 条' + (binary ? ' · 二进制' : ''),
-            hits?.[name]?.count ? hits[name].count + ' 次' : '—',
-            actions(
-                u,
-                u.button('连接记录', () => u.go('connections', 'rule:' + name), 'ow-link'),
-                u.button('详情', () => setDetail(u, source, name, { builtIn, binary, count, primary, mode }), 'ow-link'),
-            ),
-        ];
-        tbody.append(u.h('tr', {}, cells.map((v, j) => u.h('td', { 'data-label': head[j] || null }, v))));
-    }
+        // The plugin's own sets send their matches direct, as their details say.
+        const route = routes.get(name) || (builtIn ? ['@direct'] : null);
+        return setCard(u, name, { builtIn, binary, count }, hits, route, () =>
+            setDetail(u, source, name, { builtIn, binary, count, primary, mode }),
+        );
+    });
     return u.h(
         'section',
         { class: 'ow-card' },
         u.h(
             'div',
             { class: 'ow-row ow-toolbar' },
-            u.h('h2', {}, '规则集'),
+            u.h('div', { class: 'ow-set-heading' }, u.h('h2', {}, '规则集'), names.length ? muted(u, names.length + ' 个') : null),
             actions(u, muted(u, !initial.local && primary?.updated_at ? '更新于 ' + date(primary.updated_at) : ''), btn),
         ),
         muted(u, '命中连接为本次启动以来的累计次数，清空连接记录时归零。'),
         feedback,
         names.length
-            ? u.h(
-                  'table',
-                  { class: 'ow-table ow-rule-sets' },
-                  u.h('thead', {}, u.h('tr', {}, head.map((x) => u.h('th', { scope: 'col' }, x)))),
-                  tbody,
-              )
+            ? u.h('ul', { class: 'ow-set-grid', role: 'list' }, cards)
             : u.h('p', { class: 'ow-empty' }, '当前来源没有规则集'),
     );
 }
@@ -388,7 +441,8 @@ export async function rules(u) {
     const [customResponse, groups, initial, hits] = await Promise.all([
         u.rpc('custom_rules'),
         ready ? allGroups(u, source) : [],
-        ready ? read(u, 'rules', { source, limit: limitRules }) : emptyPage,
+        // As many rules as one read returns, so more of the rule sets show where they lead.
+        ready ? read(u, 'rules', { source, limit: 256 }) : emptyPage,
         u.rpc('rule_hits').catch(() => ({})),
     ]);
     const name = u.name,
