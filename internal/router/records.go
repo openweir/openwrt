@@ -23,6 +23,7 @@ type Event struct {
 	Level   string `json:"level"`
 	Message string `json:"message"`
 	Detail  string `json:"detail,omitempty"` // a core error's redacted operation or words (coreDetail), or the plugins a start stopped
+	Folded  bool   `json:"folded,omitempty"` // counts lines of more different details than detailVariants
 }
 type Records struct {
 	minTime     int64
@@ -113,8 +114,8 @@ func (r *Records) RuleHits() map[string]RuleHit {
 func (r *Records) Log(source, level, message string) { r.LogDetail(source, level, message, "") }
 
 // detailVariants is how many entries of one core or DNS reason a minute keeps apart by their
-// detail. Further details fold into one entry without a detail, so that a cause the core
-// reports with a different detail each time cannot fill the log.
+// detail. Further details fold into one entry without a detail, marked Folded, so that a cause
+// the core reports with a different detail each time cannot fill the log.
 const detailVariants = 4
 
 // LogDetail records an event with a redacted operation shown under it.
@@ -123,6 +124,7 @@ func (r *Records) LogDetail(source, level, message, detail string) {
 	defer r.mu.Unlock()
 	now := time.Now().UnixMilli()
 	// Core and DNS repeats within a minute fold into one recent entry, which moves to the end.
+	folded := false
 	if source == "core" || source == "dns" {
 		for {
 			variants := 0
@@ -137,6 +139,7 @@ func (r *Records) LogDetail(source, level, message, detail string) {
 				}
 				e.Count = max(e.Count, 1) + 1
 				e.Time = now
+				e.Folded = e.Folded || folded
 				copy(r.events[i:], r.events[i+1:])
 				r.events[len(r.events)-1] = e
 				return
@@ -144,14 +147,14 @@ func (r *Records) LogDetail(source, level, message, detail string) {
 			if detail == "" || variants < detailVariants {
 				break
 			}
-			detail = ""
+			detail, folded = "", true
 		}
 	}
 	if len(r.events) == recordLimit {
 		copy(r.events, r.events[1:])
 		r.events = r.events[:recordLimit-1]
 	}
-	r.events = append(r.events, Event{Time: now, Source: source, Level: level, Message: message, Detail: detail})
+	r.events = append(r.events, Event{Time: now, Source: source, Level: level, Message: message, Detail: detail, Folded: folded})
 }
 
 // Core stderr is free form, and can contain signed URLs or full config values.

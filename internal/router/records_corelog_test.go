@@ -94,6 +94,9 @@ func TestCoreLogFoldsVaryingDetails(t *testing.T) {
 		if e.Detail == "" {
 			plain++
 		}
+		if e.Folded != (e.Detail == "") {
+			t.Errorf("only the entry without a detail is folded: %+v", e)
+		}
 	}
 	if len(logs) != detailVariants+1 || plain != 1 || total != 23 {
 		t.Fatalf("%d entries, %d without a detail, %d counted: %+v", len(logs), plain, total, logs)

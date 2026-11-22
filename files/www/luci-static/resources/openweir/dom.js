@@ -184,7 +184,7 @@ const diagnosticText = {
     tls_certificate_error: 'TLS 证书校验失败',
     io_timeout: '连接读写超时',
     deadline_exceeded: '操作超过时限',
-    core_diagnostic: '内核报告了一条其他警告（原文可能含地址或域名，未记录）',
+    core_diagnostic: '内核报告了一条其他消息（原文可能含地址或域名，未记录）',
     connection_reset: '连接被对端重置',
     connection_closed: '连接被对端提前关闭',
     geodata_unavailable: 'GeoIP / GeoSite 数据读取或下载失败',
@@ -581,9 +581,16 @@ const detailSentences = {
     core_listener_failed: (d) => diagnosticText.core_listener_failed + '：' + d,
     invalid_configuration: (d) => diagnosticText.invalid_configuration + '：' + d,
 };
+// An entry that counts lines of more different details than the log keeps apart within a minute
+// (records.go LogDetail): the reason's own text, unless it speaks of a single line.
+const foldedText = {
+    core_diagnostic: '内核报告了多条内容各不相同的其他消息，已合并为一条',
+    permission_denied: '内核多次报告权限不足，被拒绝的操作各不相同，已合并为一条',
+};
 export function eventMessage(v) {
     const sentence = v.detail && detailSentences[v.message];
-    return sentence ? sentence(v.detail) : diagnosticMessage(v.message);
+    if (sentence) return sentence(v.detail);
+    return (v.folded && foldedText[v.message]) || diagnosticMessage(v.message);
 }
 
 export function tlsMessage(detail) {
