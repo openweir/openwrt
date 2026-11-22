@@ -100,9 +100,10 @@ case "$current" in ''|*[!A-Za-z0-9.+_~:-]*) fail 'Invalid installed package vers
 if [ "$pm" = apk ]; then
  relation=$(apk version -t "$version" "$current")
 else
+ # opkg reads a lone '>' or '<' as >= or <=, so equal versions need the strict '>>' and '<<'.
  relation='='
- if opkg compare-versions "$version" '>' "$current"; then relation='>'
- elif opkg compare-versions "$version" '<' "$current"; then relation='<'; fi
+ if opkg compare-versions "$version" '>>' "$current"; then relation='>'
+ elif opkg compare-versions "$version" '<<' "$current"; then relation='<'; fi
 fi
 case "$relation" in
  '>') available=true;;
