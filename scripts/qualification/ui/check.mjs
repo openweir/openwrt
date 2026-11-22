@@ -557,7 +557,11 @@ try {
 		await page.waitForFunction(() => window.model.choices['@global']?.saved.endsWith('2'));
 		await page.getByRole('link', { name: '概览', exact: true }).click();
 		await page.getByRole('button', { name: '智能', exact: true }).click();
-		if (width < 650) await page.getByLabel('切换订阅', { exact: true }).click();
+		if (width < 650) {
+			// A phone shows the subscription card's menu and its line, which stays a live region while empty.
+			assert.notEqual(await page.locator('.ow-sources > .ow-feedback').evaluate(el => getComputedStyle(el).display), 'none');
+			await page.getByLabel('切换订阅', { exact: true }).click();
+		}
 		await page.getByRole('button', { name: '切换至 外部订阅' }).click();
 		await page.waitForFunction(() => window.model.saved.source === 'p1');
 		await page.getByRole('link', { name: '代理', exact: true }).click();

@@ -1360,7 +1360,9 @@
 @container (max-width: 650px) {
 	.ow .ow-source-grid { grid-template-columns: minmax(0, 1fr); }
 	.ow .ow-card.ow-source-card { --ow-source-pad: 14px; }
-	.ow .ow-sources:has(.ow-source-mobile) > :not(.ow-source-mobile) { display: none; }
+	/* On a phone the subscription card shows only its menu, and its line above it: empty, the line
+	   is hidden only visually, so a notice written into it is announced (Inline feedback). */
+	.ow .ow-sources:has(.ow-source-mobile) > :not(.ow-source-mobile):not(.ow-feedback) { display: none; }
 	.ow .ow-source-mobile { display: block; }
 	.ow .ow-source-mobile > summary { display: flex; align-items: center; gap: 12px; padding: 0; }
 	.ow .ow-source-mobile > summary::after { content: '›'; color: var(--ow-secondary); font-size: 20px; }
@@ -1507,10 +1509,6 @@
 	align-items: flex-start;
 	gap: 12px;
 	padding: 6px 0;
-}
-/* On a phone the subscription card shows only its menu; its line stays in view above it. */
-.ow .ow-sources:has(.ow-source-mobile) > p.ow-feedback:not(:empty) {
-	display: block;
 }
 @container (max-width: 650px) {
 	.ow .ow-connection:has(> .ow-feedback:not(:empty)) {
