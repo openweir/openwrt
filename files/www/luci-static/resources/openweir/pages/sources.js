@@ -132,6 +132,9 @@ const notices = {
     rule_provider_reference_unavailable: '规则引用的提供方未载入，相关规则无法导入',
     unsupported_group: '策略组无法转换',
     source_mismatch: '来源与当前订阅不一致',
+    rejection_removed: '会移除原有的拦截规则',
+    routing_disappeared: '新版本没有分流规则和策略组',
+    active_target_missing: '正在使用的节点或策略组在新版本中不存在',
 };
 // Why a subscription routes by the built-in rules (the profile's template.reason).
 const templateReasons = {
@@ -198,6 +201,16 @@ function failureMessage(code, provider, tls) {
     const issue = [label, provider.file, http ? '返回 HTTP ' + http[1] : cert || providerErrors[code] || '引用文件读取失败'].filter(Boolean).join(' · ');
     const rows = provider.template_warnings ? noticeRows([{code:'platform_routing_warnings', at:provider.template_warnings}]) : [];
     return rows.length ? issue + '。模板提醒：' + rows.map(row => row.text).join('；') : issue;
+}
+// An update that an automatic refresh downloaded but did not apply (the source's pending_update),
+// and the button on its card that runs the card's update to review it.
+const pendingUpdates = {
+    confirmation_required: { text: '自动更新发现变更待确认，确认前节点和规则保持不变', action: '查看并确认' },
+    update_blocked: { text: '自动更新取到的新版本无法使用，已保留上次配置', action: '查看原因' },
+};
+function pendingMessage(pending) {
+    const details = (pending.notices || []).map((code) => notices[code]).filter(Boolean).slice(0, 2);
+    return [pendingUpdates[pending.code]?.text || '自动更新取到的新版本尚未应用', ...details].join(' · ');
 }
 
 function noticeRows(items) {
@@ -727,14 +740,16 @@ export async function subscriptions(u) {
     updateAll.disabled = !sources.some(canRefresh);
     function sourceCard(s) {
         const warning = noticeSummary(s.notices);
+        const pending = !s.last_failure && canRefresh(s) ? s.pending_update : null;
         const message = u.h(
             'div',
             {
-                class: 'ow-muted', role: 'status', hidden: !s.last_failure && !s.last_change && !s.needs_refresh,
+                class: 'ow-muted', role: 'status', hidden: !s.last_failure && !pending && !s.last_change && !s.needs_refresh,
                 'data-tone': s.last_failure ? 'error' : null,
             },
             s.last_failure
                 ? '上次更新失败 · ' + failureMessage(s.last_failure, s.last_provider, s.last_tls) + (s.ready ? ' · 已保留上次配置' : '')
+                : pending ? pendingMessage(pending)
                 : s.needs_refresh ? (s.kind === 'file' ? '内核已切换，请重新导入原文件以生成配置' : '内核已切换，等待重新获取订阅')
                 : s.last_change
                   ? '上次更新 · 新增 ' + s.last_change.added + ' · 移除 ' + s.last_change.removed
@@ -801,7 +816,8 @@ export async function subscriptions(u) {
             u.h('span', {}, u.h('strong', { class: 'ow-mono' }, String(s.node_count || 0)), ' 个节点'),
             muted(u, s.updated_at ? '上次更新 ' + date(s.updated_at) : '尚未更新'),
         );
-        const update = u.button(s.kind === 'file' ? '导入新文件' : s.login_required ? '重新登录' : '更新', () => {
+        // The card's update. A pending update's button runs it too, to open the update's review.
+        const runUpdate = () => {
             if (s.kind === 'file') return reimport(u, s.source, message);
             if (s.login_required) {
                 const pane = u.h('div', {}),
@@ -822,8 +838,10 @@ export async function subscriptions(u) {
                 card.replaceWith(replacement);
                 updateAll.disabled = !sources.some(canRefresh);
             });
-        });
+        };
+        const update = u.button(s.kind === 'file' ? '导入新文件' : s.login_required ? '重新登录' : '更新', runUpdate);
         update.disabled = importing;
+        if (pending && !importing) message.append(' ', u.button(pendingUpdates[pending.code]?.action || '查看', runUpdate));
         // The card's other actions report under its buttons; a failed background import is told
         // here too, unless the message above already shows the failure the router recorded.
         const cardLine = u.feedback(null, 'source:' + s.source, { covered: !!s.last_failure });

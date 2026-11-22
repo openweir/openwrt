@@ -472,6 +472,18 @@ try {
 				const savedProblem = page.locator('.ow-source-card').filter({hasText:'家庭套餐'});
 				await savedProblem.locator('details summary').filter({hasText:'1 条导入提醒'}).click();
                 await savedProblem.locator('details p').filter({hasText:/Media.*SRS.*该规则集无法被内核直接使用/}).waitFor();
+				// An update an automatic refresh could not apply waits on its card; the button beside
+				// it runs the card's update, whose review applies it.
+				const pendingLine = savedProblem.getByRole('status').filter({hasText:'自动更新发现变更待确认，确认前节点和规则保持不变 · 会移除原有的拦截规则'});
+				await pendingLine.getByRole('button', {name:'查看并确认', exact:true}).waitFor();
+				const pendingCard = await savedProblem.elementHandle();
+				await pendingLine.getByRole('button', {name:'查看并确认', exact:true}).click();
+				const pendingReview = page.getByRole('dialog', {name:'确认订阅变更'});
+				await pendingReview.getByText('会移除原有的拦截规则', {exact:true}).waitFor();
+				await pendingReview.getByRole('button', {name:'应用此版本', exact:true}).click();
+				await pendingReview.waitFor({state:'detached'});
+				await page.waitForFunction(card => !card.isConnected, pendingCard);
+				assert.equal(await savedProblem.getByText(/自动更新发现变更待确认/).count(), 0, 'an applied update is no longer pending');
                 const account = page.locator('.ow-source-card').filter({ hasText: '示例服务商' });
 				await account.getByText('1 条导入提醒', {exact:true}).click();
 				const aggregate = account.locator('details[open] p');

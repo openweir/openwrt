@@ -23,7 +23,11 @@ export function fixture(empty = false, preparing = false) {
 		group_count: 2,
 		rule_count: 1,
 		...(i === 0 ? { notices: [{code:'platform_routing_warnings', at:'1'}], plan: { total: 2e11, upload: 5e9, download: 37e9, expireAt: '2026-12-19' } } : {}),
-		...(i === 2 ? { notices: [{code:'mihomo_unsupported_rule_set',at:'Media',resource:'SRS'}] } : {}),
+		...(i === 2 ? {
+			notices: [{code:'mihomo_unsupported_rule_set',at:'Media',resource:'SRS'}],
+			// An automatic refresh downloaded an update that waits for confirmation.
+			pending_update: {code:'confirmation_required', notices:['rejection_removed']},
+		} : {}),
 	}));
 	Object.assign(sources[3], {
 		last_failure: 'subscription_tls_not_yet_valid',
@@ -174,6 +178,13 @@ export function fixture(empty = false, preparing = false) {
 						const failed = job({});
 						tasks.set(failed.task, {stage:'failed',error:'subscription_request_failed'});
 						return failed;
+					}
+					// Refreshed by the administrator, a pending update opens its review, which settles it.
+					const pendingRow = sources.find(s => s.source === r.args.source && s.pending_update);
+					if (pendingRow && !r.args.confirm) {
+						const {notices} = pendingRow.pending_update;
+						delete pendingRow.pending_update;
+						return job({ok:true,data:{decision:'confirmation_required',confirmation_id:'pending-update',notices:notices.map(code => ({code, dangerous:code === 'rejection_removed'}))}});
 					}
 					if (controls.partialReview && !r.args.confirm) {
 						return job({ok:true,data:{decision:'confirmation_required',retains_routing:true,confirmation_id:'keep-rest',notices:[

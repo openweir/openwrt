@@ -149,6 +149,9 @@ const diagnosticText = {
     kernel_bootstrap_marker_invalid: '首次内核准备标记无效，已忽略',
     kernel_bootstrap_queue_failed: '首次内核准备未能加入任务队列',
     rule_provider_cleanup_failed: '清理未使用的规则集失败',
+    // Why an update a refresh downloaded was not applied (task stage held).
+    confirmation_required: '订阅有变更待确认，请到订阅页查看并确认',
+    update_blocked: '订阅的新版本无法使用，已保留上次配置，可到订阅页查看原因',
     initial_subscription_select_failed: '无法选择初始订阅',
     superseded: '已被更新的任务取代',
     cancelled: '已取消',
@@ -233,7 +236,7 @@ const taskStep = {
     capabilities: '读取能力', 'target-capabilities': '读取设备能力', 'install-json': '安装',
     select: '切换版本', bootstrap: '首次准备', test_nodes: '测试节点', cancel_tests: '取消测试',
 };
-const taskStage = { running: '开始', done: '完成', failed: '失败' };
+const taskStage = { running: '开始', done: '完成', failed: '失败', held: '未应用' };
 function taskName(action) {
     if (taskText[action]) return taskText[action];
     const [head, ...tail] = action.split('/');
@@ -384,7 +387,7 @@ function errorMessage(text) {
 export function diagnosticMessage(text) {
     if (!text) return '';
     if (diagnosticText[text]) return diagnosticText[text];
-    const task = /^(\S+) (running|done|failed) ([A-Za-z0-9_-]+)(?: (.*))?$/s.exec(text);
+    const task = /^(\S+) (running|done|failed|held) ([A-Za-z0-9_-]+)(?: (.*))?$/s.exec(text);
     if (task) {
         const extra = task[4] && task[4][0] !== '{' ? diagnosticMessage(task[4]) : '';
         return taskName(task[1]) + ' · ' + taskStage[task[2]] + (extra ? ' · ' + extra : '');
