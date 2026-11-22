@@ -197,6 +197,32 @@ async function checkNotices(browser, base, viewport) {
 		assert.deepEqual(errors, []);
 	} finally { await page.close(); }
 }
+// Between a phone and a wide page, at 800 px (a 768 px plugin): two subscription cards a row, the
+// rule columns stacked, the rule sets still two a row, and nothing wider than the page.
+async function checkMiddleWidth(browser, base) {
+	const width = 800,
+		page = await browser.newPage({viewport: {width, height: 900}, colorScheme: 'light'});
+	const errors = [];
+	page.on('pageerror', (e) => errors.push(e.message));
+	const overflows = () => page.evaluate(() => document.documentElement.scrollWidth > innerWidth);
+	try {
+		await page.goto(base + '/#subscriptions');
+		await page.getByRole('heading', {name:'订阅', exact:true}).first().waitFor();
+		const tops = await page.locator('.ow-source-card').evaluateAll(cards => cards.map(card => Math.round(card.getBoundingClientRect().top)));
+		assert.equal(tops.filter(top => top === tops[0]).length, 2, 'two subscription cards a row');
+		assert.equal(await overflows(), false, 'horizontal overflow in 订阅');
+		await page.screenshot({path: path.join(output, '订阅-' + width + '.png'), fullPage: true});
+		await page.getByRole('link', {name:'规则', exact:true}).click();
+		await page.getByRole('heading', {name:'规则集', exact:true}).waitFor();
+		const [builtIn, custom] = await page.locator('.ow-rules > .ow-side-stack').evaluateAll(els => els.map(el => el.getBoundingClientRect().toJSON()));
+		assert.ok(builtIn.bottom <= custom.top && Math.abs(builtIn.width - custom.width) < 1, 'rule columns stack across the page');
+		const [streaming, domestic] = await page.locator('.ow-set-card').evaluateAll(els => els.map(el => el.getBoundingClientRect().toJSON()));
+		assert.ok(Math.abs(streaming.top - domestic.top) < 1 && streaming.right <= domestic.left, 'two rule-set cards a row');
+		assert.equal(await overflows(), false, 'horizontal overflow in 规则');
+		await page.screenshot({path: path.join(output, '规则-' + width + '.png'), fullPage: true});
+		assert.deepEqual(errors, []);
+	} finally { await page.close(); }
+}
 // Advance the browser clock through ten minutes of normal overview polling.
 // Measuring document and chart bounds catches cumulative layout growth that
 // a screenshot taken immediately after mount does not show.
@@ -261,6 +287,7 @@ async function checkOverviewPolling(page, base, width) {
 	await page.getByRole('heading', {name: '已连接', exact: true}).waitFor();
 	assert.equal(await problem.textContent(), '');
 }
+const base = 'http://127.0.0.1:' + server.address().port;
 try {
 	for (const [width, height] of [
 		[1280, 900],
@@ -272,7 +299,6 @@ try {
 		page.on('console', (m) => {
 			if (['error', 'warning'].includes(m.type())) errors.push(m.text());
 		});
-		const base = 'http://127.0.0.1:' + server.address().port;
 		await page.goto(base + '/?empty');
 		assert.equal(new URL(page.url()).origin, base);
 		assert.equal(await page.title(), 'OpenWeir · LuCI');
@@ -787,6 +813,8 @@ try {
 		);
 		await page.close();
 	}
+	await checkMiddleWidth(browser, base);
+	console.log('800×900 two subscription cards a row, stacked rule columns and two rule-set cards a row passed');
 } finally {
 	await browser.close();
 	await new Promise((resolve) => server.close(resolve));
