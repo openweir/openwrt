@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/netip"
 	"slices"
+	"strconv"
 
 	"github.com/openweir/openwrt/internal/control"
 	"github.com/openweir/openwrt/internal/kernel"
@@ -27,19 +28,34 @@ type applied struct {
 }
 
 // routingKey covers the choices that decide where a connection goes: the mode, the
-// subscription and the local rules, groups and device routes. A subscription refresh with
-// the same choices keeps it, so open connections survive periodic updates. Group choices
-// are applied by Select, which closes only the connections through that group.
-func routingKey(i Intent) string {
+// subscription and the rules it routes by (profileRouting), and the local rules, groups and
+// device routes. A subscription refresh with the same choices keeps it, so open connections
+// survive periodic updates of its nodes, plan and traffic. Group choices are applied by
+// Select, which closes only the connections through that group.
+func routingKey(i Intent, p subscription.Profile) string {
 	b, _ := json.Marshal(struct {
-		Mode, Source  string
-		DefaultDirect bool
-		Groups        []LocalGroup
-		Devices       []DeviceRule
-		Rules         []CustomRule
-		Telegram      *Telegram
-	}{i.Mode, i.Source, i.Policy.DefaultDirect, i.Policy.Groups, i.Policy.Devices, i.Policy.Rules, i.Policy.Telegram})
+		Mode, Source, Routing string
+		DefaultDirect         bool
+		Groups                []LocalGroup
+		Devices               []DeviceRule
+		Rules                 []CustomRule
+		Telegram              *Telegram
+	}{i.Mode, i.Source, profileRouting(p), i.Policy.DefaultDirect, i.Policy.Groups, i.Policy.Devices, i.Policy.Rules, i.Policy.Telegram})
 	return string(b)
+}
+
+// profileRouting names the rules a profile routes by: the router's own default, the built-in
+// template at its version, or the subscription's own. Switching a subscription's 分流规则
+// changes it whenever the rules in effect change; a refresh changes it only with a new
+// template version, since a provider updates its own rules along with its nodes.
+func profileRouting(p subscription.Profile) string {
+	switch {
+	case p.Local:
+		return "local"
+	case p.Template != nil:
+		return "template " + strconv.FormatInt(p.Template.Version, 10)
+	}
+	return "subscription"
 }
 
 // networkKey covers what the network helper applied: a change needs a new takeover.
@@ -71,13 +87,19 @@ func takeover(i Intent, n Network) (guard, telegram string, err error) {
 
 func (s *System) remember(i Intent, n Network, tag string, config []byte) {
 	guard, telegram, err := takeover(i, n)
+	// Start compiled config from this stored profile. Without it the key matches no reload,
+	// so the first reload closes connections rather than keep routes it cannot vouch for.
+	routing := ""
+	if p, e := subscription.OpenStore(Root + "/sources").Load(i.Source); e == nil {
+		routing = routingKey(i, p)
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err != nil {
 		s.applied = nil
 		return
 	}
-	s.applied = &applied{networkKey(i, n), guard, telegram, tag, routingKey(i), sha256.Sum256(config)}
+	s.applied = &applied{networkKey(i, n), guard, telegram, tag, routing, sha256.Sum256(config)}
 }
 
 // Reload swaps the core configuration in place when the listeners, firewall
@@ -133,7 +155,7 @@ func (s *System) Reload(ctx context.Context, i Intent) error {
 	}
 	// Interface notices (address lifetimes, RA refreshes) usually change nothing; reloading
 	// the core anyway would pause new connections and reset its DNS clients.
-	digest, routing := sha256.Sum256(config), routingKey(i)
+	digest, routing := sha256.Sum256(config), routingKey(i, profile)
 	if digest == last.config {
 		return nil
 	}
@@ -144,9 +166,9 @@ func (s *System) Reload(ctx context.Context, i Intent) error {
 		return e
 	}
 	// Mihomo keeps open connections on the route they started with. After a change of mode,
-	// subscription or rules, close them all as Clash clients do, so browsers reconnect on the
-	// new route: a page opened direct in smart mode would otherwise keep showing the local
-	// address after switching to global.
+	// subscription, its routing rules or local rules, close them all as Clash clients do, so
+	// browsers reconnect on the new route: a page opened direct in smart mode would otherwise
+	// keep showing the local address after switching to global.
 	if routing != last.routing && client.CloseConnections(ctx) != nil {
 		s.records.Log("core", "warn", "connections_not_reset")
 	}
