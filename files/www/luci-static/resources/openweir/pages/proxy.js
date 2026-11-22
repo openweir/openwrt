@@ -1,8 +1,6 @@
 import { h, card, field, select, segment, empty, pages, attach } from '../dom.js';
 
 const kindName = { selector: '手选', urltest: '自动', loadbalance: '负载均衡', fallback: '故障转移' };
-// Narrow cards name the long protocols by their usual short forms; the title keeps the full name.
-const protocolShort = { shadowsocks: 'SS', shadowsocksr: 'SSR', hysteria2: 'Hy2', hysteria: 'Hy', wireguard: 'WG' };
 const protocolNames = {
 	vless: 'VLESS',
 	vmess: 'VMess',
@@ -168,8 +166,7 @@ export async function proxy(ui) {
 					kindName[node?.kind] ||
 					(id === '@direct' ? '直连' : id === '@reject' ? '拦截' : '策略组'));
 		// The narrow card shortens this line; the title keeps it whole.
-		const shortText = !unavailable && !memberRoute.length && protocolShort[node?.protocol] || detailText;
-		const detail = h('small', { class: 'ow-muted', title: detailText }, shortText);
+		const detail = h('small', { class: 'ow-muted', title: detailText }, detailText);
 		const status = active
 			? global
 				? '当前出口'
@@ -183,8 +180,7 @@ export async function proxy(ui) {
 			h(
 				'span',
 				{ class: 'ow-node-copy' },
-				// The ring marks the choice; a corner mark tells in use from saved, its text read aloud.
-				h('span', { class: 'ow-node-name' }, name, status && h('span', { class: 'ow-node-mark', 'data-state': active ? 'active' : 'picked', title: status }, h('span', { class: 'ow-hidden-text' }, status))),
+				h('span', { class: 'ow-node-name' }, name, status && h('span', { class: 'ow-badge' }, status)),
 				detail,
 			),
 			h(

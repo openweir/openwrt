@@ -148,8 +148,7 @@
 }
 /* Cards keep a fixed minimum width, so a wider panel holds more of them. */
 .ow .ow-proxy-page .ow-node-grid {
-	/* auto-fit: a group with few nodes stretches them across the row instead of leaving a gap. */
-	grid-template-columns: repeat(auto-fit, minmax(min(128px, 100%), 1fr));
+	grid-template-columns: repeat(auto-fill, minmax(min(128px, 100%), 1fr));
 	gap: 6px;
 }
 .ow .ow-proxy-page .ow-accordion > .ow-node-grid {
@@ -158,7 +157,6 @@
 }
 /* The name spans the first row; the protocol, the status and the delay share the second. */
 .ow .ow-proxy-page .ow-node {
-	position: relative;
 	display: grid;
 	grid-template-columns: minmax(0, 1fr) auto auto;
 	align-content: center;
@@ -184,45 +182,15 @@
 	font-size: 13px;
 }
 .ow .ow-proxy-page .ow-node-copy > small {
-	grid-area: 2 / 1 / 3 / 3;
+	grid-area: 2 / 1;
 	font-size: 11px;
 	overflow: hidden;
 	white-space: nowrap;
 	text-overflow: ellipsis;
 }
-/* In use: a filled check in the corner; saved or default: a ring. The name makes room for it. */
-.ow .ow-proxy-page .ow-node-mark {
-	position: absolute;
-	top: 5px;
-	right: 5px;
-	width: 13px;
-	height: 13px;
-	border-radius: 50%;
-	box-shadow: inset 0 0 0 1.5px var(--ow-teal);
-}
-.ow .ow-proxy-page .ow-node-mark[data-state='active'] {
-	background: var(--ow-teal);
-}
-.ow .ow-proxy-page .ow-node-mark[data-state='active']::before {
-	content: '';
-	position: absolute;
-	left: 4.5px;
-	top: 2px;
-	width: 3px;
-	height: 6px;
-	border: solid #fff;
-	border-width: 0 1.5px 1.5px 0;
-	transform: rotate(45deg);
-}
-.ow .ow-proxy-page .ow-node:has(.ow-node-mark) .ow-node-name strong {
-	padding-right: 14px;
-}
-.ow .ow-proxy-page .ow-hidden-text {
-	position: absolute;
-	width: 1px;
-	height: 1px;
-	overflow: hidden;
-	clip-path: inset(50%);
+.ow .ow-proxy-page .ow-node-name .ow-badge {
+	grid-area: 2 / 2;
+	padding: 0 4px;
 	white-space: nowrap;
 }
 .ow .ow-proxy-page .ow-node-tail {
