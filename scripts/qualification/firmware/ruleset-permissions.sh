@@ -78,7 +78,7 @@ done
 report ruleset_watch_permissions
 p=$(pidof mihomo)
 [ -n "$p" ]
-# The core runs as root in the openweir-core group, with no_new_privs and only
+# The core runs as root in the openweir-core group alone, with no_new_privs and only
 # CAP_NET_ADMIN and CAP_NET_BIND_SERVICE in every capability set.
 gid=$(awk -F: '$1 == "openweir-core" { print $3 }' /etc/group)
 [ -n "$gid" ]
@@ -86,9 +86,10 @@ gid=$(awk -F: '$1 == "openweir-core" { print $3 }' /etc/group)
 awk -v gid="$gid" '
  $1 == "Uid:" { ok += $2 == 0 && $3 == 0 && $4 == 0 && $5 == 0 }
  $1 == "Gid:" { ok += $2 == gid && $3 == gid && $4 == gid && $5 == gid }
+ $1 == "Groups:" { ok += NF == 1 }
  $1 ~ /^Cap(Inh|Prm|Eff|Bnd|Amb):$/ { ok += $2 == "0000000000001400" }
  $1 == "NoNewPrivs:" { ok += $2 == 1 }
- END { exit ok != 8 }' "/proc/$p/status"
+ END { exit ok != 9 }' "/proc/$p/status"
 report core_identity
 # Confirm the running core, under its real UID, loaded both providers.
 key=$(cat /etc/openweir/private/control.token)
