@@ -213,7 +213,19 @@ var connectionNoise = map[string]bool{"connection_refused": true, "connection_re
 // become connection records; the rest are dropped.
 var ordinary = []string{"[tcp] dial ", "[udp] dial ", "[udp] resolve ip error", "[udp] destination ip not valid",
 	"[udp] dosniff error", "[udp] parse metadata failed", "[metadata] ", "[icmp] failed to connect", "isn't a *net.udpaddr",
-	"nil *net.udpaddr", "activate health check", "mihomo shutting down"}
+	"nil *net.udpaddr", "activate health check", "mihomo shutting down",
+	// The core notes at every load that a classical rule set is read only for its domain rules
+	// in dns.fake-ip-filter, or only for its domain or IP rules in a DNS policy or sniffer list.
+	// The plugin causes the first on purpose: with the China shortcut the fake-ip filter lists
+	// the sets of the rules that route by name (Compile), and the built-in template alone puts
+	// 25 classical ones there.
+	"only matching domain rules in fake-ip-filter", "only matching it contain ip rule", "only matching it contain domain rule",
+	// A health check over http:// whose test address does not answer a second request on the
+	// same connection (some providers hijack test addresses). The first answer already passed
+	// the node, and its delay is what the core reports; the core then advises https for test
+	// addresses ("... Due to some proxy providers hijacking test addresses ..."). One pair per
+	// node at every check, and nothing failed.
+	"failed to get the second response from", "it is recommended to use https for provider.health-check.url"}
 
 func (s *logSink) recordLine(line string) {
 	if strings.Contains(line, "\x1b") {
@@ -268,11 +280,18 @@ func (s *logSink) recordLine(line string) {
 	} else if exhausted {
 		reason = "core_file_limit_reached"
 	} else {
-		for _, x := range []struct{ needle, reason string }{{"address already in use", "listen_address_in_use"}, {"connection refused", "connection_refused"}, {"network is unreachable", "network_unreachable"}, {"i/o timeout", "io_timeout"}, {"context deadline exceeded", "deadline_exceeded"}, {"no such host", "dns_name_not_found"}, {"certificate", "tls_certificate_error"}, {"handshake", "handshake_failed"}, {"no space left", "disk_full"}, {"invalid config", "invalid_configuration"}, {"failed to create new os thread", "core_thread_creation_failed"}, {"pthread_create failed", "core_thread_creation_failed"},
+		// The provider and rule set needles are the forms mihomo writes ("initial proxy provider
+		// %s error", "initial rule provider %s error", "[Provider] %s pull error", a rule set's
+		// bad entry, a rule-set reference), not a word that a longer phrase may hold. They come
+		// first: they say what failed, and the error words after them how. The plugin's
+		// configurations carry no proxy providers (the subscription helper expands them into
+		// nodes), so the fetcher's "[Provider] <name>" lines name rule sets.
+		for _, x := range []struct{ needle, reason string }{{"initial proxy provider ", "node_provider_issue"}, {"parse proxy provider ", "node_provider_issue"},
+			{"initial rule provider ", "rule_provider_issue"}, {"[provider] ", "rule_provider_issue"}, {"from rule provider:", "rule_provider_issue"}, {"rule provider type error", "rule_provider_issue"},
+			{"parse classical rule [", "rule_provider_issue"}, {"invalid ipcidr:[", "rule_provider_issue"}, {"rule-set", "rule_provider_issue"}, {"rule set [", "rule_provider_issue"},
+			{"address already in use", "listen_address_in_use"}, {"connection refused", "connection_refused"}, {"network is unreachable", "network_unreachable"}, {"i/o timeout", "io_timeout"}, {"context deadline exceeded", "deadline_exceeded"}, {"no such host", "dns_name_not_found"}, {"certificate", "tls_certificate_error"}, {"handshake", "handshake_failed"}, {"no space left", "disk_full"}, {"invalid config", "invalid_configuration"}, {"failed to create new os thread", "core_thread_creation_failed"}, {"pthread_create failed", "core_thread_creation_failed"},
 			{"no route to host", "network_unreachable"}, {"connection reset", "connection_reset"}, {"broken pipe", "connection_reset"}, {"unexpected eof", "connection_closed"}, {": eof", "connection_closed"},
 			{"geoip", "geodata_unavailable"}, {"geosite", "geodata_unavailable"}, {"mmdb", "geodata_unavailable"},
-			{"rule provider", "rule_provider_issue"}, {"rule-provider", "rule_provider_issue"}, {"ruleset", "rule_provider_issue"},
-			{"proxy provider", "node_provider_issue"}, {"proxy-provider", "node_provider_issue"}, {"healthcheck", "node_health_check_failed"}, {"health check", "node_health_check_failed"},
 			{"sniff", "sniffer_issue"}, {"[tun]", "core_tun_issue"}, {"tun device", "core_tun_issue"}, {"/dev/net/tun", "core_tun_issue"}, {"dial", "dial_failed"}, {"dns", "dns_query_failed"}} {
 			if strings.Contains(line, x.needle) {
 				reason = x.reason

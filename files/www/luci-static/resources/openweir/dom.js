@@ -189,7 +189,6 @@ const diagnosticText = {
     geodata_unavailable: 'GeoIP / GeoSite 数据读取或下载失败',
     rule_provider_issue: '规则集加载或更新失败',
     node_provider_issue: '节点提供方加载或更新失败',
-    node_health_check_failed: '节点健康检查失败',
     sniffer_issue: '域名嗅探出错',
     core_tun_issue: 'TUN 设备或路由设置出错',
     dial_failed: '内核连接目标失败',
