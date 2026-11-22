@@ -867,11 +867,16 @@ func (f Fetcher) Refresh(ctx context.Context, store *Store, id string, file []by
 		}
 		return c, nil
 	}
-	// Matching an already usable profile changes only its refresh metadata.
-	// Hash the serialized form because stored rule values use json.Number.
+	// A profile that routes as the usable one (Profile.routing) leaves the router as it is: it
+	// needs no check, keeps the rollback snapshot and tells nobody (Unchanged), and the commit
+	// writes only the source's status. This includes a new template version with the same rules
+	// and rule sets: the profile keeps the version it was committed with, by which the router
+	// decides whether open connections stay (router.profileRouting), so they stay; the status
+	// shows the version found. Hash the serialized form because stored rule values use
+	// json.Number.
 	c.unchanged = r.Current != nil && !r.Suspended &&
 		(f.ReplacementURL == "" || f.ReplacementURL == r.Config.URL) &&
-		digest(c.Profile) == digest(*r.Current)
+		digest(c.Profile.routing()) == digest(r.Current.routing())
 	var confirm func() error
 	if !c.unchanged && f.BeforeCommit != nil {
 		if !store.Current(t) {

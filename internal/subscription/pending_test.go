@@ -27,7 +27,7 @@ func TestScheduledRefreshKeepsUpdateItCannotApply(t *testing.T) {
 	body, reachable := rejectingFeed, true
 	var afterBegin os.FileInfo
 	f := Fetcher{Client: &http.Client{Transport: setFixtureTransport(func(*http.Request) (*http.Response, error) {
-		afterBegin, _ = os.Stat(store.path(src.ID))
+		afterBegin, _ = os.Stat(store.statusPath(src.ID))
 		if !reachable {
 			return nil, errReset
 		}
@@ -64,8 +64,8 @@ func TestScheduledRefreshKeepsUpdateItCannotApply(t *testing.T) {
 		t.Fatal("pending update replaced the current profile")
 	}
 	_, again := refresh(Policy{Scheduled: true}, "confirmation_required")
-	if now, _ := os.Stat(store.path(src.ID)); again.Attempts != 3 || !os.SameFile(afterBegin, now) || again.PendingUpdate.Code != PendingConfirmation {
-		t.Fatal("the same pending update rewrote the record", again.Attempts)
+	if now, _ := os.Stat(store.statusPath(src.ID)); again.Attempts != 3 || !os.SameFile(afterBegin, now) || again.PendingUpdate.Code != PendingConfirmation {
+		t.Fatal("the same pending update rewrote the status", again.Attempts)
 	}
 
 	// The administrator's refresh showed the update to them. Dismissed, it is no longer pending.

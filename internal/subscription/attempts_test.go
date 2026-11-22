@@ -9,7 +9,7 @@ import (
 )
 
 // The scheduler spaces out retries by the attempts since the last success. A failure
-// repeated unchanged leaves the record as begin wrote it: one write per attempt.
+// repeated unchanged leaves the status as begin wrote it: one write per attempt.
 func TestAttemptsSinceSuccess(t *testing.T) {
 	store := OpenStore(t.TempDir())
 	src := Source{ID: "sub", Name: "sub", Kind: "external", URL: "https://example.com/feed"}
@@ -19,7 +19,7 @@ func TestAttemptsSinceSuccess(t *testing.T) {
 	var afterBegin os.FileInfo
 	ok := false
 	f := Fetcher{Client: &http.Client{Transport: setFixtureTransport(func(*http.Request) (*http.Response, error) {
-		afterBegin, _ = os.Stat(store.path(src.ID))
+		afterBegin, _ = os.Stat(store.statusPath(src.ID))
 		if ok {
 			return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(basic))}, nil
 		}
@@ -41,8 +41,8 @@ func TestAttemptsSinceSuccess(t *testing.T) {
 		t.Fatal(st.Attempts, st.AttemptedAt, st.LastFailure)
 	}
 	st := refresh(true)
-	if now, _ := os.Stat(store.path(src.ID)); st.Attempts != 2 || !os.SameFile(afterBegin, now) {
-		t.Fatal("repeated failure rewrote the record", st.Attempts)
+	if now, _ := os.Stat(store.statusPath(src.ID)); st.Attempts != 2 || !os.SameFile(afterBegin, now) {
+		t.Fatal("repeated failure rewrote the status", st.Attempts)
 	}
 	// An administrator's refresh starts over.
 	if st := refresh(false); st.Attempts != 1 {

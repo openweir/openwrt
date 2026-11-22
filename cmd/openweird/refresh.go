@@ -165,7 +165,7 @@ func heldUpdate(action string, data json.RawMessage) string {
 
 // retryDelay spaces out a refresh that keeps failing, or keeps finding an update it cannot
 // apply by itself: 15 minutes, doubling up to 6 hours or the update interval if that is
-// shorter. Each attempt rewrites the whole record on flash.
+// shorter. Each attempt rewrites the source's status on flash.
 func retryDelay(attempts int, interval time.Duration) time.Duration {
 	limit := 6 * time.Hour
 	if interval > 0 {

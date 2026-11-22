@@ -56,6 +56,11 @@ func TestStartupRechecksReferencedSources(t *testing.T) {
 	if _, err := store.Begin(other.Source); err != nil {
 		t.Fatal(err)
 	}
+	// A refresh's bookkeeping goes to the source's status file, not the profiles.
+	if err := check(); err != nil || compiles != 0 {
+		t.Fatal("refresh bookkeeping rebuilt", err)
+	}
+	saveStartupProfile(t, store, other)
 	if err := check(); err != nil || compiles != 1 {
 		t.Fatal("equivalent source update did not receive an exact check", err)
 	}

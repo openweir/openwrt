@@ -1,8 +1,10 @@
 package subscription
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -33,38 +35,77 @@ type Ticket struct {
 	Epoch      uint64 `json:"epoch"`
 	Generation uint64 `json:"generation"`
 }
+
+// A record is kept in two files on flash. The record file (path) holds the source, its
+// authority and its profiles with their rule sets; the status file (statusPath) the bookkeeping
+// of its refreshes, which changes with every attempt. An update writes only the files whose
+// content it changed (save), so a refresh that finds nothing new rewrites a few hundred bytes
+// of status rather than the profiles.
+//
+// The record file keeps the generation it was written at, and a status file older than that is
+// not read with it: the record file was written after it, by an update interrupted before its
+// status file, or by an earlier version that kept everything in the record file. Its own fields
+// count then, the bookkeeping included in the earlier format.
 type record struct {
-	legacy               bool
-	NeedsRefresh         bool                `json:"needs_refresh,omitempty"`
+	legacy          bool
+	disk            recordDisk
+	NeedsRefresh    bool              `json:"needs_refresh,omitempty"`
+	DownloadScope   string            `json:"download_scope,omitempty"`
+	DownloadMembers map[string]string `json:"download_members,omitempty"`
+	SchemaVersion   int               `json:"schema_version"`
+	Source          string            `json:"source"`
+	Epoch           uint64            `json:"epoch"`
+	Generation      uint64            `json:"generation"`
+	Revoked         bool              `json:"revoked,omitempty"`
+	Suspended       bool              `json:"suspended,omitempty"`
+	LoginRequired   bool              `json:"login_required,omitempty"`
+	Current         *Profile          `json:"current,omitempty"`
+	Config          *Source           `json:"config,omitempty"`
+	Previous        *Profile          `json:"previous,omitempty"`
+	bookkeeping
+}
+
+// bookkeeping is what a record's refreshes keep up to date. It goes to the status file; the
+// record files of earlier versions hold it themselves.
+type bookkeeping struct {
 	LastTLS              *tlsdiag.Diagnostic `json:"last_tls,omitempty"`
 	ClockRetryGeneration uint64              `json:"clock_retry_generation,omitempty"`
-	DownloadScope        string              `json:"download_scope,omitempty"`
 	LastProviderScope    string              `json:"last_provider_scope,omitempty"`
-	DownloadMembers      map[string]string   `json:"download_members,omitempty"`
-	Providers            *providerReceipt    `json:"providers,omitempty"`
-	Usage                *Usage              `json:"usage,omitempty"`
-	LastFailure          string              `json:"last_failure,omitempty"`
-	LastProvider         *ProviderDiagnostic `json:"last_provider,omitempty"`
-	LastChange           *ChangeCounts       `json:"last_change,omitempty"`
-	PendingUpdate        *PendingUpdate      `json:"pending_update,omitempty"`
-	UpdatedAt            string              `json:"updated_at,omitempty"`
-	SchemaVersion        int                 `json:"schema_version"`
-	Source               string              `json:"source"`
-	Epoch                uint64              `json:"epoch"`
-	Generation           uint64              `json:"generation"`
-	Revoked              bool                `json:"revoked,omitempty"`
-	Suspended            bool                `json:"suspended,omitempty"`
-	LoginRequired        bool                `json:"login_required,omitempty"`
-	Current              *Profile            `json:"current,omitempty"`
-	Config               *Source             `json:"config,omitempty"`
-	Previous             *Profile            `json:"previous,omitempty"`
+	// Providers is the provider receipt of the current profile. The status file is written
+	// after the record file, so a receipt never reaches a profile it was not taken with.
+	Providers     *providerReceipt    `json:"providers,omitempty"`
+	Usage         *Usage              `json:"usage,omitempty"`
+	LastFailure   string              `json:"last_failure,omitempty"`
+	LastProvider  *ProviderDiagnostic `json:"last_provider,omitempty"`
+	LastChange    *ChangeCounts       `json:"last_change,omitempty"`
+	PendingUpdate *PendingUpdate      `json:"pending_update,omitempty"`
+	UpdatedAt     string              `json:"updated_at,omitempty"`
 	// Attempts counts refreshes begun since the last success. With the latest start they
-	// space out the scheduler's retries; begin writes the record anyway.
+	// space out the scheduler's retries; begin writes them to the status file anyway.
 	Attempts    int    `json:"attempts,omitempty"`
 	AttemptedAt string `json:"attempted_at,omitempty"`
+	// CheckedTemplate is the template the last refresh found, when it differs from the current
+	// profile's only in its bookkeeping (Profile.routing): the profile keeps the template it
+	// was committed with, and the source's status shows this one.
+	CheckedTemplate *TemplateUse `json:"checked_template,omitempty"`
+}
+
+// statusFile is the content of a record's status file.
+type statusFile struct {
+	Source     string `json:"source"`
+	Generation uint64 `json:"generation"`
+	bookkeeping
+}
+
+// recordDisk is what a record's files held when it was read, for an update to leave alone what
+// it did not change.
+type recordDisk struct {
+	generation uint64 // of the record file
+	status     []byte // the status file, when it was read with the record file
 }
 
 const maxRecord = 64 << 20
+const maxStatus = 1 << 20
 
 // errUnchanged lets an update leave the record as it is: records hold whole profiles and
 // rule sets, and every write is synced to flash.
@@ -102,7 +143,9 @@ func (s *Store) updateContext(ctx context.Context, id string, fn func(*record) e
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	r, e := s.read(id)
+	read := sha256.New()
+	r, e := s.readWithChecksum(id, read)
+	exists := e == nil
 	if errors.Is(e, os.ErrNotExist) {
 		r = &record{SchemaVersion: SchemaVersion, Source: id, Epoch: 1}
 	} else if e != nil {
@@ -113,18 +156,61 @@ func (s *Store) updateContext(ctx context.Context, id string, fn func(*record) e
 	} else if e != nil {
 		return e
 	}
-	path := s.path(id)
+	var sum []byte
+	if exists {
+		sum = read.Sum(nil)
+	}
+	return s.save(ctx, r, sum)
+}
+
+// save writes what an update changed of a record (read is the digest of the record file it
+// was read from, nil for a new one): the record file when its content changed, then the status
+// file when the bookkeeping or the generation did. The record file is written with the
+// generation, so that a status file left from before it does not count (record).
+func (s *Store) save(ctx context.Context, r *record, read []byte) error {
+	file := *r
+	file.bookkeeping = bookkeeping{}
+	file.Generation = r.disk.generation
+	// Records decode and encode to the same bytes: an update that changed none of the record
+	// file's fields matches the file it read.
+	same := sha256.New()
+	if err := json.NewEncoder(same).Encode(&file); err != nil {
+		return err
+	}
+	status, err := json.Marshal(statusFile{r.Source, r.Generation, r.bookkeeping})
+	if err != nil {
+		return err
+	}
+	status = append(status, '\n')
+	if !bytes.Equal(same.Sum(nil), read) {
+		file.Generation = r.Generation
+		if err := s.replace(ctx, s.path(r.Source), maxRecord, func(w io.Writer) error { return json.NewEncoder(w).Encode(&file) }); err != nil {
+			return err
+		}
+		// The status file belongs with the record file now published.
+		ctx = context.WithoutCancel(ctx)
+	}
+	if bytes.Equal(status, r.disk.status) {
+		return nil
+	}
+	return s.replace(ctx, s.statusPath(r.Source), maxStatus, func(w io.Writer) error { _, err := w.Write(status); return err })
+}
+
+// replace writes a file whole or not at all: a synced temporary file renamed over it, then the
+// directory synced, so that a later write never reaches flash before it. A cancelled update
+// publishes nothing.
+func (s *Store) replace(ctx context.Context, path string, limit int64, write func(io.Writer) error) error {
 	f, e := os.CreateTemp(s.dir, ".snapshot-*")
 	if e != nil {
 		return e
 	}
 	name := f.Name()
 	defer os.Remove(name)
-	err := json.NewEncoder(f).Encode(r)
+	err := write(f)
 	if err == nil {
 		var st os.FileInfo
 		st, err = f.Stat()
-		if err == nil && st.Size() > maxRecord {
+		if err == nil && st.Size() > limit {
 			err = errors.New("snapshot exceeds storage limit")
 		}
 	}
@@ -144,15 +230,20 @@ func (s *Store) updateContext(ctx context.Context, id string, fn func(*record) e
 	if err = os.Rename(name, path); err != nil {
 		return err
 	}
-	dir, err := os.Open(s.dir)
-	if err != nil {
-		return err
-	}
-	defer dir.Close()
-	return dir.Sync()
+	replaced(path)
+	return s.syncDir()
 }
+
+// replaced learns of each file an update writes, for tests to count them.
+var replaced = func(string) {}
+
 func (s *Store) path(id string) string {
 	return filepath.Join(s.dir, "subscription-"+digest(id)+".json")
+}
+
+// statusPath is the record's status file. List reads only record files.
+func (s *Store) statusPath(id string) string {
+	return filepath.Join(s.dir, "status-"+digest(id)+".json")
 }
 func (s *Store) raw(id string) (*record, error) {
 	return s.decode(s.path(id), nil)
@@ -191,6 +282,7 @@ func (s *Store) decode(path string, checksum io.Writer) (*record, error) {
 	if d.Decode(&r) != nil || d.Decode(new(any)) != io.EOF || (r.SchemaVersion != SchemaVersion && r.SchemaVersion != 1) || !sourceIDValid(r.Source) || s.path(r.Source) != path || r.Epoch == 0 {
 		return nil, errors.New("invalid subscription state")
 	}
+	r.disk.generation = r.Generation
 	if r.SchemaVersion == 1 {
 		r.legacy = true
 		r.NeedsRefresh = r.Config != nil && !r.Revoked
@@ -209,7 +301,35 @@ func (s *Store) decode(path string, checksum io.Writer) (*record, error) {
 			return nil, errors.New("invalid subscription snapshot")
 		}
 	}
+	if !r.legacy {
+		s.readStatus(&r)
+	}
 	return &r, nil
+}
+
+// readStatus reads a record's status file into it, unless the record file is newer (record).
+// A status file that is missing, unreadable or older leaves the record file's own fields; the
+// next update writes it again.
+func (s *Store) readStatus(r *record) {
+	f, err := os.Open(s.statusPath(r.Source))
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	if st, err := f.Stat(); err != nil || !st.Mode().IsRegular() || st.Size() > maxStatus {
+		return
+	}
+	raw, err := io.ReadAll(io.LimitReader(f, maxStatus+1))
+	if err != nil || len(raw) > maxStatus {
+		return
+	}
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.UseNumber()
+	var v statusFile
+	if d.Decode(&v) != nil || d.Decode(new(any)) != io.EOF || v.Source != r.Source || v.Generation < r.Generation {
+		return
+	}
+	r.Generation, r.bookkeeping, r.disk.status = v.Generation, v.bookkeeping, raw
 }
 func (s *Store) Begin(id string) (Ticket, error) {
 	t, _, err := s.begin(context.Background(), id, 0, false)
@@ -293,11 +413,22 @@ func (s *Store) commit(ctx context.Context, t Ticket, c Candidate, recheck func(
 				return e
 			}
 		}
-		if !c.unchanged {
+		r.CheckedTemplate = nil
+		if c.unchanged && r.Current != nil {
+			// The profile routes as the current one (Profile.routing), which the router runs
+			// and keeps the template it was committed with: it takes only what the profile
+			// shows, and the rollback snapshot stays. Usually nothing of the record file changes.
+			shown := *r.Current
+			shown.Notices, shown.Title, shown.Format = c.Profile.Notices, c.Profile.Title, c.Profile.Format
+			r.Current = &shown
+			if t := c.Profile.Template; t != nil && shown.Template != nil && *t != *shown.Template {
+				r.CheckedTemplate = t
+			}
+		} else {
 			r.Previous = r.Current
+			r.Current = &c.Profile
 		}
 		r.NeedsRefresh = false
-		r.Current = &c.Profile
 		if r.Config != nil && r.Config.AutoName && c.Profile.Title != "" {
 			r.Config.Name, r.Config.AutoName = c.Profile.Title, false
 		}
@@ -394,6 +525,7 @@ func (s *Store) RollbackChecked(ctx context.Context, id string, v Validator) err
 		}
 		r.Generation++
 		r.Providers = nil
+		r.CheckedTemplate = nil
 		r.Current, r.Previous = r.Previous, r.Current
 		return nil
 	})
@@ -732,6 +864,10 @@ func statusOf(r *record) Status {
 		st.Format = p.Format
 		st.Local = p.Local
 		st.Template = p.Template
+		if r.CheckedTemplate != nil && p.Template != nil {
+			// What the last refresh found of the template the profile routes by.
+			st.Template = r.CheckedTemplate
+		}
 		st.NodeCount = len(p.Nodes)
 		st.GroupCount = len(p.Groups)
 		st.RuleCount = len(p.Rules)

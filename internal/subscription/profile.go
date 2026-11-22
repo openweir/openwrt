@@ -125,8 +125,21 @@ type Candidate struct {
 	ConfirmationID string
 }
 
-// Unchanged reports a successful metadata-only check of an already usable profile.
+// Unchanged reports a successful check of an already usable profile that found it routing as
+// before (Profile.routing): the router's configuration stays as it is.
 func (c Candidate) Unchanged() bool { return c.unchanged }
+
+// routing is what of a profile makes the router's configuration: all of it but what it only
+// shows (notices, title, format) and the bookkeeping of the template it routes by: the
+// template's version, why it was chosen and whether the router's copy served. A new template
+// version whose rules and rule sets are the same leaves the router's configuration as it is.
+func (p Profile) routing() Profile {
+	p.Notices, p.Title, p.Format = nil, "", ""
+	if p.Template != nil {
+		p.Template = &TemplateUse{}
+	}
+	return p
+}
 
 const Direct = "@direct"
 const Reject = "@reject"

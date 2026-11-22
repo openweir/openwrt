@@ -151,7 +151,7 @@ func TestOldSnapshotsInvalidateButPlanAndTicketSurvive(t *testing.T) {
 	id := "account"
 	src := Source{ID: id, Kind: "platform", Origin: "https://example.org", Token: "fixture", UserID: "u", PlanID: 7}
 	old := Profile{SchemaVersion: 1, Source: id, Nodes: []Node{{Name: "stale-node", Outbound: map[string]any{"password": "stale-password"}}}}
-	legacy := record{SchemaVersion: 1, Epoch: 1, Generation: 3, Source: id, Current: &old, Previous: &old, Config: &src, Providers: &providerReceipt{Key: "old-cache"}}
+	legacy := record{SchemaVersion: 1, Epoch: 1, Generation: 3, Source: id, Current: &old, Previous: &old, Config: &src, bookkeeping: bookkeeping{Providers: &providerReceipt{Key: "old-cache"}}}
 	raw, _ := json.Marshal(legacy)
 	os.WriteFile(s.path(id), raw, 0600)
 	sts, e := s.List()

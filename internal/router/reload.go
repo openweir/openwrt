@@ -47,7 +47,9 @@ func routingKey(i Intent, p subscription.Profile) string {
 // profileRouting names the rules a profile routes by: the router's own default, the built-in
 // template at its version, or the subscription's own. Switching a subscription's 分流规则
 // changes it whenever the rules in effect change; a refresh changes it only with a new
-// template version, since a provider updates its own rules along with its nodes.
+// template version, since a provider updates its own rules along with its nodes. A version
+// whose rules and rule sets are the same is no update: the stored profile keeps the version it
+// was committed with (subscription.Fetcher.Refresh), so the key and open connections stay.
 func profileRouting(p subscription.Profile) string {
 	switch {
 	case p.Local:
