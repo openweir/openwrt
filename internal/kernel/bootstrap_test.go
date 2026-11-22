@@ -199,7 +199,14 @@ func TestBootstrapCancellationReleasesManualInstaller(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { _, err := m.Bootstrap(ctx); done <- err }()
-	<-started
+	// Bootstrap can fail before it reaches the network (storage setup, an existing kernel),
+	// and then the request never starts; waiting on started alone would hang until go test
+	// times out.
+	select {
+	case <-started:
+	case err := <-done:
+		t.Fatalf("Bootstrap returned before requesting the latest release: %v", err)
+	}
 	if err := m.Install(context.Background(), "v3.0.0", "double", Source{}); !errors.Is(err, errPayloadBusy) {
 		t.Errorf("manual operation raced active payload writer: %v", err)
 	}
