@@ -459,7 +459,11 @@ try {
 				await page.keyboard.press('Escape');
 			}
 			if (name === '规则') {
-				await page.getByRole('button',{name:'规则集',exact:true}).click();
+				// Built-in rule sets and custom rules show together: side by side when wide, stacked on a phone.
+				await page.getByRole('heading',{name:'规则集',exact:true}).waitFor();
+				const [builtIn, custom] = await page.locator('.ow-rules > .ow-side-stack').evaluateAll(els => els.map(el => el.getBoundingClientRect().toJSON()));
+				if (width > 900) assert.ok(builtIn.right <= custom.left && builtIn.width > custom.width, 'built-in rules sit left of custom rules');
+				else assert.ok(builtIn.bottom <= custom.top, 'rule columns stack on a phone');
 				const setRow = tag => page.locator('.ow-rule-sets tr').filter({has:page.getByText(tag,{exact:true})});
 				await setRow('Streaming').getByText('订阅',{exact:true}).waitFor();
 				await setRow('Streaming').getByRole('button',{name:'详情'}).click();

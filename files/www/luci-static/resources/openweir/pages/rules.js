@@ -243,116 +243,18 @@ async function setDetail(u, source, name, info) {
         list.replaceChildren(u.h('p', { class: 'ow-muted' }, e.message));
     }
 }
-export async function rules(u) {
-    const source = u.status.intent?.source,
-        primary = (u.sources || []).find((s) => s.source === source),
-        ready = primary?.ready;
-    const tab = u.detail === 'sets' ? 'sets' : 'custom';
-    const menu = u.h('div', { class: 'ow-segment', role: 'group', 'aria-label': '规则页面' });
-    for (const [id, title] of [
-        ['custom', '自定义规则'],
-        ['sets', '规则集'],
-    ]) {
-        const b = u.button(title, () => u.go('rules', id === 'custom' ? '' : id));
-        b.setAttribute('aria-pressed', String(id === tab));
-        menu.append(b);
-    }
-    const [customResponse, groups] = await Promise.all([u.rpc('custom_rules'), ready ? allGroups(u, source) : []]);
-    const name = u.name,
-        labels = new Map([...groups, ...(u.status.intent?.policy?.groups || [])].map((g) => [g.id, g.name]));
-    u = { ...u, ruleGroups: groups, name: (id) => labels.get(id) || name(id) };
-    const custom = customResponse.items || [];
-    const emptyPage = { items: [], positions: [], sets: {}, binary: {}, total: 0, local: false };
-    const initial = ready ? await read(u, 'rules', { source, limit: limitRules }) : emptyPage;
-    const mode = u.status.intent?.mode,
-        content = u.h('div', { class: 'ow-stack' }),
-        body = u.h('div', { class: 'ow-stack' }, menu, content);
-    const move = async (from, to) => {
-        if (from === to || to < 0 || to >= custom.length) return;
-        const list = custom.slice();
-        list.splice(to, 0, list.splice(from, 1)[0]);
-        await u.run('save_rules', { args: list, revision: u.status.intent.revision });
-        await u.refresh();
-    };
-    if (tab === 'custom') {
-        const rows = u.h('div', { class: 'ow-rule-list' });
-        let dragging = -1;
-        for (const [i, r] of custom.entries()) {
-            const up = u.button('↑', () => move(i, i - 1)),
-                down = u.button('↓', () => move(i, i + 1));
-            up.setAttribute('aria-label', '上移第 ' + (i + 1) + ' 条规则');
-            down.setAttribute('aria-label', '下移第 ' + (i + 1) + ' 条规则');
-            up.disabled = i === 0;
-            down.disabled = i === custom.length - 1;
-            const detail = describeRule(r.match);
-            const row = u.h(
-                'div',
-                { class: 'ow-rule-row', draggable: 'true' },
-                u.h('span', { class: 'ow-mono' }, String(i + 1)),
-                u.h(
-                    'div',
-                    {},
-                    u.h('strong', {}, detail.map((x) => x.value).join(' · ')),
-                    u.h('div', { class: 'ow-muted' }, detail.map((x) => x.type).join(' + ')),
-                ),
-                targetLink(u, r.target),
-                u.h('div', { class: 'ow-muted' }, r.note || '', r.enabled === false ? badge(u, '已停用') : null),
-                actions(
-                    u,
-                    up,
-                    down,
-                    u.button('编辑', () => editRule(u, custom, i, source, initial.local)),
-                ),
-            );
-            row.addEventListener('dragstart', (e) => {
-                dragging = i;
-                e.dataTransfer.effectAllowed = 'move';
-                e.dataTransfer.setData('text/plain', String(i));
-            });
-            row.addEventListener('dragend', () => {
-                dragging = -1;
-            });
-            row.addEventListener('dragover', (e) => {
-                if (dragging >= 0) e.preventDefault();
-            });
-            row.addEventListener('drop', async (e) => {
-                e.preventDefault();
-                const old = dragging;
-                dragging = -1;
-                if (old >= 0)
-                    try {
-                        await move(old, i);
-                    } catch (err) {
-                        u.notify(err.message);
-                    }
-            });
-            rows.append(row);
-        }
-        content.append(
-            u.h(
-                'section',
-                { class: 'ow-card' },
-                u.h(
-                    'div',
-                    { class: 'ow-row ow-toolbar' },
-                    u.h('h2', {}, '自定义规则'),
-                    u.button('＋ 添加规则', () => editRule(u, custom, -1, source, initial.local), 'ow-primary'),
-                ),
-                custom.length ? rows : u.h('p', { class: 'ow-empty' }, '暂无自定义规则'),
-            ),
-        );
-        return body;
-    }
+// What the subscription or the plugin provides: its rule sets and how often each was hit.
+function ruleSetCard(u, source, primary, initial, hits) {
+    const mode = u.status.intent?.mode;
     const names = Object.keys(initial.sets || {});
     if (initial.local) names.push(...['geosite-cn', 'geoip-cn'].filter((s) => !names.includes(s)));
-    const hits = await u.rpc('rule_hits').catch(() => ({}));
     const head = ['规则集', '来源', '条目', '命中连接', ''];
     const tbody = u.h('tbody', {});
     const feedback = u.h('div', { class: 'ow-muted', role: 'status', hidden: true });
     const btn = u.button('更新订阅规则集', () =>
         primary?.kind === 'file' ? reimport(u, source, feedback) : importSource(u, source, '', feedback),
     );
-    btn.disabled = !ready || initial.local || !names.length;
+    btn.disabled = !primary?.ready || initial.local || !names.length;
     for (const name of names) {
         const builtIn = !!initial.local,
             binary = !!initial.binary?.[name],
@@ -370,27 +272,131 @@ export async function rules(u) {
         ];
         tbody.append(u.h('tr', {}, cells.map((v, j) => u.h('td', { 'data-label': head[j] || null }, v))));
     }
-    content.append(
+    return u.h(
+        'section',
+        { class: 'ow-card' },
         u.h(
-            'section',
-            { class: 'ow-card' },
+            'div',
+            { class: 'ow-row ow-toolbar' },
+            u.h('h2', {}, '规则集'),
+            actions(u, muted(u, !initial.local && primary?.updated_at ? '更新于 ' + date(primary.updated_at) : ''), btn),
+        ),
+        muted(u, '命中连接为本次启动以来的累计次数，清空连接记录时归零。'),
+        feedback,
+        names.length
+            ? u.h(
+                  'table',
+                  { class: 'ow-table ow-rule-sets' },
+                  u.h('thead', {}, u.h('tr', {}, head.map((x) => u.h('th', { scope: 'col' }, x)))),
+                  tbody,
+              )
+            : u.h('p', { class: 'ow-empty' }, '当前来源没有规则集'),
+    );
+}
+// What the user adds: custom rules, kept in their own order.
+function customCard(u, custom, source, local) {
+    const move = async (from, to) => {
+        if (from === to || to < 0 || to >= custom.length) return;
+        const list = custom.slice();
+        list.splice(to, 0, list.splice(from, 1)[0]);
+        await u.run('save_rules', { args: list, revision: u.status.intent.revision });
+        await u.refresh();
+    };
+    const rows = u.h('div', { class: 'ow-rule-list' });
+    let dragging = -1;
+    for (const [i, r] of custom.entries()) {
+        const up = u.button('↑', () => move(i, i - 1)),
+            down = u.button('↓', () => move(i, i + 1));
+        up.setAttribute('aria-label', '上移第 ' + (i + 1) + ' 条规则');
+        down.setAttribute('aria-label', '下移第 ' + (i + 1) + ' 条规则');
+        up.disabled = i === 0;
+        down.disabled = i === custom.length - 1;
+        const detail = describeRule(r.match);
+        const row = u.h(
+            'div',
+            { class: 'ow-rule-row', draggable: 'true' },
+            u.h('span', { class: 'ow-mono ow-rule-index' }, String(i + 1)),
             u.h(
                 'div',
-                { class: 'ow-row ow-toolbar' },
-                u.h('h2', {}, '规则集'),
-                actions(u, muted(u, !initial.local && primary?.updated_at ? '更新于 ' + date(primary.updated_at) : ''), btn),
+                { class: 'ow-rule-match' },
+                u.h('strong', {}, detail.map((x) => x.value).join(' · ')),
+                u.h('div', { class: 'ow-muted' }, detail.map((x) => x.type).join(' + ')),
+                (r.note || r.enabled === false) &&
+                    u.h(
+                        'div',
+                        { class: 'ow-muted ow-rule-note' },
+                        r.note ? u.h('span', {}, r.note) : null,
+                        r.enabled === false ? badge(u, '已停用') : null,
+                    ),
             ),
-            muted(u, '命中连接为本次启动以来的累计次数，清空连接记录时归零。'),
-            feedback,
-            names.length
-                ? u.h(
-                      'table',
-                      { class: 'ow-table ow-rule-sets' },
-                      u.h('thead', {}, u.h('tr', {}, head.map((x) => u.h('th', { scope: 'col' }, x)))),
-                      tbody,
-                  )
-                : u.h('p', { class: 'ow-empty' }, '当前来源没有规则集'),
+            targetLink(u, r.target),
+            actions(
+                u,
+                up,
+                down,
+                u.button('编辑', () => editRule(u, custom, i, source, local)),
+            ),
+        );
+        row.addEventListener('dragstart', (e) => {
+            dragging = i;
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', String(i));
+        });
+        row.addEventListener('dragend', () => {
+            dragging = -1;
+        });
+        row.addEventListener('dragover', (e) => {
+            if (dragging >= 0) e.preventDefault();
+        });
+        row.addEventListener('drop', async (e) => {
+            e.preventDefault();
+            const old = dragging;
+            dragging = -1;
+            if (old >= 0)
+                try {
+                    await move(old, i);
+                } catch (err) {
+                    u.notify(err.message);
+                }
+        });
+        rows.append(row);
+    }
+    return u.h(
+        'section',
+        { class: 'ow-card' },
+        u.h(
+            'div',
+            { class: 'ow-row ow-toolbar' },
+            u.h('h2', {}, '自定义规则'),
+            u.button('＋ 添加规则', () => editRule(u, custom, -1, source, local), 'ow-primary'),
+        ),
+        custom.length ? rows : u.h('p', { class: 'ow-empty' }, '暂无自定义规则'),
+    );
+}
+export async function rules(u) {
+    const source = u.status.intent?.source,
+        primary = (u.sources || []).find((s) => s.source === source),
+        ready = primary?.ready;
+    const emptyPage = { items: [], positions: [], sets: {}, binary: {}, total: 0, local: false };
+    const [customResponse, groups, initial, hits] = await Promise.all([
+        u.rpc('custom_rules'),
+        ready ? allGroups(u, source) : [],
+        ready ? read(u, 'rules', { source, limit: limitRules }) : emptyPage,
+        u.rpc('rule_hits').catch(() => ({})),
+    ]);
+    const name = u.name,
+        labels = new Map([...groups, ...(u.status.intent?.policy?.groups || [])].map((g) => [g.id, g.name]));
+    u = { ...u, ruleGroups: groups, name: (id) => labels.get(id) || name(id) };
+    // The overview's grid: the built-in rule sets take the wide column, as the status card does
+    // there, and the user's own rules sit beside them, where the overview lists subscriptions.
+    return u.h(
+        'div',
+        { class: 'ow-dashboard ow-rules' },
+        u.h('div', { class: 'ow-side-stack ow-rules-builtin' }, ruleSetCard(u, source, primary, initial, hits)),
+        u.h(
+            'div',
+            { class: 'ow-side-stack ow-rules-custom' },
+            customCard(u, customResponse.items || [], source, initial.local),
         ),
     );
-    return body;
 }

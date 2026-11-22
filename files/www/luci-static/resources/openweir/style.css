@@ -952,6 +952,68 @@
 .ow .ow-rule-sets td:last-child .ow-actions {
 	justify-content: flex-end;
 }
+
+/* Rules page: the overview's grid. The built-in rule sets take the wide column, where the
+   overview shows its status card; custom rules take the column beside it. Each column stacks
+   its cards, and below 840px the columns stack too. */
+.ow .ow-dashboard.ow-rules > .ow-side-stack {
+	/* The overview pins its side column to the status card's height; here both columns grow. */
+	height: auto;
+	min-height: 0;
+}
+.ow .ow-rules > .ow-side-stack > .ow-card:last-child {
+	flex: 1 1 auto;
+}
+@container (min-width: 841px) {
+	.ow .ow-rules > .ow-rules-builtin {
+		grid-column: span 2;
+	}
+}
+@container (max-width: 840px) {
+	.ow .ow-rules > .ow-side-stack {
+		grid-column: 1 / -1;
+	}
+}
+.ow .ow-rules .ow-rule-sets th:first-child {
+	width: 30%;
+}
+.ow .ow-rules .ow-rule-sets th:last-child {
+	width: 124px;
+}
+.ow .ow-rules-custom .ow-rule-index {
+	flex: none;
+	width: 24px;
+	align-self: flex-start;
+	color: var(--ow-secondary);
+}
+.ow .ow-rules-custom .ow-rule-match {
+	flex: 1 1 12em;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.ow .ow-rules-custom .ow-rule-note {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 6px;
+	margin-top: 2px;
+}
+.ow .ow-rules-custom .ow-rule-row > .ow-actions {
+	margin-left: auto;
+}
+@container (max-width: 650px) or (min-width: 841px) {
+	/* In the narrow column the destination and the controls move under the match. */
+	.ow .ow-rules-custom .ow-rule-row {
+		row-gap: 6px;
+	}
+	.ow .ow-rules-custom .ow-rule-match {
+		flex-basis: calc(100% - 34px);
+	}
+	.ow .ow-rules-custom .ow-rule-match + * {
+		margin-left: 34px;
+	}
+}
+
 .ow .ow-facts {
 	display: grid;
 	grid-template-columns: max-content 1fr;
