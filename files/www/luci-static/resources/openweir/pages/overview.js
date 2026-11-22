@@ -299,6 +299,96 @@ function deviceCard(ui, devices) {
 	);
 	return section;
 }
+// The power button. Off it is the theme colour. While the proxy connects or disconnects it keeps
+// the theme colour and its ring pulses; connected, and in every other phase the proxy stays on in
+// (直连 mode, a fault, a failed release), the whole button is the red disconnect control, still.
+function powerLook({ intent, phase }) {
+	if (phase === 'releasing') return 'disconnecting';
+	// Until the router takes up a new intent it still reports the phase of the old one.
+	if (!intent.enabled)
+		return ['running', 'starting', 'protected', 'release_failed'].includes(phase) ? 'disconnecting' : 'off';
+	if (phase === 'initializing' || phase === 'starting' || (phase === 'direct' && intent.mode !== 'direct'))
+		return 'connecting';
+	return 'on';
+}
+// The word on the button and its accessible name. Off, the word says what a press does.
+function powerWords(look, off) {
+	return {
+		connecting: ['连接中', '连接中，点按断开'],
+		on: ['断开', '断开'],
+		disconnecting: ['断开中', '断开中'],
+	}[look] || [off, off];
+}
+const pulsing = (look) => look === 'connecting' || look === 'disconnecting';
+// CSS animations run on the document timeline, so a pulse's start is kept on it too.
+const timeline = () => document.timeline?.currentTime ?? performance.now();
+const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+const worn = new WeakMap(),
+	fades = new WeakMap();
+// Puts a look's classes on the button. A pulse that starts here begins `since` into its cycle,
+// through a negative delay; a pulse already running keeps its timing.
+function dress(el, look, since) {
+	const was = worn.get(el);
+	el.classList.toggle('on', look === 'on');
+	el.classList.toggle('pulse', pulsing(look));
+	el.classList.toggle('gentle', look === 'disconnecting');
+	if (was?.look !== look || was?.since !== since)
+		el.style.animationDelay = pulsing(look) ? Math.min(0, since - timeline()) + 'ms' : '';
+	worn.set(el, { look, since });
+}
+const fade = (el, from, to, fill) => {
+	try {
+		return el.animate({ opacity: [from, to] }, { duration: 320, easing: 'ease', fill });
+	} catch (_) {
+		return null;
+	}
+};
+// Shows a look on the power button. `before` ({look, since, text}) is what was on screen until
+// now: this button's last look, or what the button a redraw replaces showed, which a new button
+// puts on for a moment to measure. With motion the fill, text colour and ring ease over from it
+// and the word fades across. A pulse that carries on keeps its phase either way.
+function paintPower(el, look, [text, name], before, motion) {
+	const since = pulsing(look) ? (before?.look === look ? before.since : timeline()) : null;
+	let from;
+	if (motion && before && before.look !== look) {
+		el.style.transition = 'none';
+		dress(el, before.look, before.since);
+		const style = getComputedStyle(el);
+		from = { offset: 0, backgroundColor: style.backgroundColor, color: style.color, boxShadow: style.boxShadow };
+	}
+	dress(el, look, since);
+	if (from) {
+		getComputedStyle(el).color; // the new look applies while transitions are off
+		el.style.removeProperty('transition');
+		fades.get(el)?.cancel();
+		try {
+			// One keyframe: the animation ends on whatever the look shows, a running pulse included.
+			fades.set(el, el.animate([from], { duration: 420, easing: 'ease' }));
+		} catch (_) {} // without partial keyframes the look simply switches
+	}
+	const word = el.querySelector('.ow-power-label').lastElementChild;
+	if (motion && before && before.text !== text) {
+		const old = h('span', { 'aria-hidden': 'true' }, before.text);
+		word.before(old);
+		const out = fade(old, 1, 0, 'forwards');
+		fade(word, 0, 1);
+		if (out) out.onfinish = out.oncancel = () => old.remove();
+		else old.remove();
+	}
+	word.textContent = text;
+	el.setAttribute('aria-label', name);
+	return { look, since, text };
+}
+// Runs fn on the first frame el is in the page, before that frame is painted. The wait ends when
+// a newer render replaces this one, or after about 20 seconds of frames if the render failed.
+function onFirstFrame(el, signal, fn) {
+	let frames = 1200;
+	const frame = () => {
+		if (el.isConnected) fn();
+		else if (!signal.aborted && --frames > 0) requestAnimationFrame(frame);
+	};
+	requestAnimationFrame(frame);
+}
 export async function overview(ui) {
 	const intent = ui.status.intent,
 		running = ui.status.phase === 'running';
@@ -331,8 +421,27 @@ export async function overview(ui) {
 	};
 	const header = h('h2', {}, states[ui.status.phase] || ui.status.phase),
 		sub = h('span', { class: 'ow-muted' });
+	// Off, the word says what a press does first; while a press downloads the kernel it says so.
+	let preparing = false;
+	const offWord = () =>
+		!cat.primary
+			? '先添加订阅'
+			: kernel.selected
+				? '连接'
+				: preparing || kernel.bootstrap?.stage === 'running' ? '内核准备中' : '先选择内核';
+	let look = powerLook(ui.status),
+		shown;
+	// Changes the button where it stands: at once on a press, and back if the router refuses.
+	const show = (next) => {
+		if (!power.isConnected) return;
+		look = next;
+		shown = paintPower(power, next, powerWords(next, offWord()), shown, !reducedMotion());
+		ui.memory.power = { ...shown, el: power };
+	};
 	const start = async () => {
-		if (intent.enabled) {
+		// Disconnecting: a press waits for the router to let go.
+		if (look === 'disconnecting') return;
+		if (look !== 'off') {
 			const d = ui.dialog(
 				'断开代理',
 				h(
@@ -342,7 +451,14 @@ export async function overview(ui) {
 					ui.button(
 						'断开',
 						async () => {
-							await ui.run('stop', { revision: intent.revision });
+							const before = look;
+							show('disconnecting');
+							try {
+								await ui.run('stop', { revision: intent.revision });
+							} catch (error) {
+								show(before);
+								throw error;
+							}
 							d.close();
 							await ui.refresh();
 						},
@@ -360,39 +476,29 @@ export async function overview(ui) {
 		hush(powerLine);
 		if (!kernel.selected) {
 			// Connecting needs a kernel: download the newest stable one first.
+			preparing = true;
+			show('off');
 			try {
 				kernel = await installLatest(ui, kernelUpdates);
 			} catch (error) {
+				preparing = false;
+				show('off');
 				if (error.name === 'AbortError') return;
 				throw Error(kernelMessage(error.message));
 			}
+			preparing = false;
 		}
-		// Show the disconnect (red) control at once, pulsing until the core is up; the refresh
-		// confirms it or rolls it back.
-		power.classList.add('on', 'starting');
-		power.lastChild.textContent = '点按断开';
+		// Connecting shows at once; the refresh confirms it, a refusal rolls it back.
+		show('connecting');
 		try {
 			await ui.run('start', { revision: intent.revision });
 		} catch (error) {
-			power.classList.remove('on', 'starting');
-			power.lastChild.textContent = '点按连接';
+			show('off');
 			throw error;
 		}
 		await ui.refresh();
 	};
-	// Whenever the button offers to disconnect it is red; until the core runs it pulses, and the
-	// first render after it comes up settles the ring once.
-	const starting = intent.enabled && !running;
-	const power = ui.button('', start, 'ow-power' + (intent.enabled ? ' on' : '') + (starting ? ' starting' : running && ui.memory.powerStarting ? ' settled' : ''));
-	ui.memory.powerStarting = starting;
-	const powerLabel = intent.enabled
-		? '点按断开'
-		: !cat.primary
-			? '先添加订阅'
-			: !kernel.selected
-				? kernel.bootstrap?.stage === 'running' ? '内核准备中' : '先选择内核'
-				: '点按连接';
-	power.setAttribute('aria-label', powerLabel);
+	const power = ui.button('', start, 'ow-power');
 	const icon = shape('svg', { viewBox: '0 0 24 24', width: 38, height: 38, 'aria-hidden': 'true' });
 	icon.append(
 		shape('path', {
@@ -403,7 +509,18 @@ export async function overview(ui) {
 			'stroke-linecap': 'round',
 		}),
 	);
-	power.append(icon, h('span', {}, powerLabel));
+	power.append(icon, h('span', { class: 'ow-power-label' }, h('span')));
+	// The poll redraws the page on every phase. The new button shows the right look from the start;
+	// on its first frame it eases over from what the button it replaces showed, its pulse in step.
+	const replacing = !!ui.memory.power?.el?.isConnected;
+	shown = paintPower(power, look, powerWords(look, offWord()), ui.memory.power, false);
+	onFirstFrame(power, ui.signal, () => {
+		worn.delete(power); // its pulse starts now: time it afresh
+		shown = paintPower(power, look, powerWords(look, offWord()), ui.memory.power, replacing && !reducedMotion());
+		ui.memory.power = { ...shown, el: power };
+	});
+	// Off, the word follows the kernel as it finishes downloading.
+	kernelUpdates.addEventListener('change', () => look === 'off' && !preparing && show('off'), { signal: ui.signal });
 	// Under the status line: why the proxy is not running as asked, or what the last start said.
 	// Either keeps the proxy from working, so it is announced at once.
 	const powerLine = ui.feedback(power, null, { assertive: true });

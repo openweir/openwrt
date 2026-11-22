@@ -323,7 +323,12 @@
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
+/* The power button. Off it is the theme colour. While the proxy connects (pulse) or disconnects
+   (pulse gentle) it keeps the theme colour and its ring pulses; connected (on), the whole button is
+   the red disconnect control. overview.js eases each change over from the look before, across
+   redraws too, and keeps a pulse in step through them. */
 .ow button.ow-power {
+	--ow-power-red: var(--ow-danger);
 	width: 108px;
 	height: 108px;
 	flex: none;
@@ -334,46 +339,56 @@
 	box-shadow: 0 0 0 7px var(--ow-fill);
 	color: var(--ow-accent);
 	margin: 14px 0 11px;
-}
-/* Connected, the whole button is the red disconnect control. */
-.ow button.ow-power.on {
-	color: #fff;
-	background: var(--ow-danger);
-	box-shadow: 0 0 0 7px color-mix(in srgb, var(--ow-danger) 22%, transparent);
-}
-.ow button.ow-power.on:is(:hover, :focus-visible, :active) {
-	background: color-mix(in srgb, var(--ow-danger) 85%, #000);
-	box-shadow: 0 0 0 7px color-mix(in srgb, var(--ow-danger) 32%, transparent);
-}
-.ow button.ow-power {
 	transition: background-color 0.15s, box-shadow 0.15s, color 0.15s;
 }
-/* Starting: the red disconnect control pulses its ring until the core runs, then settles once. */
-.ow button.ow-power.on.starting {
-	animation: ow-power-pulse 1.4s ease-in-out infinite;
+@media (prefers-color-scheme: dark) {
+	/* White on the dark theme's light red reads at 2.3:1; this red keeps the label above 4.5:1. */
+	.ow button.ow-power {
+		--ow-power-red: #d0352c;
+	}
 }
-.ow button.ow-power.on.settled {
-	animation: ow-power-settle 0.6s ease-out;
+.ow button.ow-power.on {
+	color: #fff;
+	background: var(--ow-power-red);
+	box-shadow: 0 0 0 7px color-mix(in srgb, var(--ow-power-red) 22%, transparent);
+}
+.ow button.ow-power.on:is(:hover, :focus-visible, :active) {
+	background: color-mix(in srgb, var(--ow-power-red) 85%, #000);
+	box-shadow: 0 0 0 7px color-mix(in srgb, var(--ow-power-red) 32%, transparent);
+}
+/* Its word and ring show what it is doing, so a press in progress does not dim it. */
+.ow button.ow-power[aria-busy='true'] {
+	opacity: 1;
+}
+/* Each pulse rests on this ring, so it starts and stops without a jump. */
+.ow button.ow-power.pulse {
+	box-shadow: 0 0 0 7px color-mix(in srgb, var(--ow-accent) 24%, transparent);
+	animation: ow-power-pulse 1.6s ease-in-out infinite;
+}
+.ow button.ow-power.pulse.gentle {
+	animation-name: ow-power-ebb;
+	animation-duration: 2.4s;
 }
 @keyframes ow-power-pulse {
-	0%,
-	100% {
-		box-shadow: 0 0 0 7px color-mix(in srgb, var(--ow-danger) 22%, transparent);
-	}
 	50% {
-		box-shadow: 0 0 0 15px color-mix(in srgb, var(--ow-danger) 6%, transparent);
+		box-shadow: 0 0 0 15px color-mix(in srgb, var(--ow-accent) 6%, transparent);
 	}
 }
-@keyframes ow-power-settle {
-	from {
-		box-shadow: 0 0 0 18px color-mix(in srgb, var(--ow-danger) 0%, transparent);
-	}
-	to {
-		box-shadow: 0 0 0 7px color-mix(in srgb, var(--ow-danger) 22%, transparent);
+@keyframes ow-power-ebb {
+	50% {
+		box-shadow: 0 0 0 11px color-mix(in srgb, var(--ow-accent) 10%, transparent);
 	}
 }
 .ow .ow-power span {
 	font-size: 12px;
+}
+/* A new word fades in over the old one in the same cell. */
+.ow .ow-power-label {
+	display: grid;
+	justify-items: center;
+}
+.ow .ow-power-label > span {
+	grid-area: 1 / 1;
 }
 .ow .ow-graph-block {
 	align-self: stretch;
