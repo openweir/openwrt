@@ -15,7 +15,7 @@ printf 'Target nft under linux-user: %s\n' "$detail" >&2
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 bundle=/tmp/openweir-nft-userland
-docker image inspect alpine:3.23 >/dev/null 2>&1 || retry bounded 300 docker pull --quiet alpine:3.23 >&2
+docker image inspect alpine:3.23 >/dev/null 2>&1 || retry bounded 180 docker pull --quiet alpine:3.23 >&2
 # apk fetches nftables from Alpine's mirrors; each attempt rewrites the whole bundle.
 native_bundle() {
  bounded 300 docker run --rm alpine:3.23 sh -ec '
@@ -37,7 +37,7 @@ docker cp - "$target:$bundle" < "$tmp/native.tar"
 # A target-linked entry point can be copied and inspected by the ordinary
 # OpenWrt uninstall hook, including when apk has removed the installed tools.
 sdk=ghcr.io/openwrt/sdk:$arch-$release
-docker image inspect "$sdk" >/dev/null 2>&1 || retry bounded 900 docker pull --quiet --platform linux/amd64 "$sdk" >&2
+docker image inspect "$sdk" >/dev/null 2>&1 || retry bounded 180 docker pull --quiet --platform linux/amd64 "$sdk" >&2
 docker run --rm -i --platform linux/amd64 --entrypoint sh "$sdk" -ec '
  export STAGING_DIR=/builder/staging_dir
  set -- /builder/staging_dir/toolchain-*/bin/*-gcc

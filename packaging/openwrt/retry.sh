@@ -20,7 +20,11 @@ retry() {
 }
 
 # bounded SECONDS COMMAND...: fail a command that hangs instead of holding the runner until the
-# job times out. Without GNU timeout (some developer machines) the command runs unbounded.
+# job times out. Without GNU timeout (some developer machines) the command runs unbounded. A
+# command that ignores the stop signal is killed 30 s later, so under retry a stall takes four
+# times SECONDS + 30, plus 70 s of pauses, before it fails: the job's timeout must leave room
+# for that, or the stall ends as a job timeout with no retry. CI bounds image pulls at 180 s
+# and the runs that download packages (the ImageBuilder, apk, release assets) at 300 s.
 bounded() {
  _bounded_limit=$1; shift
  command -v timeout >/dev/null 2>&1 || { "$@"; return; }

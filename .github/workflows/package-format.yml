@@ -14,8 +14,10 @@ jobs:
   build:
     name: Build per-architecture installers and upgrade fixtures
     runs-on: ubuntu-latest
-    # Runs take under two minutes; the bound leaves room for retried pulls.
-    timeout-minutes: 10
+    # Runs take under two minutes. The SDK pull is bounded at three minutes an attempt, so a
+    # stall takes up to 16 minutes, four attempts and their pauses (see bounded in retry.sh),
+    # before it fails; this leaves room for that and the rest of the run.
+    timeout-minutes: 25
     outputs:
       matrix: ${{ steps.targets.outputs.matrix }}
     steps:
@@ -60,7 +62,7 @@ jobs:
           case "$FORMAT" in ipk) sdk=24.10.8;; apk) sdk=25.12.6;; *) exit 1;; esac
           arches=$(go run ./cmd/openweir-release arches "$FORMAT")
           . packaging/openwrt/retry.sh
-          retry bounded 900 docker pull --quiet "ghcr.io/openwrt/sdk:x86_64-$sdk"
+          retry bounded 180 docker pull --quiet "ghcr.io/openwrt/sdk:x86_64-$sdk"
           # Four SDK builds at a time, one per runner core. Each writes its own log, shown
           # below in architecture order.
           logs=$RUNNER_TEMP/package-logs
@@ -138,8 +140,11 @@ jobs:
     name: ${{ matrix.arch }} / ${{ matrix.firmware }}
     needs: build
     runs-on: ubuntu-latest
-    # Runs take up to five minutes under emulation; the bound leaves room for retried downloads.
-    timeout-minutes: 15
+    # Runs take up to five minutes under emulation. The slowest retried downloads (an
+    # ImageBuilder run, Alpine's nftables, the release package) are bounded at five minutes an
+    # attempt, so a stall in one takes up to 24 minutes, four attempts and their pauses (see
+    # bounded in retry.sh), before it fails; this leaves room for that and the rest of the run.
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.build.outputs.matrix) }}

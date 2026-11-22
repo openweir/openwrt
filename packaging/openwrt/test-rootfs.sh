@@ -7,7 +7,7 @@ base=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 . "$base/retry.sh"
 sdk="ghcr.io/openwrt/sdk:$arch-$release"
 if ! docker image inspect "$sdk" >/dev/null 2>&1; then
- retry bounded 900 docker pull --platform linux/amd64 "$sdk" >&2
+ retry bounded 180 docker pull --platform linux/amd64 "$sdk" >&2
 fi
 target=$(docker image inspect "$sdk" --format '{{range .Config.Env}}{{println .}}{{end}}' | sed -n 's,^TARGET=,,p')
 board=${target%/*}; subtarget=${target#*/}
@@ -18,10 +18,11 @@ trap cleanup EXIT
 trap 'exit 1' INT TERM
 image="ghcr.io/openwrt/imagebuilder:$board-$subtarget-$release"
 if ! docker image inspect "$image" >/dev/null 2>&1; then
- retry bounded 900 docker pull --platform linux/amd64 "$image" >&2
+ retry bounded 180 docker pull --platform linux/amd64 "$image" >&2
 fi
-# The ImageBuilder downloads every package from the OpenWrt repositories. Each attempt
-# starts from a fresh container and returns its own failures (see retry).
+# The ImageBuilder downloads every package from the OpenWrt repositories, so its run is
+# bounded at five minutes, longer than a pull. Each attempt starts from a fresh container and
+# returns its own failures (see retry).
 assemble() {
  if [ -n "$cid" ]; then docker rm -fv "$cid" >/dev/null || return 1; cid=; fi
  cid=$(docker create --platform linux/amd64 "$image" sh -ec '
@@ -38,7 +39,7 @@ assemble() {
   done
   exit 1
  ') || return 1
- bounded 900 docker start -a "$cid" >&2 || return 1
+ bounded 300 docker start -a "$cid" >&2 || return 1
  test "$(docker inspect -f '{{.State.ExitCode}}' "$cid")" = 0 || return 1
  docker cp "$cid:/tmp/router.tar.gz" "$tmp/router.tar.gz"
 }

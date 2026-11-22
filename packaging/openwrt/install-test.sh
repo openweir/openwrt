@@ -35,7 +35,7 @@ if [ -z "${OPENWEIR_TEST_ROOTFS:-}" ]; then target_platform=linux/$arch; fi
 rootfs_missing=
 pull_rootfs() {
  _pull_status=0
- _pull=$(export DOCKER_DEFAULT_PLATFORM="$target_platform"; bounded 900 docker pull "$rootfs" 2>&1) || _pull_status=$?
+ _pull=$(export DOCKER_DEFAULT_PLATFORM="$target_platform"; bounded 180 docker pull "$rootfs" 2>&1) || _pull_status=$?
  printf '%s\n' "$_pull" >&2
  case "$_pull_status:$_pull" in
   0:*) return 0 ;;
@@ -48,7 +48,7 @@ if ! docker image inspect "$rootfs" >/dev/null 2>&1 && { ! retry pull_rootfs || 
  generated=$(sh "$base/test-rootfs.sh" "$release" "$arch")
  rootfs=$generated
 fi
-docker image inspect busybox:1.37 >/dev/null 2>&1 || retry bounded 300 docker pull --quiet busybox:1.37
+docker image inspect busybox:1.37 >/dev/null 2>&1 || retry bounded 180 docker pull --quiet busybox:1.37
 case "$release" in 25.*) ext=apk;; *) ext=ipk;; esac
 # The upgrade users make: the latest published release's package for this router, if it has one.
 sh "$base/fetch-release.sh" "$ext" "$arch" "$published"
