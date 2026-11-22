@@ -5,6 +5,8 @@ import (
 	"errors"
 	"strings"
 	"time"
+
+	"github.com/openweir/openwrt/internal/subscription"
 )
 
 // Refresh invalidates in-flight work without changing the user's desired state.
@@ -203,6 +205,37 @@ func (m *Manager) acknowledgeChoices(source string) {
 		}
 	}
 	m.state.Applied = i.Revision
+}
+
+// PruneChoices forgets the selections of a source's groups its committed profile no longer has:
+// a group that comes back starts from its default, not from a member that may be gone too.
+func (m *Manager) PruneChoices(source string, p subscription.Profile) {
+	groups := map[string]bool{}
+	for _, g := range p.Groups {
+		groups[g.ID] = true
+	}
+	stale := func(choices map[string]string) bool {
+		for group := range choices {
+			if strings.HasPrefix(group, "group:") && !groups[group] {
+				return true
+			}
+		}
+		return false
+	}
+	m.mu.Lock()
+	found := stale(m.state.Intent.Choices[source])
+	m.mu.Unlock()
+	if !found {
+		return
+	}
+	_, _ = m.Change(nil, func(i *Intent) error {
+		for group := range i.Choices[source] {
+			if strings.HasPrefix(group, "group:") && !groups[group] {
+				delete(i.Choices[source], group)
+			}
+		}
+		return nil
+	})
 }
 
 func (m *Manager) GroupState(source string) map[string]GroupResult {

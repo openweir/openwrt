@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/openweir/openwrt/internal/subscription"
 )
 
 type fakeStore struct {
@@ -474,4 +476,16 @@ func TestSelectionOfARemovedGroupDoesNotHoldBackOthers(t *testing.T) {
 		t.Fatal(err)
 	}
 	eventually(t, func() bool { return m.Status().Applied == rev })
+	// Once the profile without the group is committed, its selection goes: should the group
+	// come back without the member, nothing blocks its update.
+	m.PruneChoices("primary", subscription.Profile{Groups: []subscription.Group{{ID: "group:live"}}})
+	choices := m.Status().Intent.Choices["primary"]
+	if _, ok := choices["group:gone"]; ok || choices["group:live"] != "node:b" {
+		t.Fatal(choices)
+	}
+	before := m.Status().Intent.Revision
+	m.PruneChoices("primary", subscription.Profile{Groups: []subscription.Group{{ID: "group:live"}}})
+	if m.Status().Intent.Revision != before {
+		t.Fatal("nothing to prune changed the intent")
+	}
 }

@@ -294,6 +294,9 @@ func (s *app) handle(ctx context.Context, method string, r request) (any, error)
 		if r.Source == "" || status.Intent.ReferencesSource(r.Source) {
 			s.tests.reset()
 		}
+		if p, err := subscription.OpenStore(router.Root + "/sources").Load(r.Source); err == nil {
+			s.m.PruneChoices(r.Source, p)
+		}
 		s.m.Refresh(r.Source)
 		return map[string]bool{"accepted": true}, nil
 	case "clear":
