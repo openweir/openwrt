@@ -92,12 +92,13 @@ func (b *templateBranch) offline() bool {
 	return true
 }
 
-// promote makes what the refresh got the router's copy, once the template's rule sets all
-// arrived.
-func (b *templateBranch) promote() {
-	if b.stage != nil {
-		b.stage.promote()
+// promote makes what the refresh got the router's copy, once the router read the template and
+// its rule sets. It returns why the copy could not be written (templateStage.promote).
+func (b *templateBranch) promote() error {
+	if b.stage == nil {
+		return nil
 	}
+	return b.stage.promote()
 }
 
 func (b *templateBranch) close() {

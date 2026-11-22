@@ -808,6 +808,38 @@ func TestTemplateUnusableCopyRoutesByDefault(t *testing.T) {
 	}
 }
 
+// A copy the router could not save is told, as nothing worse: the refresh routes by the version
+// it got, and a later one saves it.
+func TestTemplateCopyNotSavedIsTold(t *testing.T) {
+	notSaved := func(c Candidate) bool {
+		return slices.ContainsFunc(c.Notices, func(n Notice) bool { return n.Code == "template_cache_write_failed" && !n.Dangerous })
+	}
+	b := serveBranch(t, 42)
+	store, id := fileSource(t, RoutingOwn)
+	failSyncs(t, func(string) bool { return true })
+	c, err := b.fetcher().Refresh(t.Context(), store, id, []byte(twoLinks), Policy{})
+	if err != nil || c.Decision != "ready" || c.Profile.Template == nil || c.Profile.Template.Cached || c.Profile.Local || !notSaved(c) {
+		t.Fatal(err, c.Decision, c.Profile.Template, c.Notices)
+	}
+	if _, err := os.Lstat(filepath.Join(TemplateDir, templateCurrent)); err == nil {
+		t.Fatal("a generation that failed its sync was published")
+	}
+	// The sync after the link moved fails: the copy holds the version, but may lose it.
+	failSyncs(t, func(dir string) bool {
+		_, err := os.Lstat(filepath.Join(TemplateDir, templateCurrentNext))
+		return dir == TemplateDir && err != nil
+	})
+	c, err = b.fetcher().Refresh(t.Context(), store, id, []byte(twoLinks+jpLink), Policy{})
+	if err != nil || c.Decision != "ready" || !notSaved(c) || copiedVersion(t) != 42 {
+		t.Fatal(err, c.Decision, c.Notices)
+	}
+	failSyncs(t, func(string) bool { return false })
+	c, err = b.fetcher().Refresh(t.Context(), store, id, []byte(twoLinks), Policy{})
+	if err != nil || c.Decision != "ready" || notSaved(c) {
+		t.Fatal(err, c.Decision, c.Notices)
+	}
+}
+
 // The template stage leaves the refresh the time it needs after it: out of time, the refresh
 // routes by the router's copy, or by default, rather than failing.
 func TestTemplateStageKeepsTheRefreshsTime(t *testing.T) {

@@ -710,8 +710,9 @@ func (f Fetcher) readConverted(ctx context.Context, s Source, body []byte, heade
 			s.Rules, switched = RoutingTemplate, t
 			continue
 		}
-		if err == nil && template != nil {
-			branch.promote()
+		if err == nil && template != nil && branch.promote() != nil {
+			// The refresh routes by the version all the same; a later one saves it again.
+			p.notice("template_cache_write_failed", "", false)
 		}
 		if switched != nil && p.Template != nil {
 			p.Template.Reason, p.Template.Dropped, p.Template.Total = switched.Reason, switched.Dropped, switched.Total

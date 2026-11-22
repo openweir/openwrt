@@ -137,13 +137,16 @@ func (s *templateStage) close() {
 // lists, is left behind with it. When another refresh promoted the same version or a newer one
 // since this one began, with the same floor or a higher one, that stays; otherwise the copy
 // keeps the higher floor of the two. The stage is spent.
-func (s *templateStage) promote() {
+//
+// It returns why the copy could not be written: the copy is then as it was, or, when only the
+// sync after the link moved failed, it names the new generation, which a power cut may undo.
+func (s *templateStage) promote() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	staged := s.staged
 	s.staged = nil
 	if len(staged) == 0 {
-		return
+		return nil
 	}
 	base := s.pin()
 	get := func(key string) ([]byte, bool) {
@@ -155,11 +158,12 @@ func (s *templateStage) promote() {
 	raw, _ := get(rules.ManifestPath)
 	m, err := rules.ParseManifest(raw)
 	if err != nil {
-		return
+		// Nothing whole to keep.
+		return nil
 	}
 	lock, _, err := lockTemplate(s.ctx, s.root)
 	if err != nil {
-		return
+		return err
 	}
 	defer unlock(lock)
 	if current, _ := currentGeneration(s.root); current != s.name {
@@ -168,7 +172,7 @@ func (s *templateStage) promote() {
 		ours, _ := get(rules.FloorKey)
 		if b, ok := readGeneration(other, rules.ManifestPath); ok {
 			if om, err := rules.ParseManifest(b); err == nil && om.Version >= m.Version && floorVersion(theirs) >= floorVersion(ours) {
-				return
+				return nil
 			}
 		}
 		if floorVersion(theirs) > floorVersion(ours) {
@@ -177,7 +181,7 @@ func (s *templateStage) promote() {
 	}
 	dir, err := os.MkdirTemp(s.root, templateGeneration)
 	if err != nil {
-		return
+		return err
 	}
 	published := false
 	if err = fillGeneration(dir, base, staged, m); err == nil {
@@ -185,7 +189,7 @@ func (s *templateStage) promote() {
 	}
 	if !published {
 		os.RemoveAll(dir)
-		return
+		return err
 	}
 	// The refresh reads no more: its base can go now.
 	if s.base != nil {
@@ -195,9 +199,10 @@ func (s *templateStage) promote() {
 	// The link names the new generation, but the sync after the rename failed: a power cut may
 	// still bring back the one it replaced, which stays until a later sweep.
 	if err != nil {
-		return
+		return err
 	}
 	sweepTemplate(s.root)
+	return nil
 }
 
 // fillGeneration writes the manifest, the floor and the files the manifest lists into dir: what

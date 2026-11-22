@@ -257,7 +257,9 @@ func TestTemplatePromotionSurvivesAFailedSync(t *testing.T) {
 	failSyncs(t, func(dir string) bool { return dir != root })
 	s = &templateStage{root: root}
 	stageVersion(t, s, 2, map[string]string{rules.TemplatePath: "t2", "providers/a.txt": "a"})
-	s.promote()
+	if err := s.promote(); err == nil {
+		t.Fatal("a failed sync went unreported")
+	}
 	s.close()
 	if names, _ := os.ReadDir(root); current(t, root) != gen1 || len(names) != 3 {
 		t.Fatal("a generation that failed its sync was kept or published", names)
@@ -270,7 +272,9 @@ func TestTemplatePromotionSurvivesAFailedSync(t *testing.T) {
 	})
 	s = &templateStage{root: root}
 	stageVersion(t, s, 2, map[string]string{rules.TemplatePath: "t2", "providers/a.txt": "a"})
-	s.promote()
+	if err := s.promote(); err == nil {
+		t.Fatal("a failed sync went unreported")
+	}
 	s.close()
 	gen2 := current(t, root)
 	if _, err := os.Stat(gen2); gen2 == gen1 || err != nil {
@@ -411,7 +415,9 @@ func TestTemplateCopyReadWithoutWriting(t *testing.T) {
 				t.Fatal("a rule set was not read")
 			}
 			stageVersion(t, s, 2, map[string]string{rules.TemplatePath: "t2", "providers/a.txt": "a"})
-			s.promote()
+			if err := s.promote(); err == nil {
+				t.Fatal("a copy that cannot be written went unreported")
+			}
 			s.close()
 			if got := dirNames(t, root); !slices.Equal(got, before) {
 				t.Fatal(got, before)
@@ -447,7 +453,9 @@ func TestTemplateLockWaitEndsWithTheRefresh(t *testing.T) {
 		t.Fatal("the copy was not read:", v)
 	}
 	stageVersion(t, s, 2, map[string]string{rules.TemplatePath: "t2", "providers/a.txt": "a"})
-	s.promote()
+	if err := s.promote(); err == nil {
+		t.Fatal("a promotion without the lock went unreported")
+	}
 	s.close()
 	if waited := time.Since(start); waited > 5*time.Second {
 		t.Fatal("waited past the refresh:", waited)
@@ -563,9 +571,10 @@ func TestTemplateFloorNeverGoesBack(t *testing.T) {
 			if tc.untrustedFirst {
 				first, second = untrusted, trusted
 			}
-			first.promote()
+			if first.promote() != nil || second.promote() != nil {
+				t.Fatal("a promotion failed")
+			}
 			first.close()
-			second.promote()
 			second.close()
 			gen := current(t, root)
 			n := &templateStage{root: root}

@@ -337,7 +337,7 @@ func Assess(p Profile, previous *Profile, policy Policy) Candidate {
 		case "nonstandard_snell_credential", "invalid_credential":
 			continue
 		case "mihomo_router_field_ignored", "mihomo_protocol_unsupported", "mihomo_unavailable_member", "unsupported_node", "invalid_endpoint", "node_missing_credential", "platform_routing_warnings", "unavailable_inventory",
-			"dialer_proxy_unavailable", "dialer_proxy_cycle", "provider_option_ignored", "provider_option_unsafe":
+			"dialer_proxy_unavailable", "dialer_proxy_cycle", "provider_option_ignored", "provider_option_unsafe", "template_cache_write_failed":
 			continue
 		}
 		switch {
