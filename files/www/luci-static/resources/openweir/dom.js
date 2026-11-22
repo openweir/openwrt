@@ -46,6 +46,40 @@ export const segment = (ui, label, options, value, change) =>
 		}),
 	);
 export const empty = (text) => h('p', { class: 'ow-empty' }, text);
+// Inline feedback: a line under the row or card whose controls it reports on. A ui.button inside
+// that scope writes its error there rather than in the alert at the top of the page, and its next
+// press clears the line. The line stays in the accessibility tree while empty, so what is written
+// into it is announced: politely, or at once (role alert) for a line about blocking errors, which
+// the page clears itself when it retries.
+const scopes = new WeakMap();
+let lines = 0;
+export function feedback(scope, assertive = false) {
+	const line = h('p', { class: 'ow-feedback', id: 'ow-feedback-' + ++lines, role: assertive ? 'alert' : 'status' });
+	return scope ? attach(scope, line) : line;
+}
+// A redrawn row keeps its line: the new row reports to the same one.
+export function attach(scope, line) {
+	scopes.set(scope, line);
+	return line;
+}
+export function feedbackFor(el) {
+	for (let node = el; node; node = node.parentElement) if (scopes.has(node)) return scopes.get(node);
+	return null;
+}
+// Text, or text and nodes such as a link; the tone is 'error' or 'done'. The control that
+// acted is described by the line.
+export function say(line, content, { tone = 'error', control } = {}) {
+	line.replaceChildren(...[content].flat());
+	line.dataset.tone = tone;
+	if (!control) return;
+	const ids = (control.getAttribute('aria-describedby') || '').split(/\s+/).filter(Boolean);
+	if (!ids.includes(line.id)) control.setAttribute('aria-describedby', [...ids, line.id].join(' '));
+}
+export function hush(line) {
+	if (!line?.firstChild) return;
+	line.replaceChildren();
+	delete line.dataset.tone;
+}
 export function bytes(n) {
 	if (n == null || !Number.isFinite(n)) return '—';
 	const units = ['B', 'KB', 'MB', 'GB', 'TB'];

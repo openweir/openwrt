@@ -1,4 +1,4 @@
-import { h, card, knownNames, pages } from './dom.js';
+import { h, card, knownNames, pages, feedback, feedbackFor, say, hush, diagnosticMessage } from './dom.js';
 import { overview } from './pages/overview.js';
 import { proxy } from './pages/proxy.js';
 import { subscriptions } from './pages/sources.js';
@@ -55,6 +55,8 @@ export function mount(root, invoke, upload) {
 		noticeTimer,
 		onceMounted = root.isConnected;
 	const memory = {};
+	// The mounted page's feedback lines by key, for outcomes reported after it re-rendered.
+	let keyed = new Map();
 	let names = new Map(),
 		catalogKey = '',
 		catalogRequest;
@@ -95,6 +97,28 @@ export function mount(root, invoke, upload) {
 			alert.hidden = true;
 		}, 8000);
 	};
+	// An action's error goes to the line of the row or card its control sits in; the alert at the
+	// top keeps what has no such place. An error the page already wrote beside its control (marked
+	// shown) is not repeated, unless the control is in a dialog, where the page behind is out of view.
+	// The router's error codes read in Chinese, as the service's problem does under the power button.
+	function report(control, error) {
+		if (error?.shown && !control?.closest('dialog')) return;
+		const message = diagnosticMessage(error?.message ?? String(error)),
+			line = control && feedbackFor(control);
+		if (line?.isConnected) say(line, message, { control });
+		else notify(message);
+	}
+	// After an action re-rendered the page, its outcome goes to the line now registered under the
+	// first key the page has; a key registered as covered means the page already shows it.
+	function tell(keys, text, tone = 'error') {
+		for (const key of [keys].flat()) {
+			if (!keyed.has(key)) continue;
+			const line = keyed.get(key);
+			if (!line) return;
+			if (line.isConnected) return say(line, text, { tone });
+		}
+		notify(text);
+	}
 	function button(text, handler, cls = '') {
 		const el = h('button', { type: 'button', class: cls }, text);
 		el.addEventListener('click', async (ev) => {
@@ -102,6 +126,10 @@ export function mount(root, invoke, upload) {
 				ev.preventDefault();
 				return;
 			}
+			// A new attempt clears what the last one reported. A line about a blocking condition
+			// (role alert) is cleared by the page once it actually retries.
+			const line = feedbackFor(el);
+			if (line && !line.contains(el) && line.getAttribute('role') !== 'alert') hush(line);
 			// Keep the trigger focusable so native dialogs can restore focus after
 			// an asynchronous action. The view owns the actual disabled state.
 			el.setAttribute('aria-busy', 'true');
@@ -109,7 +137,7 @@ export function mount(root, invoke, upload) {
 			try {
 				await handler(ev);
 			} catch (e) {
-				if (e.name !== 'AbortError') notify(e.message);
+				if (e.name !== 'AbortError') report(el, e);
 			} finally {
 				el.removeAttribute('aria-busy');
 				el.removeAttribute('aria-disabled');
@@ -210,6 +238,7 @@ export function mount(root, invoke, upload) {
 			if (controller.signal.aborted) return;
 			status.intent = status.saved;
 			const sources = sourceList.data || [];
+			const lines = new Map();
 			const ui = {
 				h,
 				card,
@@ -218,6 +247,14 @@ export function mount(root, invoke, upload) {
 				go,
 				dialog,
 				notify,
+				report,
+				tell,
+				// A feedback line for the controls inside scope, optionally under a key for tell().
+				feedback: (scope, key, { assertive = false, covered = false } = {}) => {
+					const line = feedback(scope, assertive);
+					if (key) lines.set(key, covered ? null : line);
+					return line;
+				},
 				name,
 				button,
 				memory,
@@ -289,10 +326,13 @@ export function mount(root, invoke, upload) {
 			const content = await views[page][1](ui);
 			if (controller.signal.aborted) return;
 			main.replaceChildren(content);
+			keyed = lines;
 			ui.afterRender?.();
 		} catch (e) {
-			if (!controller.signal.aborted)
+			if (!controller.signal.aborted) {
+				keyed = new Map();
 				main.replaceChildren(card('无法加载页面', h('p', {}, e.message), button('重试', render)));
+			}
 		} finally {
 			if (!controller.signal.aborted) main.setAttribute('aria-busy', 'false');
 		}

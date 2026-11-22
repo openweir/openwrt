@@ -1385,3 +1385,109 @@
 	.ow .ow-power svg { width: 28px; height: 28px; }
 }
 .ow .ow-source-list > * { flex: none; }
+
+/* ---- Inline feedback -------------------------------------------------------------------------
+   A line under the row, card or control whose action it reports (dom.js feedback()), in place of
+   the alert at the top of the page. Empty, it is hidden only visually, so screen readers keep the
+   live region and announce what is written into it, and it takes no room: not even a flex or grid
+   gap. The tone is named by an icon as well as a colour, and the words say what happened. */
+.ow .ow-feedback {
+	margin: 0;
+	font-size: 13px;
+	line-height: 1.45;
+	color: var(--ow-secondary);
+	overflow-wrap: anywhere;
+}
+.ow .ow-feedback:empty {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	margin: -1px;
+	padding: 0;
+	border: 0;
+	overflow: hidden;
+	clip-path: inset(50%);
+}
+.ow .ow-feedback:not(:empty) {
+	width: 100%;
+}
+.ow :is(.ow-feedback, .ow-muted)[data-tone='error'] {
+	color: var(--ow-danger);
+}
+/* A review opened in place: the summary carries the tone, the list under it reads as usual. */
+.ow .ow-muted[data-tone='error'] details > :not(summary) {
+	color: var(--ow-secondary);
+}
+.ow .ow-feedback[data-tone='done'] {
+	color: var(--ow-accent);
+}
+.ow .ow-feedback[data-tone]::before {
+	content: '!';
+	content: '!' / '';
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 16px;
+	height: 16px;
+	margin-right: 6px;
+	border-radius: 50%;
+	vertical-align: -3px;
+	font-size: 11px;
+	font-weight: 750;
+	line-height: 1;
+	color: var(--ow-panel);
+	background: var(--ow-danger);
+}
+.ow .ow-feedback[data-tone='done']::before {
+	content: '✓';
+	content: '✓' / '';
+	background: var(--ow-accent);
+}
+.ow .ow-feedback > button.ow-link {
+	min-height: 0;
+	padding: 0 2px;
+	vertical-align: baseline;
+}
+/* A blocking error (the service's problem under the power button) stands apart from the text around it. */
+.ow .ow-feedback[role='alert'][data-tone='error'] {
+	padding: 6px 10px;
+	border-radius: 10px;
+	background: color-mix(in srgb, var(--ow-danger) 10%, var(--ow-panel));
+}
+/* The status column keeps its height until it has something to report. */
+.ow .ow-connection:has(> .ow-feedback:not(:empty)) {
+	height: auto;
+	min-height: 400px;
+}
+/* A device's or a rule's line reads as part of its row. */
+.ow .ow-device-row + .ow-feedback:not(:empty) {
+	padding: 6px 0 8px 14px;
+	border-bottom: 1px solid var(--ow-line);
+}
+.ow .ow-rules-custom .ow-rule-row > .ow-feedback:not(:empty) {
+	padding-left: 34px;
+}
+/* Without subscriptions the card offers the setup. */
+.ow .ow-source-setup {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 12px;
+	padding: 6px 0;
+}
+/* On a phone the subscription card shows only its menu; its line stays in view above it. */
+.ow .ow-sources:has(.ow-source-mobile) > p.ow-feedback:not(:empty) {
+	display: block;
+}
+@container (max-width: 650px) {
+	.ow .ow-connection:has(> .ow-feedback:not(:empty)) {
+		height: auto;
+		min-height: 0;
+		grid-template-rows: 27px 20px 20px 20px 23px auto;
+	}
+	.ow .ow-connection > .ow-feedback {
+		grid-column: 1 / -1;
+		grid-row: 6;
+		text-align: left;
+	}
+}
