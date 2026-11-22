@@ -53,7 +53,9 @@ export function mount(root, invoke) {
 	let scope,
 		disconnected = false,
 		noticeTimer,
-		onceMounted = root.isConnected;
+		onceMounted = root.isConnected,
+		// The page main shows, so a redraw of it can keep the focus where it was.
+		drawn = '';
 	const memory = {};
 	// The mounted page's feedback lines by key, for outcomes reported after it re-rendered.
 	let keyed = new Map();
@@ -182,7 +184,18 @@ export function mount(root, invoke) {
 		});
 		return el;
 	}
+	// A redraw drops the focused control with the content it replaces. The control drawn in its
+	// place under the same data-focus-key takes the focus back, unless focus moved on meanwhile.
+	function refocus(scope, key) {
+		const active = document.activeElement;
+		if (!key || (active && active !== document.body) || root.querySelector('dialog[open]')) return;
+		scope.querySelector('[data-focus-key="' + CSS.escape(key) + '"]')?.focus({ preventScroll: true });
+	}
 	function dialog(title, body) {
+		// Closed, a dialog returns focus to the control that opened it, or, when a redraw meanwhile
+		// replaced that control, to the one drawn in its place.
+		const opener = document.activeElement,
+			openerKey = opener?.dataset?.focusKey;
 		const heading = h('h2', {}, title);
 		const d = h(
 			'dialog',
@@ -197,7 +210,10 @@ export function mount(root, invoke) {
 		);
 		d.querySelector('.ow-close').setAttribute('aria-label', '关闭');
 		root.append(d);
-		d.addEventListener('close', () => d.remove(), { once: true });
+		d.addEventListener('close', () => {
+			d.remove();
+			if (openerKey && !opener.isConnected) refocus(main, openerKey);
+		}, { once: true });
 		d.showModal();
 		// A press on the backdrop closes the dialog: one that starts and ends outside it, not a
 		// selection dragged out of it, and not the second click of a double click that opened it.
@@ -373,15 +389,20 @@ export function mount(root, invoke) {
 			};
 			const content = await views[page][1](ui);
 			if (controller.signal.aborted) return;
+			const focused = document.activeElement,
+				focusKey = drawn === page && main.contains(focused) ? focused.dataset.focusKey : '';
 			// Kept outcomes are in their new lines before these are shown: they are not news, so a
 			// screen reader does not read them out again at every redraw.
 			keyed = lines;
 			retell();
 			main.replaceChildren(content);
+			drawn = page;
+			refocus(content, focusKey);
 			ui.afterRender?.();
 		} catch (e) {
 			if (!controller.signal.aborted) {
 				keyed = new Map();
+				drawn = '';
 				main.replaceChildren(card('无法加载页面', h('p', {}, e.message), button('重试', render)));
 			}
 		} finally {

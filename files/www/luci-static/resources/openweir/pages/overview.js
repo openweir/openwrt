@@ -146,7 +146,8 @@ function sourceCard(ui, setup) {
 	box.classList.add('ow-sources');
 	// Switching fails here; a subscription added from the setup reports its import here too.
 	box.append(ui.feedback(box, 'sources'));
-	function item(s) {
+	// Each subscription is listed twice, for the phone's menu and the wide list.
+	function item(s, list) {
 		const active = s.source === current,
 			p = s.usage || s.plan;
 		const b = ui.button(
@@ -161,6 +162,7 @@ function sourceCard(ui, setup) {
 			'ow-source-line' + (active ? ' is-active' : ''),
 		);
 		b.setAttribute('aria-label', (active ? '管理' : '切换至') + ' ' + (s.name || s.source));
+		b.dataset.focusKey = 'source:' + list + ':' + s.source;
 		const tail = h(
 			'div',
 			{ class: 'ow-source-sub' },
@@ -192,7 +194,7 @@ function sourceCard(ui, setup) {
 				h('span', { class: 'ow-avatar', 'aria-hidden': 'true' }, Array.from(title)[0]),
 				h('span', { class: 'ow-source-info' }, h('strong', {}, title), h('small', {}, '切换订阅')),
 			),
-			h('div', { class: 'ow-stack' }, ...sources.map(item), link),
+			h('div', { class: 'ow-stack' }, ...sources.map((s) => item(s, 'menu')), link),
 		));
 	}
 	// Without a subscription the card offers the setup that adds the first one.
@@ -200,7 +202,7 @@ function sourceCard(ui, setup) {
 		box.append(setup
 			? h('div', { class: 'ow-source-setup' }, h('p', {}, '添加第一个订阅，开始配置全屋代理。'), setup)
 			: empty('尚未添加订阅'));
-	if (sources.length) box.append(h('div', { class: 'ow-source-list' }, ...sources.map(item)));
+	if (sources.length) box.append(h('div', { class: 'ow-source-list' }, ...sources.map((s) => item(s, 'list'))));
 	return box;
 }
 function deviceCard(ui, devices) {
@@ -256,7 +258,7 @@ function deviceCard(ui, devices) {
 						h('strong', {}, d.name || d.mac),
 						h('small', {}, d.addresses.join(' · ')),
 					),
-					segment(
+					focusKeys(segment(
 						ui,
 						'代理方式',
 						[
@@ -265,7 +267,7 @@ function deviceCard(ui, devices) {
 						],
 						effective(d),
 						(v) => choose(d, v),
-					),
+					), 'device:' + d.mac),
 				),
 				d.mac,
 			)),
@@ -382,6 +384,11 @@ function paintPower(el, look, [text, name], before, motion) {
 	if (look === 'disconnecting') el.setAttribute('aria-disabled', 'true');
 	else if (!el.hasAttribute('aria-busy')) el.removeAttribute('aria-disabled');
 	return { look, since, text };
+}
+// A redraw gives the focus back to the control drawn under the same key (app.js render).
+function focusKeys(group, prefix) {
+	for (const b of group.querySelectorAll('button')) b.dataset.focusKey = prefix + ':' + b.textContent;
+	return group;
 }
 // Runs fn on the first frame el is in the page, before that frame is painted. The wait ends when
 // a newer render replaces this one, or after about 20 seconds of frames if the render failed.
@@ -513,6 +520,7 @@ export async function overview(ui) {
 		await ui.refresh();
 	};
 	const power = ui.button('', start, 'ow-power');
+	power.dataset.focusKey = 'power';
 	const icon = shape('svg', { viewBox: '0 0 24 24', width: 38, height: 38, 'aria-hidden': 'true' });
 	icon.append(
 		shape('path', {
@@ -662,10 +670,10 @@ export async function overview(ui) {
 		{ class: 'ow-modes' },
 		field(
 			'代理模式',
-			segment(ui, '代理模式', modeNames, intent.mode, async (mode) => {
+			focusKeys(segment(ui, '代理模式', modeNames, intent.mode, async (mode) => {
 				await ui.run('mode', { mode, revision: intent.revision });
 				await ui.refresh();
-			}),
+			}), 'mode'),
 		),
 	);
 	const right = h('div', { class: 'ow-route-side' }, modes, ui.feedback(modes));
@@ -679,7 +687,7 @@ export async function overview(ui) {
 		for (const n of nodes) {
 			const cell = h(
 				'button',
-				{ type: 'button', class: 'ow-route', 'aria-pressed': String(n.id === saved) },
+				{ type: 'button', class: 'ow-route', 'aria-pressed': String(n.id === saved), 'data-focus-key': 'node:' + n.id },
 				h('span', { class: 'ow-route-icon', 'aria-hidden': 'true' }, '⇢'),
 				h(
 					'span',
@@ -780,6 +788,7 @@ export async function overview(ui) {
 	const hero = h('section', { class: 'ow-card ow-hero', 'aria-label': '连接状态' }, statusSide, right);
 	function toggle(label, value, fn) {
 		const b = ui.button('', () => fn(!value), 'ow-switch');
+		b.dataset.focusKey = 'switch:' + label;
 		b.setAttribute('role', 'switch');
 		b.setAttribute('aria-label', label);
 		b.setAttribute('aria-checked', String(value));
@@ -793,7 +802,7 @@ export async function overview(ui) {
 			'div',
 			{ class: 'ow-row' },
 			'新设备默认',
-			segment(
+			focusKeys(segment(
 				ui,
 				'新设备默认',
 				[
@@ -802,7 +811,7 @@ export async function overview(ui) {
 				],
 				policy.default_direct ? 'direct' : 'proxy',
 				(v) => savePolicy({ default_direct: v === 'direct' }),
-			),
+			), 'default'),
 		)),
 		lined(updateRow('大陆 IP 直连', toggle('大陆 IP 直连', !!prefs.bypass_cn, (v) => saveP({ bypass_cn: v })),
 			h('small', { class: 'ow-muted' }, '国内 IP 不经内核，更快；全局模式下不生效'))),
@@ -845,10 +854,12 @@ export async function overview(ui) {
 				}, 'ow-danger')),
 		));
 	};
+	const restore = ui.button('恢复默认', restoreDefaults, 'ow-link');
+	restore.dataset.focusKey = 'restore-defaults';
 	const repair = card(
 		'',
 		// 恢复默认 confirms here once its dialog closes.
-		lined(h('div', { class: 'ow-row' }, h('h2', {}, '故障与恢复'), ui.button('恢复默认', restoreDefaults, 'ow-link')), 'repair'),
+		lined(h('div', { class: 'ow-row' }, h('h2', {}, '故障与恢复'), restore), 'repair'),
 		lined(h('div', { class: 'ow-row' }, '防火墙', ui.button('检查运行环境', async () => {
 			const env = await ui.rpc('environment');
 			if (!ui.signal.aborted) ui.dialog('防火墙运行环境', environmentRows(firewallDetails(env)));
@@ -994,7 +1005,7 @@ function updateInterval(ui, hours, saveP) {
 	const line = ui.feedback();
 	const input = h('input', {
 		type: 'number', min: 1, max: 720, step: 1, inputmode: 'numeric', value: hours,
-		'aria-label': '更新间隔（小时）', class: 'ow-hours', 'aria-describedby': line.id,
+		'aria-label': '更新间隔（小时）', class: 'ow-hours', 'aria-describedby': line.id, 'data-focus-key': 'update-hours',
 	});
 	input.addEventListener('change', async () => {
 		hush(line);
@@ -1093,6 +1104,7 @@ function upstreamRow(ui, title, note, kind, list, save) {
 		const d = ui.dialog(title + ' DNS', body);
 		render();
 	};
-	return updateRow(title, ui.button('管理', open, 'ow-link'),
-		h('small', { class: 'ow-muted' }, note + ' · ' + summary));
+	const manage = ui.button('管理', open, 'ow-link');
+	manage.dataset.focusKey = 'dns:' + kind;
+	return updateRow(title, manage, h('small', { class: 'ow-muted' }, note + ' · ' + summary));
 }
