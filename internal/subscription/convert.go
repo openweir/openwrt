@@ -147,7 +147,8 @@ func warningNotice(w subconv.Warning) Notice {
 }
 
 // dropsRejection reports whether a dropped rule, given as "<rule as written>: <problem>" or
-// "rule <n> to <target>: <problem>", rejected traffic. The target is the last field, or the one before a trailing option.
+// "rule <n> to <target>: <problem>", rejected traffic. The target is the last field, or the one
+// before a trailing option.
 func dropsRejection(detail string) bool {
 	line, _, _ := strings.Cut(detail, ": ")
 	// A rule dropped with its rule set reads "rule <n> to <target>".
@@ -159,7 +160,8 @@ func dropsRejection(detail string) bool {
 	if (strings.EqualFold(target, "no-resolve") || strings.EqualFold(target, "src")) && len(fields) > 1 {
 		target = strings.TrimSpace(fields[len(fields)-2])
 	}
-	return strings.EqualFold(target, "REJECT") || strings.EqualFold(target, "REJECT-DROP")
+	// REJECT and its variants: REJECT-DROP, Surge's REJECT-TINYGIF, Quantumult X's reject-200...
+	return strings.HasPrefix(strings.ToUpper(target), "REJECT")
 }
 
 // Top-level Clash fields the router decides itself.

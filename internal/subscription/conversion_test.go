@@ -146,6 +146,10 @@ func TestConverterWarningsKeepTheirWeight(t *testing.T) {
 		{subconv.Warning{Code: subconv.WarnUnsupportedRule, Detail: "USER-AGENT,ads*,REJECT: rule type USER-AGENT"}, "subconv_unsupported_rule", true},
 		{subconv.Warning{Code: subconv.WarnUnsupportedRule, Detail: "IP-CIDR6,2001:db8::/32,REJECT-DROP,no-resolve: x"}, "subconv_unsupported_rule", true},
 		{subconv.Warning{Code: subconv.WarnUnsupportedRule, Detail: "rule 2 to REJECT: rule set ads was left out"}, "subconv_unsupported_rule", true},
+		// Other clients' rejections: Surge's REJECT-TINYGIF, Quantumult X's reject-200 and the like.
+		{subconv.Warning{Code: subconv.WarnUnsupportedRule, Detail: "URL-REGEX,^https://ad,REJECT-TINYGIF: rule type URL-REGEX"}, "subconv_unsupported_rule", true},
+		{subconv.Warning{Code: subconv.WarnUnsupportedRule, Detail: "user-agent, ads*, reject-200: rule type USER-AGENT"}, "subconv_unsupported_rule", true},
+		{subconv.Warning{Code: subconv.WarnUnsupportedRule, Detail: "rule 4 to REJECT-NO-DROP: rule set ads was left out"}, "subconv_unsupported_rule", true},
 		{subconv.Warning{Code: subconv.WarnUnsupportedRule, Detail: "rule 3 to Proxy: rule set ads was left out"}, "subconv_unsupported_rule", false},
 		{subconv.Warning{Code: subconv.WarnUnsupportedRuleSet, Detail: "ads: a sing-box rule set mihomo cannot read"}, "subconv_unsupported_rule_set", false},
 		{subconv.Warning{Code: "invalid_credential", Detail: "Edge: a password but no psk"}, "nonstandard_snell_credential", false},
