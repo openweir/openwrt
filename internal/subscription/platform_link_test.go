@@ -167,6 +167,7 @@ func TestChangingPlatformAccessSelectsOneTemplatePerRefresh(t *testing.T) {
 }
 
 func TestPlanDownloadAuthorityAndFailureStates(t *testing.T) {
+	const cutOff = -1
 	const denied = `{"code":"SUBSCRIPTION_APP_DISABLED"}`
 	const accountRevoked = `{"code":"ACCOUNT_REVOKED"}`
 	const valid = `{"id":7,"userId":"account","status":"active","usable":true,"url":"LINK","subscriptionAccess":"link"}`
@@ -196,6 +197,11 @@ func TestPlanDownloadAuthorityAndFailureStates(t *testing.T) {
 		{"download host cannot revoke account", "", valid, accountRevoked, 0, 200, 403, errLinkUnavailable},
 		{"download host cannot expire session", "", valid, "{}", 0, 200, 401, errLinkUnavailable},
 		{"download host cannot redirect link", "", valid, "", 0, 200, 302, errLinkUnavailable},
+		{"download host no longer serves link", "", valid, "", 0, 200, 404, errLinkUnavailable},
+		// A download host that is busy or a download that breaks off can work on the next attempt.
+		{"download host overloaded", "", valid, "", 0, 200, 503, errLinkUnreachable},
+		{"download host rate limited", "", valid, "", 0, 200, 429, errLinkUnreachable},
+		{"download breaks off", "", valid, primary, 0, 200, cutOff, errLinkUnreachable},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -221,11 +227,17 @@ func TestPlanDownloadAuthorityAndFailureStates(t *testing.T) {
 					if r.Header.Get("Authorization") != "" || r.Header.Get("Cookie") != "" {
 						t.Error("credentials on same-origin link")
 					}
-					if tt.linkCode == 302 {
+					code := tt.linkCode
+					switch code {
+					case 302:
 						w.Header().Set("Location", "/not-authorized")
+					case cutOff:
+						// The connection closes before the length the answer announced.
+						w.Header().Set("Content-Length", strconv.Itoa(len(tt.linkBody)+1024))
+						code = http.StatusOK
 					}
-					if tt.linkCode != 0 {
-						w.WriteHeader(tt.linkCode)
+					if code != 0 {
+						w.WriteHeader(code)
 					}
 					io.WriteString(w, tt.linkBody)
 				default:

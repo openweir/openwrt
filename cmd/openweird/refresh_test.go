@@ -10,6 +10,7 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/openweir/openwrt/internal/router"
@@ -221,6 +222,68 @@ func TestOfflineFirstImportCompletesBySchedule(t *testing.T) {
 	st, _ = store.Status(other.ID)
 	if st.LastFailure != "subscription_http_404" || dueForRefresh(st, time.Now().Add(7*time.Hour), time.Time{}, 0) {
 		t.Fatal("permanent failure retried", st.LastFailure)
+	}
+}
+
+// stalledBody is a download that stops coming until the request gives up.
+type stalledBody struct{ ctx context.Context }
+
+func (b stalledBody) Read([]byte) (int, error) { <-b.ctx.Done(); return 0, b.ctx.Err() }
+
+// A first import that breaks off or times out in the middle of the download failed on the way,
+// as one that never connected: the scheduler retries it. A redirect the router refuses is the
+// server's answer, which a retry gets again: it waits for the administrator. So does a plan's
+// issued link that its download host refuses, unlike one the host could not serve just then.
+func TestInterruptedFirstImportRetriesAndRefusedRedirectWaits(t *testing.T) {
+	for _, code := range []string{"subscription_incomplete", "subscription_link_unreachable"} {
+		if !transientFailure(code) {
+			t.Fatal("not retried", code)
+		}
+	}
+	for _, code := range []string{"subscription_redirect_refused", "subscription_link_unavailable", "invalid_response_size"} {
+		if transientFailure(code) {
+			t.Fatal("retried", code)
+		}
+	}
+	const body = "proxies: [{name: Edge, type: http, server: edge.example, port: 8080}]\nrules: ['MATCH,DIRECT']"
+	ok := func(r io.Reader) *http.Response {
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(r)}
+	}
+	for _, tc := range []struct {
+		id, failure string
+		retried     bool
+		answer      func(*http.Request) *http.Response
+	}{
+		{"cut-off", "subscription_incomplete", true, func(*http.Request) *http.Response {
+			return ok(io.MultiReader(strings.NewReader(body[:20]), iotest.ErrReader(io.ErrUnexpectedEOF)))
+		}},
+		{"timed-out", "subscription_incomplete", true, func(r *http.Request) *http.Response { return ok(stalledBody{r.Context()}) }},
+		{"redirected", "subscription_redirect_refused", false, func(*http.Request) *http.Response {
+			return &http.Response{StatusCode: http.StatusFound, Header: http.Header{"Location": {"http://example.com/feed"}}, Body: http.NoBody}
+		}},
+	} {
+		store := subscription.OpenStore(t.TempDir())
+		src := subscription.Source{ID: tc.id, Name: tc.id, Kind: "external", URL: "https://example.com/feed"}
+		if err := store.Configure(src); err != nil {
+			t.Fatal(err)
+		}
+		f := subscription.Fetcher{Client: &http.Client{Timeout: 200 * time.Millisecond, Transport: feedTransport(func(r *http.Request) (*http.Response, error) {
+			return tc.answer(r), nil
+		})}}
+		if _, err := f.Refresh(t.Context(), store, src.ID, nil, subscription.Policy{}); err == nil || err.Error() != tc.failure {
+			t.Fatal(tc.id, err)
+		}
+		st, err := store.Status(src.ID)
+		if err != nil || st.Ready || st.LastFailure != tc.failure {
+			t.Fatal(tc.id, err, st.Ready, st.LastFailure)
+		}
+		at, err := time.Parse(time.RFC3339, st.AttemptedAt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if dueForRefresh(st, at.Add(7*time.Hour), time.Time{}, 0) != tc.retried {
+			t.Fatal(tc.id, "retried:", !tc.retried)
+		}
 	}
 }
 

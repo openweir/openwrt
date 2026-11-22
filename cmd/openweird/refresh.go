@@ -176,12 +176,14 @@ func retryDelay(attempts int, interval time.Duration) time.Duration {
 
 // transientFailure reports a refresh that failed on the way to the subscription or a file it
 // references rather than on what came back: no internet, a name that did not resolve, a host
-// that timed out, refused or broke off the connection, or answered 408, 429 or 5xx. A later
-// attempt can succeed with nothing changed on the router. Credentials, other HTTP answers,
-// content the router cannot use and certificates (left to the clock retry) are not transient.
+// that timed out, refused or broke off the connection, even in the middle of the download, or
+// answered 408, 429 or 5xx, a plan's issued link included. A later attempt can succeed with
+// nothing changed on the router. Credentials, other HTTP answers, refused redirects, content the
+// router cannot use and certificates (left to the clock retry) are not transient.
 func transientFailure(code string) bool {
 	switch code {
-	case "subscription_request_failed", "provider_timeout", "provider_dns_failed", "provider_connection_refused", "provider_unreachable", "provider_incomplete":
+	case "subscription_request_failed", "subscription_incomplete", "subscription_link_unreachable",
+		"provider_timeout", "provider_dns_failed", "provider_connection_refused", "provider_unreachable", "provider_incomplete":
 		return true
 	}
 	for _, prefix := range []string{"subscription_http_", "provider_http_"} {

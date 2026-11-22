@@ -148,7 +148,8 @@ const diagnosticText = {
     unsupported_format: '无法识别的订阅格式',
     no_usable_nodes: '订阅中没有可用的节点',
     subscription_tls_untrusted: '路由器不信任此订阅服务的 HTTPS 证书，请检查固件的 CA 证书和服务商的证书链',
-    subscription_link_unavailable: '服务商未提供可用的套餐订阅链接，或链接暂时无法下载，请稍后重试',
+    subscription_link_unavailable: '服务商未提供可用的套餐订阅链接，或链接的下载地址拒绝了请求，请联系服务商',
+    subscription_link_unreachable: '套餐订阅链接暂时无法下载（连接中断、超时或服务器繁忙），请稍后重试',
     invalid_plan_detail: '服务商返回的套餐详情不完整或与当前套餐不匹配',
     starting: '正在启动代理',
     releasing: '正在清理接管规则',
@@ -234,6 +235,8 @@ const diagnosticText = {
     // subscriptions page and in the log.
     subscription_request_failed: '无法连接订阅服务器，请检查网络后重试',
     invalid_response_size: '服务器返回的内容超过大小上限',
+    subscription_incomplete: '与订阅服务器的连接中断或超时，内容未完整下载，请稍后重试',
+    subscription_redirect_refused: '订阅服务器要求跳转，但跳转不符合下载要求，已拒绝。请检查订阅链接或联系服务商',
     subscription_size_limit: '订阅内容超过大小上限',
     expanded_subscription_limit: '展开引用的节点和规则后，订阅超过大小上限',
     invalid_subscription: '无法解析订阅内容',

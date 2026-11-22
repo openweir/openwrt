@@ -179,10 +179,10 @@ func (f Fetcher) request(ctx context.Context, method, raw string, payload []byte
 	c.Jar = nil
 	c.CheckRedirect = func(next *http.Request, prev []*http.Request) error {
 		if len(prev) > 4 || next.URL.User != nil || next.URL.Scheme != "https" && (u.Scheme == "https" || next.URL.Scheme != "http") {
-			return errors.New("redirect_refused")
+			return errRedirectRefused
 		}
 		if authenticated {
-			return errors.New("authenticated_redirect_refused")
+			return errAuthenticatedRedirect
 		}
 		if !strings.EqualFold(next.URL.Host, u.Host) || next.URL.Scheme != u.Scheme {
 			next.Header = make(http.Header)
@@ -216,7 +216,12 @@ func (f Fetcher) request(ctx context.Context, method, raw string, payload []byte
 		}
 		res, e := c.Do(r)
 		if e != nil {
-			return response{}, classifyRequestFailure(e, "subscription_request_failed")
+			// A refused redirect is the server's answer, which a later attempt gets again.
+			general := "subscription_request_failed"
+			if errors.Is(e, errRedirectRefused) || errors.Is(e, errAuthenticatedRedirect) {
+				general = "subscription_redirect_refused"
+			}
+			return response{}, classifyRequestFailure(e, general)
 		}
 		defer res.Body.Close()
 		limit := limit
@@ -225,7 +230,8 @@ func (f Fetcher) request(ctx context.Context, method, raw string, payload []byte
 		}
 		body, e := io.ReadAll(io.LimitReader(res.Body, limit+1))
 		if e != nil {
-			return response{}, classifyRequestFailure(e, "invalid_response_size")
+			// The answer broke off or timed out before its end, unlike one over the size limit.
+			return response{}, classifyRequestFailure(e, "subscription_incomplete")
 		}
 		if int64(len(body)) > limit {
 			return response{}, errors.New("invalid_response_size")
@@ -264,7 +270,20 @@ func statusErr(r response) error {
 
 var errAccountRevoked = errors.New("platform account revoked")
 var errAppDisabled = errors.New("subscription_app_disabled")
+
+// A plan's issued link the provider withholds, that is malformed or that its download host
+// refuses, redirects or answers with too much: retrying does not help.
 var errLinkUnavailable = errors.New("subscription_link_unavailable")
+
+// A plan's issued link whose download failed on the way or that its host answered 408, 429 or
+// 5xx: a later attempt can succeed.
+var errLinkUnreachable = errors.New("subscription_link_unreachable")
+
+// The redirects request refuses (CheckRedirect).
+var (
+	errRedirectRefused       = errors.New("redirect_refused")
+	errAuthenticatedRedirect = errors.New("authenticated_redirect_refused")
+)
 
 type AccountWithdrawal struct{ Sources []string }
 
@@ -499,10 +518,12 @@ func (f Fetcher) ownedPlanTemplate(ctx context.Context, s Source) (response, err
 	// Even a same-origin link authenticates by its URL. Forbid redirects and
 	// never interpret a download host's response as a change to account access.
 	r, err = f.request(ctx, http.MethodGet, u.String(), nil, "", ua, true, MaxBody)
-	if tlsdiag.From(err) != nil {
+	switch {
+	case tlsdiag.From(err) != nil:
 		return response{}, err
-	}
-	if err != nil || r.status != http.StatusOK {
+	case transient(ctx, err) || err == nil && (r.status == http.StatusRequestTimeout || r.status == http.StatusTooManyRequests || r.status >= 500 && r.status <= 599):
+		return response{}, errLinkUnreachable
+	case err != nil || r.status != http.StatusOK:
 		return response{}, errLinkUnavailable
 	}
 	return r, nil
