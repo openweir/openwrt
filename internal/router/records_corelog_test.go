@@ -1,6 +1,10 @@
 package router
 
-import "testing"
+import (
+	"fmt"
+	"strings"
+	"testing"
+)
 
 // Lines a core started with a template-routed profile wrote (China shortcut on, fake-ip DNS,
 // http:// test address that closes the connection after one answer), and the forms mihomo
@@ -26,10 +30,10 @@ func TestCoreLogClassifiesMihomoLines(t *testing.T) {
 		{at + `level=error msg="[Provider] Netflix pull error: dial tcp 203.0.113.9:443: connect: connection refused"`, "rule_provider_issue", ""},
 		{at + `level=warning msg="parse classical rule [PROCESS-NAME,steam.exe] error: unsupported rule type on classical rule-set: PROCESS-NAME"`, "rule_provider_issue", ""},
 		{at + `level=warning msg="skip invalid domain from rule provider: invalid domain \"a/b\""`, "rule_provider_issue", ""},
-		// Anything else is a core diagnostic.
-		{at + `level=warning msg="[CacheFile] write cache to /etc/openweir/core/cache.db failed: timeout"`, "core_diagnostic", ""},
-		{at + `level=warning msg="[Rule] rematch proxy group:af60f450c0dd13e8eab38ef9bfaed433 failed to update metadata: 🇭🇰 香港 01 sub.example.com 10.0.0.1:53"`, "core_diagnostic", ""},
-		{`ERROR panic: runtime error: index out of range [3] with length 3`, "core_diagnostic", ""},
+		// Anything else keeps a redacted detail.
+		{at + `level=warning msg="[CacheFile] write cache to /etc/openweir/core/cache.db failed: timeout"`, "core_diagnostic", "cachefile write cache to /etc/openweir/... failed: timeout"},
+		{at + `level=warning msg="[Rule] rematch proxy group:af60f450c0dd13e8eab38ef9bfaed433 failed to update metadata: 🇭🇰 香港 01 sub.example.com 10.0.0.1:53"`, "core_diagnostic", "rule rematch proxy <group> failed to update metadata: 01 <host> <addr>"},
+		{`ERROR panic: runtime error: index out of range [3] with length 3`, "core_diagnostic", "panic: runtime error: index out of range 3 with length 3"},
 	} {
 		r := NewRecords()
 		s := logSink{r: r}
@@ -44,5 +48,57 @@ func TestCoreLogClassifiesMihomoLines(t *testing.T) {
 		if len(logs) != 1 || logs[0].Message != c.reason || logs[0].Detail != c.detail {
 			t.Errorf("%s\n got %+v\nwant %s %q", c.line, logs, c.reason, c.detail)
 		}
+	}
+}
+
+func TestCoreDetailRedacts(t *testing.T) {
+	for in, want := range map[string]string{
+		// Links lose all but their scheme: credentials, host, path, query and signature.
+		`level=error msg="download failed: get \"https://user:secret@sub.example.com/link?token=9f8e7d6c5b4a\": unexpected status 403"`: "download failed: get https://<url> : unexpected status 403",
+		// Two-label names, user@ prefixes, IPv6 and IPv4 addresses with ports.
+		`level=warning msg="sync with admin@example.com via [2001:db8::1]:443 and 192.0.2.1:53 failed"`: "sync with <host> via <addr> and <addr> failed",
+		// Node IDs, deep paths and long tokens with digits; plain words of any length stay.
+		`level=warning msg="node:0123456789abcdef0123456789abcdef read /usr/share/openweir/rules/x.mrs key 6b1f0e9a2c4d8e7f6a5b4c3d2e1f0a9b global-client-fingerprint"`: "<node> read /usr/share/... key <id> global-client-fingerprint",
+		// Nothing but plain ASCII: a name in Chinese or with emoji is left out, its plain words stay.
+		`level=warning msg="🇯🇵 日本 provider failed"`: "provider failed",
+		`warn[0000] something odd happened`:         "something odd happened",
+	} {
+		if got := coreDetail(strings.ToLower(in)); got != want {
+			t.Errorf("%s\n got %q\nwant %q", in, got, want)
+		}
+	}
+	long := coreDetail(`level=warning msg="` + strings.Repeat("word ", 60) + `"`)
+	if len(long) > 120 || !strings.HasPrefix(long, "word word") || strings.HasSuffix(long, " ") {
+		t.Errorf("not capped: %q", long)
+	}
+}
+
+// One cause reported with a different detail each time keeps a few entries, then folds into
+// one without a detail; repeats of one detail fold as before.
+func TestCoreLogFoldsVaryingDetails(t *testing.T) {
+	r := NewRecords()
+	s := logSink{r: r}
+	for i := range 20 {
+		_, _ = fmt.Fprintf(&s, "level=warning msg=\"[CacheFile] skip storage for key k%d: payload exceeds %d bytes\"\n", i, 1000+i)
+	}
+	for range 3 {
+		_, _ = s.Write([]byte(`level=warning msg="[CacheFile] skip storage for key k0: payload exceeds 1000 bytes"` + "\n"))
+	}
+	logs := r.Logs(0, 100, "", "", "")
+	total, plain := 0, 0
+	for _, e := range logs {
+		if e.Message != "core_diagnostic" {
+			t.Fatal(e)
+		}
+		total += max(e.Count, 1)
+		if e.Detail == "" {
+			plain++
+		}
+	}
+	if len(logs) != detailVariants+1 || plain != 1 || total != 23 {
+		t.Fatalf("%d entries, %d without a detail, %d counted: %+v", len(logs), plain, total, logs)
+	}
+	if e := logs[0]; e.Detail != "cachefile skip storage for key k0: payload exceeds 1000 bytes" || e.Count != 4 {
+		t.Fatalf("repeats of one detail did not fold: %+v", e)
 	}
 }

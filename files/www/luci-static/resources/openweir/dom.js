@@ -569,6 +569,9 @@ export function diagnosticMessage(text) {
 // Log entries whose detail completes the sentence.
 const detailSentences = {
     conflict_services_stopped: (d) => diagnosticText.conflict_services_stopped + '：' + d.split(', ').map(pluginName).join('、'),
+    // The core's own words, with addresses, host names, links, paths and names taken out
+    // (records.go coreDetail).
+    core_diagnostic: (d) => '内核报告：' + d,
 };
 export function eventMessage(v) {
     const sentence = v.detail && detailSentences[v.message];

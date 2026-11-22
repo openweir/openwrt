@@ -21,7 +21,7 @@ type Event struct {
 	Source  string `json:"source"`
 	Level   string `json:"level"`
 	Message string `json:"message"`
-	Detail  string `json:"detail,omitempty"` // a redacted operation of a core error, or the plugins a start stopped
+	Detail  string `json:"detail,omitempty"` // a core error's redacted operation or words (coreDetail), or the plugins a start stopped
 }
 type Records struct {
 	minTime     int64
@@ -111,6 +111,11 @@ func (r *Records) RuleHits() map[string]RuleHit {
 }
 func (r *Records) Log(source, level, message string) { r.LogDetail(source, level, message, "") }
 
+// detailVariants is how many entries of one core or DNS reason a minute keeps apart by their
+// detail. Further details fold into one entry without a detail, so that a cause the core
+// reports with a different detail each time cannot fill the log.
+const detailVariants = 4
+
 // LogDetail records an event with a redacted operation shown under it.
 func (r *Records) LogDetail(source, level, message, detail string) {
 	r.mu.Lock()
@@ -118,15 +123,27 @@ func (r *Records) LogDetail(source, level, message, detail string) {
 	now := time.Now().UnixMilli()
 	// Core and DNS repeats within a minute fold into one recent entry, which moves to the end.
 	if source == "core" || source == "dns" {
-		for i := len(r.events) - 1; i >= 0 && i >= len(r.events)-32; i-- {
-			e := r.events[i]
-			if e.Source == source && e.Level == level && e.Message == message && e.Detail == detail && now >= e.Time && now-e.Time <= 60000 {
+		for {
+			variants := 0
+			for i := len(r.events) - 1; i >= 0 && i >= len(r.events)-32; i-- {
+				e := r.events[i]
+				if e.Source != source || e.Level != level || e.Message != message || now < e.Time || now-e.Time > 60000 {
+					continue
+				}
+				if e.Detail != detail {
+					variants++
+					continue
+				}
 				e.Count = max(e.Count, 1) + 1
 				e.Time = now
 				copy(r.events[i:], r.events[i+1:])
 				r.events[len(r.events)-1] = e
 				return
 			}
+			if detail == "" || variants < detailVariants {
+				break
+			}
+			detail = ""
 		}
 	}
 	if len(r.events) == recordLimit {
@@ -137,7 +154,8 @@ func (r *Records) LogDetail(source, level, message, detail string) {
 }
 
 // Core stderr is free form, and can contain signed URLs or full config values.
-// Keep a bounded redacted event without echoing attacker-controlled content.
+// Keep a bounded event: a reason, and at most the redacted plain words of the line
+// (deniedOperation, coreDetail), never its text as written.
 type logSink struct {
 	r        *Records
 	line     []byte
@@ -308,18 +326,62 @@ func (s *logSink) recordLine(line string) {
 		s.terminal = reason
 	}
 	detail := ""
-	if reason == "permission_denied" {
+	switch reason {
+	case "permission_denied":
 		detail = deniedOperation(line)
+	case "core_diagnostic":
+		detail = coreDetail(line)
 	}
 	s.r.LogDetail(source, level, reason, detail)
 }
 
 var (
-	detailAddress = regexp.MustCompile(`\[[0-9a-f:.]+\](:\d+)?|\b\d{1,3}(\.\d{1,3}){3}(:\d+)?\b|\b[0-9a-f]{0,4}(:[0-9a-f]{0,4}){2,7}\b`)
-	detailHost    = regexp.MustCompile(`\b[a-z0-9-]+(\.[a-z0-9-]+)+\.[a-z]{2,}\b`)
-	detailPath    = regexp.MustCompile(`(/[^/\s:]+/[^/\s:]+)/[^\s:]+`)
-	detailSafe    = regexp.MustCompile(`[^a-z0-9 _./:<>-]`)
+	detailAddress = regexp.MustCompile(`\[[0-9a-f.]*:[0-9a-f:.]*\](:\d+)?|\b\d{1,3}(\.\d{1,3}){3}(:\d+)?\b|\b[0-9a-f]{0,4}(:[0-9a-f]{0,4}){2,7}\b`)
+	// A name of two labels or more whose last starts and ends with a letter: example.com too.
+	// File names and dotted settings (cache.db, dns.fake-ip-filter) go with them.
+	detailHost = regexp.MustCompile(`\b[a-z0-9-]+(\.[a-z0-9-]+)*\.(xn--[a-z0-9-]+|[a-z][a-z0-9-]*[a-z])\b`)
+	detailPath = regexp.MustCompile(`(/[^/\s:]+/[^/\s:]+)/[^\s:]+`)
+	detailSafe = regexp.MustCompile(`[^a-z0-9 _./:<>-]`)
+
+	// What coreDetail also takes out: the log header, links (with any credentials, query or
+	// signature in them), user@ prefixes, the IDs the plugin names nodes and groups by, and
+	// long tokens with digits (keys, digests).
+	detailMessage = regexp.MustCompile(`msg="((?:[^"\\]|\\.)*)"`)
+	detailHeader  = regexp.MustCompile(`^(time="[^"]*"\s+)?(level=)?(fatal|panic|error|warn|warning)(\[[^\]]*\])?:?\s+`)
+	detailURL     = regexp.MustCompile(`\b([a-z][a-z0-9+.-]*://)[^\s"]*[^\s"':,.)\]]`)
+	detailUser    = regexp.MustCompile(`[^\s@/:]+(:[^\s@/]*)?@`)
+	detailID      = regexp.MustCompile(`\b(node|group):[0-9a-f]{32}\b`)
+	detailToken   = regexp.MustCompile(`[a-z0-9_+=-]{24,}`)
 )
+
+// coreDetail keeps, for the log, what a core line that no reason describes says (the lowered
+// line, as recordLine reads it): its message without the log header, with links, credentials,
+// node and group IDs, addresses, host names, deep paths and long tokens replaced, and nothing
+// but plain ASCII, so that names a subscription chose (rule set tags, often Chinese or with
+// emoji) are left out unless they are plain words. At most 120 characters.
+func coreDetail(line string) string {
+	msg := detailHeader.ReplaceAllString(line, "")
+	if m := detailMessage.FindStringSubmatch(line); m != nil {
+		msg = strings.ReplaceAll(m[1], `\"`, `"`)
+	}
+	msg = detailURL.ReplaceAllString(msg, "$1<url>")
+	msg = detailUser.ReplaceAllString(msg, "")
+	msg = detailID.ReplaceAllString(msg, "<$1>")
+	msg = detailAddress.ReplaceAllString(msg, "<addr>")
+	msg = detailHost.ReplaceAllString(msg, "<host>")
+	msg = detailPath.ReplaceAllString(msg, "$1/...")
+	msg = detailToken.ReplaceAllStringFunc(msg, func(s string) string {
+		if strings.ContainsAny(s, "0123456789") {
+			return "<id>"
+		}
+		return s
+	})
+	msg = strings.Join(strings.Fields(detailSafe.ReplaceAllString(msg, " ")), " ")
+	if len(msg) > 120 {
+		msg = strings.TrimSpace(msg[:120])
+	}
+	return msg
+}
 
 // deniedOperation keeps the failing operation of a core permission error, such as
 // "listen udp <addr>: bind" or "open /etc/openweir/...", without addresses, host
