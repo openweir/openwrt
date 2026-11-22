@@ -13,6 +13,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/openweir/openwrt/internal/atomicfile"
 	"github.com/openweir/openwrt/internal/cnlist"
 	"github.com/openweir/openwrt/internal/subscription"
 	"go.yaml.in/yaml/v3"
@@ -198,22 +199,9 @@ func syncDevices(ctx context.Context, macs []string, n Network) ([]string, error
 	return changed, nil
 }
 
-// writeDeviceProvider replaces the list in one rename; CreateTemp makes it 0600.
+// writeDeviceProvider replaces the list in one rename, 0600.
 func writeDeviceProvider(path string, data []byte) error {
-	f, err := os.CreateTemp(filepath.Dir(path), ".device-")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name())
-	_, err = f.Write(data)
-	closeErr := f.Close()
-	if err != nil {
-		return err
-	}
-	if closeErr != nil {
-		return closeErr
-	}
-	return os.Rename(f.Name(), path)
+	return atomicfile.WriteFile(path, data, 0600, ".device-")
 }
 
 func (s *System) watchDevices(ctx context.Context, macs []string, n Network) {

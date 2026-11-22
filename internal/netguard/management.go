@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/openweir/openwrt/internal/atomicfile"
 )
 
 const managementState = "/var/run/openweir/network"
@@ -128,19 +130,7 @@ func Management(ctx context.Context, record bool) error {
 		if e != nil {
 			return e
 		}
-		f, e := os.CreateTemp(managementState, ".management-")
-		if e != nil {
-			return e
-		}
-		defer os.Remove(f.Name())
-		if _, e = f.Write(b); e != nil {
-			f.Close()
-			return e
-		}
-		if e = f.Close(); e != nil {
-			return e
-		}
-		return os.Rename(f.Name(), path)
+		return atomicfile.WriteFile(path, b, 0600, ".management-")
 	}
 	b, e := os.ReadFile(path)
 	if e != nil {

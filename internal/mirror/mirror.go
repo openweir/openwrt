@@ -11,6 +11,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/openweir/openwrt/internal/atomicfile"
 )
 
 // Defaults are used until the list is saved from LuCI.
@@ -115,8 +117,5 @@ func Remember(prefix string) {
 	if os.MkdirAll(filepath.Dir(StateFile), 0o755) != nil {
 		return
 	}
-	tmp := StateFile + ".tmp"
-	if os.WriteFile(tmp, []byte(prefix+"\n"), 0o644) == nil {
-		_ = os.Rename(tmp, StateFile)
-	}
+	_ = atomicfile.WriteFile(StateFile, []byte(prefix+"\n"), 0o644, "."+filepath.Base(StateFile)+"-*")
 }
