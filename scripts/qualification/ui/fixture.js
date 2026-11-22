@@ -43,7 +43,14 @@ export function fixture(empty = false, preparing = false) {
 		epoch: 1, generation: 1, node_count: 4, group_count: 2, rule_count: 1,
 	});
 	if (empty) sources.length = 0;
-	const saved = { revision: 5, mode: 'smart', enabled: !empty, source: empty ? '' : 'p0', policy: {}, choices: {} };
+	// Custom rules as the policy keeps them: a match, a target, and an optional note or off switch.
+	// The second matches one long name, which has to wrap in the rules page's narrow column.
+	const customRules = [
+		{ id: 'rule-1', match: { domain_suffix: ['example.com', 'example.net'] }, target: '@direct', note: '工作网站' },
+		{ id: 'rule-2', match: { domain: ['mediaassetsdeliverynetworkforstreamingvideosegments.cdn.example.org'] }, target: 'group:watch' },
+		{ id: 'rule-3', match: { ip_cidr: ['192.0.2.0/24'] }, target: '@reject', enabled: false },
+	];
+	const saved = { revision: 5, mode: 'smart', enabled: !empty, source: empty ? '' : 'p0', policy: empty ? {} : { rules: customRules }, choices: {} };
 	const kernel = { target: 'arm64', selected: preparing ? '' : 'v0.1.3', trust_ready: false };
 	if (preparing) kernel.bootstrap = {id:'initial', action:'kernel/bootstrap', stage:'running'};
 	const installs = [];

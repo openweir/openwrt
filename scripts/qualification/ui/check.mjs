@@ -706,6 +706,33 @@ try {
 				assert.ok(builtIn.left <= streaming.left && domestic.right <= builtIn.right, 'rule-set cards stay in the built-in column');
 				if (width > 900) assert.ok(Math.abs(streaming.top - domestic.top) < 1 && streaming.right <= domestic.left, 'two rule-set cards a row');
 				else assert.ok(streaming.bottom <= domestic.top, 'one rule-set card a row on a phone');
+				// Custom rules fill the right column, or follow the rule sets on a phone. Both are narrow:
+				// a long match wraps inside the column, and each rule's buttons move under its match.
+				const ruleRows = await page.locator('.ow-rules-custom .ow-rule-row').evaluateAll(rows => rows.map(row => {
+					const match = row.querySelector('.ow-rule-match'),
+						box = row.getBoundingClientRect();
+					return {
+						left: box.left,
+						right: box.right,
+						lines: match.querySelector('strong').getClientRects().length,
+						overflow: match.scrollWidth > match.clientWidth,
+						under: row.querySelector(':scope > .ow-actions').getBoundingClientRect().top >= match.getBoundingClientRect().bottom,
+					};
+				}));
+				assert.equal(ruleRows.length, 3, 'one row per custom rule');
+				assert.ok(ruleRows.every(row => custom.left <= row.left && row.right <= custom.right), 'custom rules sit in their column');
+				assert.ok(ruleRows[1].lines > 1 && ruleRows.every(row => !row.overflow), 'a long match wraps inside the column');
+				assert.ok(ruleRows.every(row => row.under), 'buttons sit under the match in a narrow column');
+				// A move that fails to save says so on the line under its rule, which describes the button.
+				await page.evaluate(() => { window.model.controls.fail = { save_rules: 'configuration revision changed' }; });
+				const lower = page.getByRole('button', {name:'下移第 1 条规则', exact:true});
+				await lower.click();
+				const moveLine = page.locator('.ow-rules-custom .ow-rule-row').first().locator('.ow-feedback');
+				await moveLine.filter({hasText:'配置已被其他操作修改，请刷新后重试'}).waitFor();
+				assert.equal(await moveLine.getAttribute('role'), 'status');
+				assert.equal(await lower.getAttribute('aria-describedby'), await moveLine.getAttribute('id'));
+				assert.ok(await page.locator('.ow-alert').isHidden(), 'no alert above the page');
+				await page.evaluate(() => { delete window.model.controls.fail; });
 				await setCard('Streaming').getByText('订阅',{exact:true}).waitFor();
 				await setCard('Streaming').getByText('二进制',{exact:true}).waitFor();
 				assert.match(await setCard('Streaming').locator('dl').innerText(), /条目\s*1 条\s*命中连接\s*3 次\s*去向\s*直连/);
