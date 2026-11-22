@@ -60,6 +60,8 @@ go test ./...
 OPENWEIR_FEED_MODE=test OPENWEIR_PACKAGE_ARCH=aarch64_generic packaging/openwrt/build.sh 24.10.8 aarch64_generic "$(cat VERSION)" dist/feed/aarch64_generic
 ```
 
+`VERSION` 只是本地构建的默认版本号。CI 会根据最新的正式版标签和其后的约定式提交算出每次构建的版本并覆盖该文件；`go run ./cmd/openweir-release next-version` 可以输出 CI 会使用的版本。
+
 日常开发在 `develop`（发布预览版），`main` 用于正式发布。打包细节见 [packaging/openwrt/README.md](packaging/openwrt/README.md)。
 
 ## 许可证

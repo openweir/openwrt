@@ -60,6 +60,8 @@ go test ./...
 OPENWEIR_FEED_MODE=test OPENWEIR_PACKAGE_ARCH=aarch64_generic packaging/openwrt/build.sh 24.10.8 aarch64_generic "$(cat VERSION)" dist/feed/aarch64_generic
 ```
 
+`VERSION` is only the default for local builds. CI works out each build's version from the newest release tag and the conventional commits since it, and overwrites the file; `go run ./cmd/openweir-release next-version` prints the version CI would use.
+
 Development happens on `develop` (preview builds); `main` is released. See [packaging/openwrt/README.md](packaging/openwrt/README.md).
 
 ## License
