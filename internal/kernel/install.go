@@ -39,7 +39,7 @@ func (m *Manager) saveMeta(tag string, mat material) error {
 	if e = os.Rename(tmp, dir); e != nil {
 		return e
 	}
-	return syncDir(filepath.Dir(dir))
+	return atomicfile.SyncDir(filepath.Dir(dir))
 }
 func (m *Manager) materialize(ctx context.Context, p pick, v *Verified, src Source) error {
 	a := v.Asset
@@ -84,7 +84,7 @@ func (m *Manager) materialize(ctx context.Context, p pick, v *Verified, src Sour
 	if e = os.Rename(tmp, dir); e != nil {
 		return e
 	}
-	if e = syncDir(filepath.Dir(dir)); e != nil {
+	if e = atomicfile.SyncDir(filepath.Dir(dir)); e != nil {
 		return e
 	}
 	if e = m.Inspect(ctx, m.launch(p, v), ""); e != nil {

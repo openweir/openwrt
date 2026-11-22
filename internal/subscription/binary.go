@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+
+	"github.com/openweir/openwrt/internal/atomicfile"
 )
 
 type BinarySet struct {
@@ -66,14 +68,6 @@ func lockSets(dir string) (*os.File, error) {
 	}
 	return f, nil
 }
-func syncDirectory(path string) error {
-	d, e := os.Open(path)
-	if e != nil {
-		return e
-	}
-	defer d.Close()
-	return d.Sync()
-}
 
 // MaterializeSets writes the exact bytes referenced by the approved profile.
 // Both formats use content-addressed paths independent of remote tags.
@@ -123,7 +117,7 @@ func MaterializeSets(p Profile, dir string) error {
 			return e
 		}
 	}
-	return syncDirectory(dir)
+	return atomicfile.SyncDir(dir)
 }
 
 // writeSet is not atomicfile.WriteFile: MaterializeSets syncs the directory once for the whole batch.
@@ -208,5 +202,5 @@ func (s *Store) CollectSets(dir string) error {
 			return e
 		}
 	}
-	return syncDirectory(dir)
+	return atomicfile.SyncDir(dir)
 }

@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/openweir/openwrt/internal/atomicfile"
 	"github.com/openweir/subconv/rules"
 )
 
@@ -218,7 +219,7 @@ func fillGeneration(dir, base string, staged map[string][]byte, m *rules.Manifes
 		}
 	}
 	for d := range dirs {
-		if err := syncDirectory(d); err != nil {
+		if err := atomicfile.SyncDir(d); err != nil {
 			return err
 		}
 	}
@@ -231,7 +232,7 @@ func switchGeneration(root, name string) error {
 	os.Remove(next)
 	err := os.Symlink(name, next)
 	if err == nil {
-		err = syncDirectory(root)
+		err = atomicfile.SyncDir(root)
 	}
 	if err == nil {
 		err = os.Rename(next, filepath.Join(root, templateCurrent))
@@ -240,7 +241,7 @@ func switchGeneration(root, name string) error {
 		os.Remove(next)
 		return err
 	}
-	return syncDirectory(root)
+	return atomicfile.SyncDir(root)
 }
 
 // writeSynced is not atomicfile: it fills a new generation, which switchGeneration publishes whole.

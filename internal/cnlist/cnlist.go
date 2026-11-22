@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/openweir/openwrt/internal/atomicfile"
 	"github.com/openweir/openwrt/internal/subscription"
 )
 
@@ -278,10 +279,5 @@ func write(list string, data []byte) error {
 		os.Remove(tmp)
 		return err
 	}
-	d, err := os.Open(Dir)
-	if err != nil {
-		return err
-	}
-	defer d.Close()
-	return d.Sync()
+	return atomicfile.SyncDir(Dir)
 }

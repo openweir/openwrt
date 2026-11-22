@@ -255,14 +255,6 @@ func (s Source) metadata(ctx context.Context, tag, target, key string) (material
 func writeAtomic(file string, data []byte, mode os.FileMode) error {
 	return atomicfile.WriteFile(file, data, mode, ".write-")
 }
-func syncDir(dir string) error {
-	f, e := os.Open(dir)
-	if e != nil {
-		return e
-	}
-	defer f.Close()
-	return f.Sync()
-}
 func uidToken() (string, error) {
 	var id [16]byte
 	_, e := rand.Read(id[:])
@@ -398,7 +390,7 @@ func unpack(archive, dir, target, board string, a Asset) error {
 		if err = checkELF(dst, target, board); err != nil {
 			return err
 		}
-		return syncDir(filepath.Dir(dst))
+		return atomicfile.SyncDir(filepath.Dir(dst))
 	}
 	tr := tar.NewReader(decompressed)
 	remaining := map[string]Member{}
@@ -457,7 +449,7 @@ func unpack(archive, dir, target, board string, a Asset) error {
 				return e
 			}
 		}
-		if e = syncDir(filepath.Dir(dst)); e != nil {
+		if e = atomicfile.SyncDir(filepath.Dir(dst)); e != nil {
 			return e
 		}
 		delete(remaining, m.Path)
@@ -476,9 +468,9 @@ func unpack(archive, dir, target, board string, a Asset) error {
 	}
 	// Nested directory entries must also reach disk before a state commit.
 	for p := range dirs {
-		if e = syncDir(filepath.Join(dir, p)); e != nil {
+		if e = atomicfile.SyncDir(filepath.Join(dir, p)); e != nil {
 			return e
 		}
 	}
-	return syncDir(dir)
+	return atomicfile.SyncDir(dir)
 }

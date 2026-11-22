@@ -668,7 +668,7 @@ func (s *Store) saveAccount(a Account, loginIntent string, changed *[]string) er
 		if e = os.Remove(s.accountPath(&account)); e != nil {
 			return e
 		}
-		if e = s.syncDir(); e != nil {
+		if e = atomicfile.SyncDir(s.dir); e != nil {
 			return e
 		}
 	} else if !errors.Is(e, os.ErrNotExist) {
@@ -1014,15 +1014,7 @@ func (s *Store) markAccount(c *Source) error {
 	if e != nil {
 		return e
 	}
-	return s.syncDir()
-}
-func (s *Store) syncDir() error {
-	d, e := os.Open(s.dir)
-	if e != nil {
-		return e
-	}
-	defer d.Close()
-	return d.Sync()
+	return atomicfile.SyncDir(s.dir)
 }
 func (s *Store) purgeAccount(c *Source) ([]string, error) {
 	list, e := s.List()
@@ -1113,5 +1105,5 @@ func (s *Store) BeginLogin(origin string) (string, error) {
 	if ce != nil {
 		return "", ce
 	}
-	return id, s.syncDir()
+	return id, atomicfile.SyncDir(s.dir)
 }

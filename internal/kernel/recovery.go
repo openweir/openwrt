@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/openweir/openwrt/internal/atomicfile"
 )
 
 func (m *Manager) Confirm(ctx context.Context, token string) (Launch, error) {
@@ -84,7 +86,7 @@ func (m *Manager) finishSingle(ctx context.Context, s *state, v *Verified) error
 			}
 			dir := filepath.Dir(dst)
 			for dir != filepath.Dir(m.slot(p)) {
-				if e = syncDir(dir); e != nil {
+				if e = atomicfile.SyncDir(dir); e != nil {
 					return e
 				}
 				dir = filepath.Dir(dir)
@@ -93,7 +95,7 @@ func (m *Manager) finishSingle(ctx context.Context, s *state, v *Verified) error
 		if e = slotPermissions(m.slot(p), v.Asset); e != nil {
 			return e
 		}
-		if e = syncDir(filepath.Dir(m.slot(p))); e != nil {
+		if e = atomicfile.SyncDir(filepath.Dir(m.slot(p))); e != nil {
 			return e
 		}
 	}

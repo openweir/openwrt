@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/openweir/openwrt/internal/atomicfile"
 	"github.com/openweir/openwrt/internal/kernel"
 	"github.com/openweir/openwrt/internal/router"
 	"github.com/openweir/openwrt/internal/tlsdiag"
@@ -255,12 +256,7 @@ func claimFirstInstall(dir string) (bool, error) {
 	if err = os.Rename(pending, attempted); err != nil {
 		return false, err
 	}
-	f, err := os.Open(dir)
-	if err != nil {
-		return false, err
-	}
-	defer f.Close()
-	return true, f.Sync()
+	return true, atomicfile.SyncDir(dir)
 }
 
 type kernelView struct {

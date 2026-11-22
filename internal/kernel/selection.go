@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/openweir/openwrt/internal/atomicfile"
 	"go.yaml.in/yaml/v3"
 	"io"
 	"os"
@@ -234,7 +235,7 @@ func (m *Manager) Invalidate(source string) error {
 				}
 			}
 		}
-		if e = syncDir(dir); e != nil {
+		if e = atomicfile.SyncDir(dir); e != nil {
 			return e
 		}
 		if changed {
