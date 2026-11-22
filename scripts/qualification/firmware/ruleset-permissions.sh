@@ -78,18 +78,21 @@ done
 report ruleset_watch_permissions
 p=$(pidof mihomo)
 [ -n "$p" ]
-# The core runs as root in the openweir-core group alone, with no_new_privs and only
-# CAP_NET_ADMIN, CAP_NET_BIND_SERVICE and CAP_NET_RAW in every capability set.
+# The core runs as root in the openweir-core group alone with every capability, like
+# OpenClash's: its bounding set is procd's, filled into the permitted and effective sets, and
+# no_new_privs stays unset.
 gid=$(awk -F: '$1 == "openweir-core" { print $3 }' /etc/group)
 [ -n "$gid" ]
 [ "$gid" != 0 ]
-awk -v gid="$gid" '
+bounding=$(awk '$1 == "CapBnd:" { print $2 }' /proc/1/status)
+[ -n "$bounding" ]
+awk -v gid="$gid" -v bnd="$bounding" '
  $1 == "Uid:" { ok += $2 == 0 && $3 == 0 && $4 == 0 && $5 == 0 }
  $1 == "Gid:" { ok += $2 == gid && $3 == gid && $4 == gid && $5 == gid }
  $1 == "Groups:" { ok += NF == 1 }
- $1 ~ /^Cap(Inh|Prm|Eff|Bnd|Amb):$/ { ok += $2 == "0000000000003400" }
- $1 == "NoNewPrivs:" { ok += $2 == 1 }
- END { exit ok != 9 }' "/proc/$p/status"
+ $1 ~ /^Cap(Prm|Eff|Bnd):$/ { ok += $2 == bnd }
+ $1 == "NoNewPrivs:" { ok += $2 == 0 }
+ END { exit ok != 7 }' "/proc/$p/status"
 report core_identity
 # Confirm the running core, under its real UID, loaded both providers.
 key=$(cat /etc/openweir/private/control.token)

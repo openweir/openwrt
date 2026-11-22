@@ -82,7 +82,6 @@ const networkRequirements = new Map([
 	['both fw3 and fw4 are active', 'fw3 和 fw4 同时运行，请只启用其中一个'],
 	['no active fw3 or fw4 firewall', '请先启用 fw3 或 fw4 防火墙'],
 	['numeric policy routing and marked route lookup', 'ip 命令需要支持数字路由表和按流量标记查询路由'],
-	['procd process isolation', 'procd 无法隔离代理内核进程'],
 	['dnsmasq service with configurable upstream', 'dnsmasq 服务需要支持设置上游 DNS'],
 	['DNS lookup command', '缺少用于检查 DNS 解析的命令'],
 	['JSON inspection of the active fw4 ruleset', '无法以 JSON 格式读取当前 fw4 规则'],

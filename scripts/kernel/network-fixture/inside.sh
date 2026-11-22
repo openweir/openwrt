@@ -210,12 +210,12 @@ dns_wire() {
 }
 start_core() {
  mkdir -p -m 0700 /tmp/mihomo-test
- # As the plugin does: root in the core group, with only the packaged capabilities.
- /sbin/ujail -G openweir-core -C /etc/openweir/core-capabilities.json -c -- /tmp/core -d /tmp/mihomo-test -f /tmp/core.yaml >/tmp/core.log 2>&1 &
- jail=$!
+ # As the plugin does: root in the core group alone, with every capability.
+ /tmp/peer core "$(awk -F: '$1 == "openweir-core" { print $3 }' /etc/group)" /tmp/core -d /tmp/mihomo-test -f /tmp/core.yaml >/tmp/core.log 2>&1 &
+ core_pid=$!
  sleep 1
  for attempt in 1 2 3 4 5; do
-  if ! kill -0 "$jail"; then cat /tmp/core.log; exit 1; fi
+  if ! kill -0 "$core_pid"; then cat /tmp/core.log; exit 1; fi
   if [ "$method" = tun ]; then [ -e /sys/class/net/owtun0 ] && break
   elif grep -q ':4D32 ' /proc/net/tcp6; then break; fi
   sleep 1
@@ -338,7 +338,7 @@ NFT
  }' /proc/uptime
  [ "$missed" = 1 ]
  for _ in $(seq 1 8); do [ ! -e /var/run/openweir/network/owned ] && break; sleep 1; done
- [ ! -e /var/run/openweir/network/owned ] && kill -0 "$jail"
+ [ ! -e /var/run/openweir/network/owned ] && kill -0 "$core_pid"
  nft delete table inet dns_fault_fixture
  kill "$dns_guard" "$dns_writer"; wait "$dns_guard" || :; wait "$dns_writer" || :
  wire direct
@@ -351,7 +351,7 @@ NFT
  guard=$!
  sleep 8
  [ -e /var/run/openweir/network/owned ] || { echo 'healthy network was released'; exit 1; }
- if [ "$method" = tun ]; then kill "$jail"; wait "$jail" || :; else kill "$writer"; wait "$writer" || :; fi
+ if [ "$method" = tun ]; then kill "$core_pid"; wait "$core_pid" || :; else kill "$writer"; wait "$writer" || :; fi
  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do [ -e /var/run/openweir/network/owned ] || break; sleep 1; done
  [ ! -e /var/run/openweir/network/owned ]
  kill "$guard"; wait "$guard" || :
@@ -367,7 +367,7 @@ NFT
   done
  fi
  [ ! -e /tmp/instance-lan/99-openweir-upstream.conf ]
- if [ "$method" = tun ]; then kill "$writer"; wait "$writer" || :; else kill "$jail"; wait "$jail" || :; fi
+ if [ "$method" = tun ]; then kill "$writer"; wait "$writer" || :; else kill "$core_pid"; wait "$core_pid" || :; fi
 
  [ "${TEST_TRACE:-0}" != 1 ] || set -x
  # Disable automatic direct fallback for the next confirmed takeover.
@@ -394,7 +394,7 @@ NFT
  guard=$!
  sleep 3
  if [ "$method" = tun ]; then
-  kill "$jail"; wait "$jail" || :
+  kill "$core_pid"; wait "$core_pid" || :
   for fam in 4 6; do
    ip "-$fam" route show table 21998 | grep -q '^prohibit default'
    if [ "$fam" = 4 ]; then dst=198.18.0.10; else dst=2001:db8:1::10; fi
@@ -450,7 +450,7 @@ NFT
  rm -f /var/run/openweir/stopping
  wire direct
  dns_wire direct
- kill "$jail"; wait "$jail" || :
+ kill "$core_pid"; wait "$core_pid" || :
  uci set openweir.main.fail_open=1
  echo "$method hold, retry and manual release passed (IPv4/IPv6 TCP/UDP, managed/direct/unmanaged)"
 done

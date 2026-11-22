@@ -7,6 +7,6 @@ import (
 	"syscall"
 )
 
-func coreProcess(c *exec.Cmd, privateMounts bool) {}
+func coreProcess(c *exec.Cmd, gid int) {}
 
 func signalCore(c *exec.Cmd, s syscall.Signal) error { return c.Process.Signal(s) }

@@ -173,9 +173,9 @@ func (s *logSink) flush() {
 // Mihomo may color its log headers even when stderr is a pipe.
 var logColor = regexp.MustCompile("\x1b\\[[0-9;]*m")
 
-// corePermissionReason names what the core was denied. The core runs as root and owns the
-// files OpenWeir prepares for it (its home, work directory, rule sets, configuration and TUN
-// node), so a denial means a missing capability, the firewall or a file of another account.
+// corePermissionReason names what the core was denied. The core runs as root with every
+// capability (coreCommand), so a denial comes from the firewall or a kernel setting (such as
+// ping_group_range for ICMP sockets), not from file ownership or a missing capability.
 func corePermissionReason(line string) string {
 	switch {
 	case strings.Contains(line, "ping_group_range"), strings.Contains(line, "listen ip4:icmp"), strings.Contains(line, "listen ip6:ipv6-icmp"), strings.Contains(line, "icmp socket"):
@@ -189,8 +189,6 @@ func corePermissionReason(line string) string {
 		return "core_route_mark_permission"
 	case strings.Contains(line, "listen tcp"), strings.Contains(line, "listen udp"), strings.Contains(line, "bind:"):
 		return "core_listener_permission"
-	case strings.Contains(line, "capset"), strings.Contains(line, "pr_cap_ambient"), strings.Contains(line, "raising capability"):
-		return "core_capability_permission"
 	case strings.Contains(line, "pthread_create"), strings.Contains(line, "failed to create new os thread"):
 		return "core_thread_creation_failed"
 	case strings.Contains(line, "/proc/"), strings.Contains(line, "find process"), strings.Contains(line, "process name"):

@@ -299,7 +299,6 @@ firewall_capabilities() {
  case "$selected" in tproxy|tun) ;; *) cap_issue method ;; esac
  case "$kind" in fw3|fw4) ;; ambiguous) cap_issue firewall_mixed ;; *) cap_issue firewall_inactive ;; esac
  cap_ip 2>/dev/null || cap_issue iproute
- [ -x /sbin/ujail ] || cap_issue ujail
  if [ "$dns" = 1 ]; then
   if ! [ -x /etc/init.d/dnsmasq ] || ! printf 'no-resolv\nserver=127.0.0.1#19764\n' | dnsmasq --test --conf-file=- >/dev/null 2>&1; then cap_issue dnsmasq
   elif interfaces=$(devices) && [ -n "$interfaces" ]; then

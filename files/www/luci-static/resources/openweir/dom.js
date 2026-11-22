@@ -179,7 +179,6 @@ const diagnosticText = {
     core_icmp_socket_permission: '内核没有权限使用 ICMP 套接字',
     core_listener_permission: '内核没有权限绑定监听端口',
     core_route_mark_permission: '内核没有权限设置套接字路由标记',
-    core_capability_permission: '进程隔离器无法授予内核所需的权限',
     core_thread_creation_failed: '内核无法创建工作线程',
     core_outbound_blocked: '内核的出站连接被系统拒绝，常见原因是防火墙拦截了路由器自身发出的流量',
     core_process_lookup_permission: '内核无法读取进程信息，按进程匹配的规则不会生效',
@@ -254,7 +253,7 @@ export const day = (t) => datetime(t).slice(0, 10);
 const errorText = {
     'active subscription unavailable': '当前订阅不可用',
     'candidate has unavailable source references': '配置引用了不可用的订阅',
-    'cannot launch restricted core': '无法以受限方式启动内核',
+    'cannot launch core': '无法启动内核',
     'cannot prepare authorized rule sets': '无法准备规则集文件',
     'capability information does not match selected release': '内核能力信息与所选版本不符',
     'capability information does not match this target': '内核能力信息与本机架构不符',

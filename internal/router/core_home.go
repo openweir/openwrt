@@ -23,7 +23,6 @@ const packagedRules = "/usr/share/openweir/rules"
 
 // The core runs as root (coreCommand), so its home and device lists, like the rule sets
 // (subscription.MaterializeSets), are private to root: 0700 directories and 0600 files.
-// Being root, the core owns them as well; only its capabilities and no_new_privs confine it.
 func privateDir(path string) error {
 	if err := os.Mkdir(path, 0700); err != nil && !errors.Is(err, os.ErrExist) {
 		return err
@@ -35,10 +34,10 @@ func privateDir(path string) error {
 	return os.Chmod(path, 0700)
 }
 
-// reclaimDir removes a runtime directory that holds anything another account owns. The core
-// runs as root without CAP_DAC_OVERRIDE, so a directory or cache.db an older OpenWeir left in
-// /var/run under its own core account would stay unwritable until a reboot. Only a full start
-// calls it, before the core runs; the state there is rebuilt (the fake-ip cache starts empty).
+// reclaimDir removes a runtime directory that holds anything another account owns: an older
+// OpenWeir left its home and work directory in /var/run under its own core account, which
+// privateDir and the work directory check refuse until a reboot. Only a full start calls it,
+// before the core runs; the state there is rebuilt (the fake-ip cache starts empty).
 func reclaimDir(path string) error {
 	foreign := false
 	err := filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {

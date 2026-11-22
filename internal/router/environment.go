@@ -74,7 +74,6 @@ var networkRequirements = map[string]struct{ description, provider string }{
 	"firewall_mixed":    {"both fw3 and fw4 are active", ""},
 	"firewall_inactive": {"no active fw3 or fw4 firewall", ""},
 	"iproute":           {"numeric policy routing and marked route lookup", "ip-tiny / ip-full"},
-	"ujail":             {"procd process isolation", "procd-ujail"},
 	"dnsmasq":           {"dnsmasq service with configurable upstream", "dnsmasq / dnsmasq-full"},
 	"nslookup":          {"DNS lookup command", "nslookup"},
 	"nft_json":          {"JSON inspection of the active fw4 ruleset", "nftables-json"},

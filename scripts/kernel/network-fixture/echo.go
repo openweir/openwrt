@@ -9,11 +9,28 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
 func main() {
+	if os.Args[1] == "core" {
+		// core GID PATH ARGS...: start the core as openweird does, as root in group GID alone,
+		// with every capability.
+		gid, e := strconv.Atoi(os.Args[2])
+		if e != nil || gid < 1 {
+			panic("invalid core group")
+		}
+		if e = syscall.Setgroups(nil); e != nil {
+			panic(e)
+		}
+		if e = syscall.Setresgid(gid, gid, gid); e != nil {
+			panic(e)
+		}
+		panic(syscall.Exec(os.Args[3], os.Args[3:], os.Environ()))
+	}
 	if os.Args[1] == "dns" {
 		// A connected TCP socket forces the resolver to use DNS length framing.
 		// UDP uses a packet socket and therefore exercises the other wire path.

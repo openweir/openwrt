@@ -142,7 +142,7 @@ jobs:
           tar -xJf "$RUNNER_TEMP/shellcheck.tar.xz" -C "$RUNNER_TEMP"
           "$RUNNER_TEMP/shellcheck-v0.11.0/shellcheck" --shell=busybox --severity=warning --external-sources --check-sourced \
             --source-path=SCRIPTDIR files/usr/libexec/openweir/network \
-            files/usr/libexec/openweir/{procd-delete,tun-jail} files/usr/libexec/rpcd/openweir \
+            files/usr/libexec/openweir/procd-delete files/usr/libexec/rpcd/openweir \
             files/etc/init.d/openweir files/etc/hotplug.d/*/*-openweir \
             packaging/openwrt/{activate-runtime,runtime-abi,package-update,package-recovery}
       - uses: actions/setup-go@v7

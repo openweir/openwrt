@@ -14,7 +14,6 @@ func TestCorePermissionRecordsNameOperationWithoutSensitiveText(t *testing.T) {
 		{"WARN[0001] listen ip4:icmp 0.0.0.0: socket: permission denied", "core_icmp_socket_permission"},
 		{"ERROR routing: set SO_MARK: operation not permitted", "core_route_mark_permission"},
 		{"\x1b[31mFATAL\x1b[0m[0001] listen tcp 127.0.0.1:443: bind: permission denied", "core_listener_permission"},
-		{"time=now level=error msg=capset: Operation not permitted", "core_capability_permission"},
 		{"WARN other action for https://example.test/" + secret + ": permission denied", "permission_denied"},
 	} {
 		s := logSink{r: NewRecords()}

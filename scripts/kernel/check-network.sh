@@ -1,6 +1,6 @@
 #!/bin/sh
 # Run in an isolated Docker network namespace. Each image uses the matching
-# OpenWrt ip-full/nft/dnsmasq/ujail packages and shares the Docker VM kernel.
+# OpenWrt ip-full/nft/dnsmasq packages and shares the Docker VM kernel.
 set -eu
 archive=${1:?pass the pinned Mihomo Linux ARM64 archive}
 expected=${2:?pass its independently verified SHA-256}

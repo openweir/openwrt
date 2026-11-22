@@ -14,10 +14,10 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// execRestricted runs a core check as the running core does: root in the core group (whose
-// sockets the firewall exempts), so it reads the root-owned configuration and home. It holds
-// no capability at all: the bounding set is emptied and no_new_privs set before execve, which
-// then gives root nothing back.
+// execRestricted runs a core check or provider fetch in the running core's identity: root, so
+// it reads the root-owned configuration and home, in the core group, whose sockets the
+// firewall exempts. Unlike the running core it holds no capability at all: the bounding set
+// is emptied and no_new_privs set before execve, which then gives root nothing back.
 func execRestricted(args []string) error {
 	path, env, e := restrictedArgs(args)
 	if e != nil {

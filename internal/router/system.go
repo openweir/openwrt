@@ -311,7 +311,8 @@ func (s *System) Start(ctx context.Context, i Intent) (err error) {
 	if e != nil {
 		return errors.New("active subscription unavailable")
 	}
-	if _, e = coreGID(); e != nil {
+	gid, e := coreGID()
+	if e != nil {
 		return e
 	}
 	for _, dir := range []string{coreHome, RunDir + "/core"} {
@@ -372,7 +373,7 @@ func (s *System) Start(ctx context.Context, i Intent) (err error) {
 	if e != nil || !info.IsDir() || info.Mode().Perm() != 0700 || int(info.Sys().(*syscall.Stat_t).Uid) != os.Geteuid() {
 		return errors.New("invalid private core work directory")
 	}
-	cmd := coreCommand(n.Method, launch, work)
+	cmd := coreCommand(launch, work, gid)
 	// No raw node config or free-form core error can enter diagnostics.
 	coreLog := &logSink{r: s.records}
 	s.records.CoreStarted(i.Source)
@@ -397,7 +398,7 @@ func (s *System) Start(ctx context.Context, i Intent) (err error) {
 		}
 	}()
 	if <-started != nil {
-		return errors.New("cannot launch restricted core")
+		return errors.New("cannot launch core")
 	}
 	s.mu.Lock()
 	s.process = cmd
@@ -521,14 +522,9 @@ applyLoop:
 	return nil
 }
 
-// The core runs as root in this group. The firewall lets the group's sockets out uncaptured
-// (meta skgid), so the group must not be root's.
+// The core runs as root in this group alone. The firewall lets the group's sockets out
+// uncaptured (meta skgid), so the group must not be root's.
 const coreGroup = "openweir-core"
-
-// coreCapabilities bounds every capability set of the core to CAP_NET_ADMIN (TProxy sockets,
-// SO_MARK, the TUN device), CAP_NET_BIND_SERVICE (TProxy UDP replies from ports below 1024) and
-// CAP_NET_RAW (raw sockets for Hysteria's faketcp).
-const coreCapabilities = "/etc/openweir/core-capabilities.json"
 
 func coreGID() (int, error) {
 	g, e := user.LookupGroup(coreGroup)
@@ -542,20 +538,14 @@ func coreGID() (int, error) {
 	return gid, nil
 }
 
-// coreCommand starts the core in ujail. Without -U ujail keeps root's user ID; -G sets the
-// real, effective, saved and file-system group, which new sockets carry. ujail drops every
-// capability outside coreCapabilities, the bounding set included, before execve, and -c sets
-// no_new_privs, so root's execve gives back no other capability. coreProcess starts ujail
-// without supplementary groups.
-func coreCommand(method string, launch kernel.Launch, work string) *exec.Cmd {
-	launcher := "/sbin/ujail"
-	if method == "tun" {
-		launcher = "/usr/libexec/openweir/tun-jail"
-	}
-	cmd := exec.Command(launcher, "-G", coreGroup, "-C", coreCapabilities, "-c", "-e", "TMPDIR", "-e", "HOME", "--", launch.Path, "-d", coreHome, "-f", launch.Config)
+// coreCommand runs the core as OpenClash runs its own: as root with every capability, and
+// without a sandbox, a capability bound or no_new_privs, so TUN mode opens the router's
+// /dev/net/tun itself. coreProcess sets the group gid and drops supplementary groups.
+func coreCommand(launch kernel.Launch, work string, gid int) *exec.Cmd {
+	cmd := exec.Command(launch.Path, "-d", coreHome, "-f", launch.Config)
 	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "TMPDIR=" + work, "HOME=" + work}
 	cmd.Dir = work
-	coreProcess(cmd, method == "tun")
+	coreProcess(cmd, gid)
 	return cmd
 }
 
