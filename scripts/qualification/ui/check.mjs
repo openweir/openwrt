@@ -611,18 +611,51 @@ try {
 				const savedProblem = page.locator('.ow-source-card').filter({hasText:'家庭套餐'});
 				await savedProblem.locator('details summary').filter({hasText:'1 条导入提醒'}).click();
                 await savedProblem.locator('details p').filter({hasText:/Media.*SRS.*该规则集无法被内核直接使用/}).waitFor();
-				// An update an automatic refresh could not apply waits on its card; the button beside
-				// it runs the card's update, whose review applies it.
-				const pendingLine = savedProblem.getByRole('status').filter({hasText:'自动更新发现变更待确认，确认前节点和规则保持不变 · 会移除原有的拦截规则'});
-				await pendingLine.getByRole('button', {name:'查看并确认', exact:true}).waitFor();
-				const pendingCard = await savedProblem.elementHandle();
-				await pendingLine.getByRole('button', {name:'查看并确认', exact:true}).click();
+				// An update an automatic refresh could not apply waits on its card. A button among the
+				// card's runs the card's update to review it, while the line above reports the update.
+				await savedProblem.getByRole('status').filter({hasText:'自动更新发现变更待确认，确认前节点和规则保持不变 · 会移除原有的拦截规则'}).waitFor();
+				const pendingButton = savedProblem.locator('.ow-actions').getByRole('button', {name:'查看并确认', exact:true});
+				const savedUpdate = savedProblem.getByRole('button', {name:'更新', exact:true});
+				// While it runs, neither it nor 更新 starts another.
+				await page.evaluate(() => { window.model.controls.holdRefresh = true; delete window.model.controls.release; });
+				await pendingButton.click();
+				await page.waitForFunction(() => !!window.model.controls.release);
+				assert.equal(await savedUpdate.getAttribute('aria-busy'), 'true', 'the card\'s 更新 reads busy too');
+				const refreshCount = () => page.evaluate(() => window.model.refreshes.length);
+				const started = await refreshCount();
+				await savedUpdate.dispatchEvent('click');
+				assert.equal(await refreshCount(), started, 'a second press starts no second update');
+				await page.evaluate(() => { window.model.controls.release('subscription_empty'); });
+				await savedProblem.getByText('更新失败 · 订阅内容为空 · 已保留上次配置', {exact:true}).waitFor();
+				await page.waitForFunction(() => !document.querySelector('.ow-source-card button[aria-busy]'));
+				// Cancelled, its review keeps the subscription as it is and returns to the button.
+				await pendingButton.click();
 				const pendingReview = page.getByRole('dialog', {name:'确认订阅变更'});
 				await pendingReview.getByText('会移除原有的拦截规则', {exact:true}).waitFor();
+				await pendingReview.getByRole('button', {name:'取消', exact:true}).click();
+				await pendingReview.waitFor({state:'detached'});
+				await savedProblem.getByText('已保留现有配置', {exact:true}).waitFor();
+				assert.ok(await pendingButton.evaluate(el => el === document.activeElement), 'a cancelled review returns to its button');
+				// Applied, it replaces the card, and focus moves on to the new card's 更新.
+				const pendingCard = await savedProblem.elementHandle();
+				await pendingButton.click();
 				await pendingReview.getByRole('button', {name:'应用此版本', exact:true}).click();
 				await pendingReview.waitFor({state:'detached'});
 				await page.waitForFunction(card => !card.isConnected, pendingCard);
 				assert.equal(await savedProblem.getByText(/自动更新发现变更待确认/).count(), 0, 'an applied update is no longer pending');
+				assert.ok(await savedUpdate.evaluate(el => el === document.activeElement), 'focus moves to the new card');
+				// A version the router cannot use: 查看原因 shows why on the card, and focus stays on it.
+				const blocked = page.locator('.ow-source-card').filter({hasText:'外部订阅'});
+				await blocked.getByText('自动更新取到的新版本无法使用，已保留上次配置 · 新版本没有分流规则和策略组', {exact:true}).waitFor();
+				const why = blocked.getByRole('button', {name:'查看原因', exact:true});
+				await why.click();
+				const whySummary = blocked.locator('details summary').filter({hasText:'已保留上次配置'});
+				await whySummary.waitFor();
+				await page.waitForFunction(() => !document.querySelector('.ow-source-card button[aria-busy]'));
+				assert.ok(await why.evaluate(el => el === document.activeElement), 'the reason opens beside its button');
+				assert.equal(await page.locator('dialog[open]').count(), 0, 'the reason stays on the card');
+				await whySummary.click();
+				await blocked.locator('details p').filter({hasText:'新版本没有分流规则和策略组'}).waitFor();
                 const account = page.locator('.ow-source-card').filter({ hasText: '示例服务商' });
 				await account.getByText('1 条导入提醒', {exact:true}).click();
 				const aggregate = account.locator('details[open] p');
@@ -764,6 +797,26 @@ try {
 				await external.locator('details summary').filter({ hasText: '已保留上次配置' }).click();
 				await external.getByText('测试节点 24 · 这条规则无法转换为内核规则').waitFor();
 				assert.equal(await page.locator('dialog[open]').count(), 0, 'the review stays on the card');
+				// A file is not downloaded again: a new routing choice asks for the file, which is imported
+				// again with it.
+				const offline = page.locator('.ow-source-card').filter({ hasText: '离线配置' });
+				await offline.getByRole('button', { name: '编辑' }).click();
+				const offlineFile = edit.getByLabel('选择配置文件');
+				await routing.waitFor();
+				assert.ok(await offlineFile.isHidden(), 'the routing in use needs no file');
+				await routing.selectOption('template');
+				await offlineFile.waitFor();
+				assert.ok(await offlineFile.evaluate(el => el.required && !el.disabled), 'a new routing choice requires the file');
+				await offlineFile.setInputFiles({ name: 'offline.yaml', mimeType: 'text/plain', buffer: Buffer.from('proxies: []\n') });
+				const offlineCard = await offline.elementHandle();
+				await edit.getByRole('button', { name: '保存', exact: true }).click();
+				await routingReview.getByRole('button', { name: '应用此版本', exact: true }).click();
+				await edit.waitFor({ state: 'detached' });
+				await page.waitForFunction(card => !card.isConnected, offlineCard);
+				assert.deepEqual(await page.evaluate(() => window.model.refreshes.filter(r => r.source === 'p4')), [
+					{ source: 'p4', content: 'proxies: []\n', rules: 'template' },
+					{ source: 'p4', content: 'proxies: []\n', confirm: 'routing', rules: 'template' },
+				], 'the file goes with the routing choice');
 				await page.getByRole('button', { name: '＋ 添加订阅' }).click();
 				const dialog = page.getByRole('dialog');
 				await centered(dialog, { width, height });

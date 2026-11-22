@@ -815,7 +815,29 @@ export async function subscriptions(u) {
             u.h('span', {}, u.h('strong', { class: 'ow-mono' }, String(s.node_count || 0)), ' 个节点'),
             muted(u, s.updated_at ? '上次更新 ' + date(s.updated_at) : '尚未更新'),
         );
-        // The card's update. A pending update's button runs it too, to open the update's review.
+        const refresh = () => importSource(u, s.source, '', message).then(async ok => {
+            if (!ok || u.signal.aborted) return;
+            const updated = await read(u, 'status', {source: s.source});
+            if (u.signal.aborted) return;
+            if (updated.revoked || !updated.source) return u.refresh();
+            const index = sources.indexOf(s);
+            if (index < 0) return;
+            sources[index] = updated;
+            const original = u.sources.indexOf(s);
+            if (original >= 0) u.sources[original] = updated;
+            const replacement = sourceCard(updated);
+            // Focus in the card moves to the same button on the new one, or to its 更新 where that
+            // button is gone, as a pending update's is once the update applied.
+            const focused = card.contains(document.activeElement) && (document.activeElement.dataset.action || 'update');
+            card.replaceWith(replacement);
+            if (focused)
+                (replacement.querySelector('[data-action="' + focused + '"]') || replacement.querySelector('[data-action="update"]'))
+                    ?.focus({ preventScroll: true });
+            updateAll.disabled = !sources.some(canRefresh);
+        });
+        // The card's update. A pending update's button runs it too, to open the update's review: the
+        // two share one run, and both read busy until it ends, so a second review cannot stack on it.
+        let running = null;
         const runUpdate = () => {
             if (s.kind === 'file') return reimport(u, s.source, message);
             if (s.login_required) {
@@ -823,24 +845,31 @@ export async function subscriptions(u) {
                     d = u.dialog('登录服务商', pane);
                 return login(u, pane, () => d.close());
             }
-            return importSource(u, s.source, '', message).then(async ok => {
-                if (!ok || u.signal.aborted) return;
-                const updated = await read(u, 'status', {source: s.source});
-                if (u.signal.aborted) return;
-                if (updated.revoked || !updated.source) return u.refresh();
-                const index = sources.indexOf(s);
-                if (index < 0) return;
-                sources[index] = updated;
-                const original = u.sources.indexOf(s);
-                if (original >= 0) u.sources[original] = updated;
-                const replacement = sourceCard(updated);
-                card.replaceWith(replacement);
-                updateAll.disabled = !sources.some(canRefresh);
-            });
+            if (!running) {
+                const busy = (on) => {
+                    for (const b of [update, pendingButton].filter(Boolean))
+                        for (const name of ['aria-busy', 'aria-disabled'])
+                            if (on) b.setAttribute(name, 'true');
+                            else b.removeAttribute(name);
+                };
+                busy(true);
+                running = refresh().finally(() => {
+                    running = null;
+                    busy(false);
+                });
+            }
+            return running;
         };
         const update = u.button(s.kind === 'file' ? '导入新文件' : s.login_required ? '重新登录' : '更新', runUpdate);
         update.disabled = importing;
-        if (pending && !importing) message.append(' ', u.button(pendingUpdates[pending.code]?.action || '查看', runUpdate));
+        update.dataset.action = 'update';
+        // It sits with the card's buttons: the line above reports the update's progress in its place.
+        const pendingButton = pending && !importing ? u.button(pendingUpdates[pending.code]?.action || '查看', runUpdate) : null;
+        if (pendingButton) pendingButton.dataset.action = 'pending';
+        const edit = u.button('编辑', () => editSource(u, s, agents));
+        edit.dataset.action = 'edit';
+        const remove = removeButton(u, s);
+        remove.dataset.action = 'remove';
         // The card's other actions report under its buttons; a failed background import is told
         // here too, unless the message above already shows the failure the router recorded.
         const cardLine = u.feedback(null, 'source:' + s.source, { covered: !!s.last_failure });
@@ -863,16 +892,16 @@ export async function subscriptions(u) {
             ...(s.suspended ? [badge(u, '套餐暂不可用')] : []),
             ...(warning ? [u.h('details', {}, u.h('summary', {}, warning), review(u, s))] : []),
             message,
-            actions(
-                u,
-                update,
-                u.button('编辑', () => editSource(u, s, agents)),
-                removeButton(u, s),
-            ),
+            actions(u, pendingButton, update, edit, remove),
             cardLine,
         );
         // Every card has the same buttons; the subscription's name tells them apart.
         for (const b of card.querySelectorAll('button')) b.setAttribute('aria-describedby', heading);
+        // A pending update's button is described by the line that says what waits.
+        if (pendingButton) {
+            message.id = heading + '-status';
+            pendingButton.setAttribute('aria-describedby', heading + ' ' + message.id);
+        }
         attach(card, cardLine);
         return card;
     }

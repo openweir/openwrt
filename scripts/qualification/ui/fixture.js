@@ -23,6 +23,8 @@ export function fixture(empty = false, preparing = false) {
 		group_count: 2,
 		rule_count: 1,
 		...(i === 0 ? { notices: [{code:'platform_routing_warnings', at:'1'}], plan: { total: 2e11, upload: 5e9, download: 37e9, expireAt: '2026-12-19' } } : {}),
+		// An automatic refresh got a version the router cannot use.
+		...(i === 1 ? { pending_update: {code:'update_blocked', notices:['routing_disappeared']} } : {}),
 		...(i === 2 ? {
 			notices: [{code:'mihomo_unsupported_rule_set',at:'Media',resource:'SRS'}],
 			// An automatic refresh downloaded an update that waits for confirmation.
@@ -59,6 +61,10 @@ export function fixture(empty = false, preparing = false) {
 	let pendingProbe;
 	const refreshTasks = new Set();
 	const reads = [];
+	// What each refresh was asked: the source, the file's text, the routing choice and confirmation.
+	const refreshes = [];
+	// Updates a refresh reviewed that still wait for a confirmation, by source.
+	const reviews = new Map();
 	let maxRefreshTasks = 0;
 	const choices = {},
 		tasks = new Map(),
@@ -204,6 +210,7 @@ export function fixture(empty = false, preparing = false) {
 					return job({ok:true,data:{}});
 				}
 				if (r.action === 'refresh') {
+					refreshes.push(r.args);
 					if (controls.downloadOffer) {
 						controls.downloadOffer=false;
 						const failed=job({});
@@ -235,13 +242,24 @@ export function fixture(empty = false, preparing = false) {
 					if (r.args.rules !== undefined && r.args.rules !== (routed?.rules || '') && r.args.confirm !== 'routing') {
 						return job({ok:true,data:{decision:'confirmation_required',confirmation_id:'routing',notices:[{code:'rejection_removed',dangerous:true}]}});
 					}
-					// Refreshed by the administrator, a pending update opens its review, which settles it.
+					// Refreshed by the administrator, a pending update opens its review, which clears it from
+					// the record. A version the router cannot use is shown once; a change asks again at
+					// every refresh until a confirmation applies it.
 					const pendingRow = sources.find(s => s.source === r.args.source && s.pending_update);
 					if (pendingRow && !r.args.confirm) {
-						const {notices} = pendingRow.pending_update;
+						reviews.set(pendingRow.source, pendingRow.pending_update);
 						delete pendingRow.pending_update;
-						return job({ok:true,data:{decision:'confirmation_required',confirmation_id:'pending-update',notices:notices.map(code => ({code, dangerous:code === 'rejection_removed'}))}});
 					}
+					const reviewed = !r.args.confirm && reviews.get(r.args.source);
+					if (reviewed) {
+						const notices = reviewed.notices.map(code => ({code, dangerous:code === 'rejection_removed'}));
+						if (reviewed.code === 'update_blocked') {
+							reviews.delete(r.args.source);
+							return job({ok:true,data:{decision:'blocked',notices}});
+						}
+						return job({ok:true,data:{decision:'confirmation_required',confirmation_id:'pending-update',notices}});
+					}
+					if (r.args.confirm === 'pending-update') reviews.delete(r.args.source);
 					if (controls.partialReview && !r.args.confirm) {
 						return job({ok:true,data:{decision:'confirmation_required',retains_routing:true,confirmation_id:'keep-rest',notices:[
 							{code:'mihomo_unsupported_rule_set',at:'Streaming',resource:'SRS'},
@@ -427,5 +445,5 @@ export function fixture(empty = false, preparing = false) {
 		}
 		return { task: 'intent-' + ++saved.revision, revision: saved.revision };
 	}
-	return { rpc, saved, kernel, choices, trace, controls, reads, get maxRefreshTasks() { return maxRefreshTasks; }, installs };
+	return { rpc, saved, kernel, choices, trace, controls, reads, refreshes, get maxRefreshTasks() { return maxRefreshTasks; }, installs };
 }
