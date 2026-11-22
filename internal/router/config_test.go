@@ -565,7 +565,7 @@ func TestGooglePlayNamesTakeTheProxy(t *testing.T) {
 	// user's rules but ahead of the mainland ones.
 	quic := slices.Index(cfg.Rules, "AND,((NETWORK,UDP),(DST-PORT,443),(RULE-SET,"+proxiedCNSet+")),REJECT")
 	user, route := slices.Index(cfg.Rules, "DOMAIN,play.googleapis.cn,DIRECT"), slices.Index(cfg.Rules, "RULE-SET,"+proxiedCNSet+","+Local)
-	if quic < 0 || quic > slices.Index(cfg.Rules, quicBlock) || user < 0 || route < user || route > slices.Index(cfg.Rules, "RULE-SET,geosite-cn,DIRECT") {
+	if quic < 0 || quic > slices.Index(cfg.Rules, quicBlock) || user < 0 || route < user || route > slices.Index(cfg.Rules, "RULE-SET,"+dnsDomesticSet+",DIRECT") {
 		t.Fatal(cfg.Rules)
 	}
 	// Global mode proxies everything anyway, and a direct default leaves them to the profile.
@@ -599,7 +599,7 @@ func TestGooglePlayRuleKeepsTheProfilesOwnRules(t *testing.T) {
 	play := "RULE-SET," + proxiedCNSet + "," + proxy
 	// After the profile's Google group, ahead of its mainland list.
 	rules := configForTest(t, i, p, n)["rules"].([]any)
-	if at := slices.Index(rules, any(play)); at < 1 || rules[at-1] != "GEOSITE,google,"+google || rules[at+1] != "RULE-SET,"+subscription.DomesticDomainSet+",DIRECT" {
+	if at := slices.Index(rules, any(play)); at < 1 || rules[at-1] != "GEOSITE,google,"+google || rules[at+1] != "RULE-SET,"+dnsDomesticSet+",DIRECT" {
 		t.Fatal(rules)
 	}
 	// Without mainland rules, just ahead of the default route.

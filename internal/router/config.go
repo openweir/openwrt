@@ -178,10 +178,15 @@ func profileSet(tag string) string {
 
 var ruleSetRef = regexp.MustCompile(`(?i)(RULE-SET\s*,\s*)([^,()]+)`)
 
+// mainlandSets maps the tags GEOSITE,CN and GEOIP,CN rules name in a profile to the built-in
+// sets of the same lists. The core loads every rule provider on its own, so a list under two
+// names would be read and kept twice.
+var mainlandSets = map[string]string{subscription.DomesticDomainSet: dnsDomesticSet, subscription.DomesticIPSet: domesticIPSet}
+
 // routedByName lists what a rule matches by name alone: patterns for a domain set, and
 // fake-ip filter rules for the other name matches the filter accepts. Conditions on
-// addresses, ports or logical combinations are left out.
-func routedByName(r subscription.Rule, behavior map[string]string) (names, filters []string) {
+// addresses, ports or logical combinations are left out. coreSet names a rule set in the core.
+func routedByName(r subscription.Rule, behavior map[string]string, coreSet func(string) string) (names, filters []string) {
 	add := func(kind, value string) {
 		switch kind {
 		case "DOMAIN":
@@ -193,7 +198,7 @@ func routedByName(r subscription.Rule, behavior map[string]string) (names, filte
 		case "RULE-SET":
 			// The filter refuses address sets; classical ones match by their name rules.
 			if b := behavior[value]; b == "domain" || b == "classical" {
-				filters = append(filters, "RULE-SET,"+profileSet(value)+",fake-ip")
+				filters = append(filters, "RULE-SET,"+coreSet(value)+",fake-ip")
 			}
 		}
 	}
@@ -225,10 +230,10 @@ func unique(list []string) []string {
 	})
 }
 
-// mainlandRule reports whether a profile rule matches by the mainland lists: the bundled
-// sets, a set or GEOSITE category named as a cn one, or GEOIP,CN.
+// mainlandRule reports whether a profile rule matches by the mainland lists: the built-in
+// sets (mainlandSets), a set or GEOSITE category named as a cn one, or GEOIP,CN.
 func mainlandRule(r subscription.Rule) bool {
-	if r.RuleSet == subscription.DomesticDomainSet || r.RuleSet == subscription.DomesticIPSet {
+	if _, ok := mainlandSets[r.RuleSet]; ok {
 		return true
 	}
 	line, _ := r.Match["clash"].(string)
@@ -578,6 +583,8 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 	// and so does other UDP on port 443 to the mainland (WireGuard, DTLS). Mainland names the
 	// proxy must carry count as foreign.
 	rules = append(rules, "AND,((NETWORK,UDP),(DST-PORT,443),(RULE-SET,"+proxiedCNSet+")),REJECT", quicBlock)
+	// The only providers of the mainland lists: DNS policy, the QUIC rule, the fake-ip filter and
+	// every mainland routing rule (mainlandSets) use these two.
 	providers[dnsDomesticSet] = obj{"type": "file", "format": "mrs", "behavior": "domain", "path": chinaList(cnlist.Domains)}
 	providers[domesticIPSet] = obj{"type": "file", "format": "mrs", "behavior": "ipcidr", "path": chinaList(cnlist.Addresses)}
 	providers[proxiedCNSet] = obj{"type": "inline", "behavior": "domain", "payload": proxiedCN}
@@ -591,7 +598,8 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 	shortcut := n.DNS && n.FakeIP && chinaShortcut(i, n)
 	var routedNames, routedRules []string
 	if i.Mode == "smart" {
-		moved := map[string]bool{}
+		// A rule names a profile's set by its tag; moved holds the sets the core knows by another name.
+		moved := map[string]string{}
 		behavior := map[string]string{subscription.DomesticDomainSet: "domain", subscription.DomesticIPSet: "ipcidr"}
 		for _, set := range p.BinarySets {
 			if !digestName.MatchString(set.SHA256) || filepath.Base(set.Filename()) != set.Filename() {
@@ -606,10 +614,23 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 				return nil, errors.New("rule provider name collision")
 			}
 			if name != set.Tag {
-				moved[set.Tag] = true
+				moved[set.Tag] = name
 			}
 			behavior[set.Tag] = set.Behavior
 			providers[name] = obj{"type": "file", "format": format, "behavior": set.Behavior, "path": "./rulesets/" + set.Filename()}
+		}
+		// GEOSITE,CN and GEOIP,CN rules use the built-in sets, as a local profile's mainland routes
+		// do, so each mainland list loads once. A set the profile declares under that tag is its own.
+		for tag, name := range mainlandSets {
+			if _, declared := providers[tag]; !declared {
+				moved[tag] = name
+			}
+		}
+		coreSet := func(tag string) string {
+			if name, ok := moved[tag]; ok {
+				return name
+			}
+			return tag
 		}
 		addRule := func(r subscription.Rule) error {
 			if !targets[r.Target] {
@@ -618,16 +639,16 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 			// The mainland lists themselves are what the shortcut switch takes over, even when a
 			// profile sends them to a group (ACL4SSR-style "全球直连"); other rules keep their names.
 			if shortcut && r.Target != subscription.Direct && !mainlandRule(r) {
-				names, filters := routedByName(r, behavior)
+				names, filters := routedByName(r, behavior, coreSet)
 				routedNames, routedRules = append(routedNames, names...), append(routedRules, filters...)
 			}
 			line, err := nativeRule(r.Match, coreTarget(r.Target))
-			if err == nil && len(moved) > 0 {
+			if err == nil {
 				// References follow the sets that moved, inside logical rules too.
 				line = ruleSetRef.ReplaceAllStringFunc(line, func(ref string) string {
 					m := ruleSetRef.FindStringSubmatch(ref)
-					if tag := strings.TrimSpace(m[2]); moved[tag] {
-						return m[1] + profileSet(tag)
+					if name, ok := moved[strings.TrimSpace(m[2])]; ok {
+						return m[1] + name
 					}
 					return ref
 				})
@@ -660,22 +681,11 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 		}
 		if p.Local {
 			placePlay()
-			for _, v := range []struct{ tag, behavior string }{{"geosite-cn", "domain"}, {"geoip-cn", "ipcidr"}} {
-				providers[v.tag] = obj{"type": "file", "format": "mrs", "behavior": v.behavior, "path": chinaList(v.tag)}
-				rules = append(rules, "RULE-SET,"+v.tag+",DIRECT")
-			}
+			rules = append(rules, "RULE-SET,"+dnsDomesticSet+",DIRECT", "RULE-SET,"+domesticIPSet+",DIRECT")
 		} else {
 			for _, r := range p.Rules {
 				if mainlandRule(r) {
 					placePlay()
-				}
-				if _, provided := providers[r.RuleSet]; !provided {
-					switch r.RuleSet {
-					case subscription.DomesticIPSet:
-						providers[r.RuleSet] = obj{"type": "file", "format": "mrs", "behavior": "ipcidr", "path": chinaList(cnlist.Addresses)}
-					case subscription.DomesticDomainSet:
-						providers[r.RuleSet] = obj{"type": "file", "format": "mrs", "behavior": "domain", "path": chinaList(cnlist.Domains)}
-					}
 				}
 				if err := addRule(r); err != nil {
 					return nil, err
