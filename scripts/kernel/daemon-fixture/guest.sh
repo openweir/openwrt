@@ -122,7 +122,7 @@ install_bundle v1.19.34-0.20261117082241-15fb245e9278
 wait_phase direct 10
 [ ! -f /var/run/openweir/network/owned ] && ! pidof mihomo >/dev/null
 [ "$(openweir-kernel status | jsonfilter -e '@.selected')" = v1.19.34-0.20261117082241-15fb245e9278 ]
-report daemon_official_archive_upload pass
+report daemon_official_archive_install pass
 openweir-net conflicts || { report conflict_scan failed; exit 1; }
 report conflict_scan pass
 tun_device() { ls -lidn /dev/net/tun | awk '{print $1, $2, $4, $5, $6, $7}'; }

@@ -44,7 +44,7 @@ set -- /root/bundles/*.gz
 openweir-kernel install --tag "$tag" --mode double --bundle /root/bundles --stage-only
 wait_job "$(call kernel_write "{\"action\":\"select\",\"args\":{\"tag\":\"$tag\"}}")"
 [ -z "$(openweir-kernel status | jsonfilter -e '@.active')" ]
-report daemon_official_archive_upload
+report daemon_official_archive_install
 dir=/etc/openweir/imports/rulesets/source-fixture
 mkdir -p "$dir"
 # Use the two binary fixtures shipped in the exact package being qualified.

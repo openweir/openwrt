@@ -397,7 +397,7 @@ var (
 		"original_postinst_not_found": true, "upgrade_postinst": true, "first_postinst": true,
 		"ruleset_watch_permissions": true, "core_identity": true, "live_rule_providers": true, "core_permission_logs": true,
 		"cleanup_failure": true, "repeat_stop": true, "missing_supervisor": true,
-		"daemon_official_archive_upload": true, "daemon_incompatible_config_rejected": true,
+		"daemon_official_archive_install": true, "daemon_incompatible_config_rejected": true,
 		"daemon_failed_candidate_rollback": true, "daemon_stop": true, "daemon_powercut_recovery": true,
 		"daemon_candidate_pending": true, "daemon_lifecycle": true}
 	resultStage  = regexp.MustCompile(`^(tun|tproxy)_(apply|verify|fw[34]_reload|release|dns_takeover|dns_restored)$`)
