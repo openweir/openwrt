@@ -75,17 +75,6 @@ func (c templateCache) Put(key string, value []byte) {
 	_ = writeFileAtomic(path, value)
 }
 
-// minVersion is the version of the manifest the router last accepted: a host serving an older
-// one rolls the branch back.
-func (c templateCache) minVersion() int64 {
-	if b, ok := c.Get(rules.ManifestPath); ok {
-		if m, err := rules.ParseManifest(b); err == nil {
-			return m.Version
-		}
-	}
-	return 0
-}
-
 func writeFileAtomic(path string, data []byte) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0700); err != nil {
@@ -127,9 +116,10 @@ func (f Fetcher) branch() (*rules.Client, func()) {
 			Transport:     &branchTransport{f: e, seen: map[string]branchAnswer{}},
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
-		Hosts:      TemplateHosts,
-		Cache:      cache,
-		MinVersion: cache.minVersion(),
+		// The client keeps its own rollback floor in the cache: a version only one mirror served
+		// must not become a floor that agreeing hosts cannot lower.
+		Hosts: TemplateHosts,
+		Cache: cache,
 	}, done
 }
 

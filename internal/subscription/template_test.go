@@ -208,9 +208,6 @@ func TestTemplateRefusesARollback(t *testing.T) {
 	if _, err := b.fetcher().Refresh(t.Context(), store, id, []byte(twoLinks), Policy{}); err != nil {
 		t.Fatal(err)
 	}
-	if v := (templateCache{dir: TemplateDir}).minVersion(); v != 42 {
-		t.Fatal(v)
-	}
 	// A host now serving an older branch is not followed back: the router keeps its copy.
 	b.version = 41
 	c, err := b.fetcher().Refresh(t.Context(), store, id, []byte(twoLinks+"ss://YWVzLTEyOC1nY206cA@jp.example.com:8388#JP%2001\n"), Policy{})
