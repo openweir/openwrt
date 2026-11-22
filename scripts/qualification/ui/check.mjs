@@ -343,6 +343,14 @@ try {
 			await page.getByRole('link', { name, exact: true }).click();
 			await page.getByRole('heading', { name: name === '规则' ? '自定义规则' : name, exact: true }).first().waitFor();
 			if (name === '订阅') {
+				// Three cards a row on a wide page and one on a phone; a row's cards share one height.
+				const boxes = await page.locator('.ow-source-card').evaluateAll(cards => cards.map(card => {
+					const box = card.getBoundingClientRect();
+					return [Math.round(box.top), Math.round(box.height)];
+				}));
+				const firstRow = boxes.filter(([top]) => top === boxes[0][0]);
+				assert.equal(firstRow.length, width > 1000 ? 3 : 1, 'subscription cards per row');
+				assert.ok(firstRow.every(([, height]) => height === firstRow[0][1]), 'a row of subscription cards shares one height');
 				const clockProblem = page.locator('.ow-source-card').filter({hasText:'备用订阅'});
 				await clockProblem.getByText(/证书尚未生效.*1970-01-02.*2026-01-01.*2027-01-01.*UTC/).waitFor();
 				const savedProblem = page.locator('.ow-source-card').filter({hasText:'家庭套餐'});
@@ -400,7 +408,9 @@ try {
 				await page.waitForFunction(() => document.querySelector('.ow-main[aria-busy=false]') && ![...document.querySelectorAll('button[aria-busy]')].some(el => el.textContent === '全部更新'));
 				assert.equal(await page.evaluate(() => window.model.maxRefreshTasks), 2);
 
-				await account.getByText('服务商账户 · OpenWeir YAML · 每 6 小时自动更新', { exact: true }).waitFor();
+				await account.getByText('OpenWeir YAML · 每 6 小时自动更新', { exact: true }).waitFor();
+				assert.equal(await account.getAttribute('data-kind'), 'platform');
+				assert.equal(await account.locator('.ow-source-kind').innerText(), '服务商账户');
 				await account.getByRole('button', { name: '编辑', exact: true }).click();
 				const edit = page.getByRole('dialog', { name: '编辑订阅' });
 				assert.equal(await edit.getByRole('combobox', { name: '订阅请求 UA' }).count(), 0);
@@ -417,6 +427,7 @@ try {
 				assert.ok(await leaveAccount.evaluate(el => el === document.activeElement), 'escape returns to the card button');
 				await page.evaluate(() => { window.model.controls.longRefresh = true; });
 				const external = page.locator('.ow-source-card').filter({ hasText: '外部订阅' });
+				assert.equal(await external.locator('.ow-source-kind').innerText(), '链接订阅');
 				await external.getByRole('button', { name: '编辑' }).click();
 				// The editor shows the current link; a changed link is verified before it replaces the old one.
 				const address = edit.getByLabel('订阅链接');

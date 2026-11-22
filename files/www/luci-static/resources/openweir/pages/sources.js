@@ -731,12 +731,15 @@ export async function subscriptions(u) {
         const isCurrent = current === s.source;
         const use = isCurrent ? badge(u, '正在使用') : u.button('设为当前', () => chooseSource(u, s));
         if (!isCurrent) use.disabled = !!s.suspended || !!s.login_required || (!s.ready && s.kind === 'file');
+        use.classList.add('ow-source-use');
         const avatar = u.h('span', { class: 'ow-avatar', 'aria-hidden': 'true' }, Array.from(s.name || '订阅')[0]);
+        // The kind is named in words as well as colour: an account card is tinted, the others stay neutral.
+        const kind = kinds[s.kind] ? u.h('span', { class: 'ow-source-kind' }, kinds[s.kind]) : null;
         const agentLabel = s.kind === 'external' && (s.custom_agent ? '自定义 UA' : s.agent);
         const interval = s.kind !== 'file' && Number.isInteger(prefs.update_hours)
             ? (prefs.update_hours > 0 ? '每 ' + prefs.update_hours + ' 小时自动更新' : '手动更新')
             : '';
-        const meta = [kinds[s.kind], formats[s.format] || s.format, agentLabel, interval]
+        const meta = [formats[s.format] || s.format, agentLabel, interval]
             .filter(Boolean)
             .join(' · ');
         const plan = s.usage || s.plan,
@@ -800,17 +803,14 @@ export async function subscriptions(u) {
         update.disabled = importing;
         const card = u.h(
             'section',
-            { class: 'ow-card ow-source-card' },
+            { class: 'ow-card ow-source-card', 'data-kind': s.kind },
             u.h(
                 'div',
                 { class: 'ow-source-title' },
                 avatar,
-                u.h(
-                    'div',
-                    { class: 'ow-source-info' },
-                    u.h('strong', {}, s.name || '订阅'),
-                    u.h('div', { class: 'ow-muted' }, meta),
-                ),
+                kind,
+                u.h('strong', { class: 'ow-source-name', title: s.name || '订阅' }, s.name || '订阅'),
+                u.h('div', { class: 'ow-muted ow-source-meta', hidden: !meta }, meta),
                 use,
             ),
             metadata,

@@ -67,7 +67,8 @@ try {
     const external = page.locator('.ow-source-card').filter({ has: page.getByText(name, { exact: true }) });
     assert.equal(Number(await platform.locator('.ow-mono').innerText()), count);
     assert.equal(Number(await external.locator('.ow-mono').innerText()), count);
-    assert.equal(await external.getByText(/链接订阅.*sing-box/).count(), 1);
+    assert.equal(await external.locator('.ow-source-kind').innerText(), '链接订阅');
+    assert.match(await external.locator('.ow-source-meta').innerText(), /sing-box/);
     assert.deepEqual(errors, []);
     console.log(JSON.stringify({ platformNodes: count, externalNodes: count, persistedAfterReload: true, uncaughtErrors: 0 }));
 } catch (error) {
