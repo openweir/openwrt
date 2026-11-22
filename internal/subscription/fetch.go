@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/openweir/openwrt/internal/tlsdiag"
+	"github.com/openweir/subconv/rules"
 )
 
 // Source holds private request details. It must not be returned by an RPC read.
@@ -618,6 +619,13 @@ func (f Fetcher) readProfile(ctx context.Context, s Source, file []byte, usage *
 	}
 	branch, done := f.branch()
 	defer done()
+	return f.readConverted(ctx, s, body, headers, origin, inventory, branch)
+}
+
+// readConverted converts a subscription's body with its routing choice (convert) and reads it
+// as the router routes it: with the template's rule sets or its own providers, through the
+// router's checks (parseVerified).
+func (f Fetcher) readConverted(ctx context.Context, s Source, body []byte, headers http.Header, origin string, inventory nodeInventory, branch *rules.Client) (Profile, error) {
 	c, err := convert(ctx, body, s.Rules, branch)
 	if err != nil {
 		// The notices tell a subscription of Snell nodes without a psk apart (credentialIssue).
@@ -650,6 +658,17 @@ func (f Fetcher) readProfile(ctx context.Context, s Source, file []byte, usage *
 		return Profile{}, err
 	}
 	p, err := parseVerified(s.ID, c, sets, expansion...)
+	if t := c.routerTemplate(p); err == nil && t != nil {
+		// subconv kept the subscription's own rules, but the router cannot route by enough of
+		// them: the template, as subconv would have taken it, with the reason and counts that
+		// include the rules the router dropped.
+		s.Rules = RoutingTemplate
+		p, err = f.readConverted(ctx, s, body, headers, origin, inventory, branch)
+		if p.Template != nil {
+			p.Template.Reason, p.Template.Dropped, p.Template.Total = t.Reason, t.Dropped, t.Total
+		}
+		return p, err
+	}
 	p.Title = subscriptionTitle(headers)
 	if s.Kind == "platform" {
 		_, params, _ := mime.ParseMediaType(headers.Get("Content-Disposition"))

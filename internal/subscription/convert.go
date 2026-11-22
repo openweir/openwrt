@@ -20,6 +20,9 @@ type conversion struct {
 	format   string
 	notices  []Notice
 	template *TemplateUse
+	// auto is subconv's count of the subscription's rules when it chose them over the template
+	// itself (RoutingOwn), for the router to weigh what it drops on top (routerTemplate).
+	auto *subconv.RuleStats
 }
 
 var (
@@ -65,6 +68,10 @@ func convert(ctx context.Context, body []byte, routing string, branch *rules.Cli
 	// Whether the subscription routes by its own groups and rules: the template and the
 	// router's default replace them, and what was lost of them no longer matters.
 	own := result.Template == nil && !unavailable
+	if own && options.Rules == subconv.RulesAuto {
+		stats := result.RuleStats
+		c.auto = &stats
+	}
 	for _, w := range result.Warnings {
 		switch w.Code {
 		case subconv.WarnTemplateApplied:
@@ -106,6 +113,37 @@ func (c *conversion) defaultRouting() {
 		delete(c.doc, k)
 	}
 	c.template = nil
+}
+
+// routerTemplate says why a subscription that subconv left on its own rules (auto) needs the
+// template after all, once the router has read it (p), or nil while its routing holds. The
+// router leaves out rules of its own (custom geodata, a rule set it has not got, a rule or
+// target it cannot route), and they count with subconv's by subconv's measure: the final rule
+// lost, or more than a tenth of the rules.
+func (c conversion) routerTemplate(p Profile) *TemplateUse {
+	if c.auto == nil {
+		return nil
+	}
+	routed := 0
+	for _, r := range p.Rules {
+		if r.Target != "" {
+			routed++
+		}
+	}
+	stats := *c.auto
+	// subconv kept the final rule last, and the router reads it as the profile's.
+	stats.Dropped += max(len(list(c.doc["rules"]))-1-routed, 0)
+	if p.Final == "" {
+		stats.Dropped++
+		stats.Match = false
+	}
+	switch {
+	case !stats.Match:
+		return &TemplateUse{Reason: subconv.TemplateNoMatch}
+	case stats.Dropped*10 > stats.Total:
+		return &TemplateUse{Reason: subconv.TemplateDropped, Dropped: stats.Dropped, Total: stats.Total}
+	}
+	return nil
 }
 
 // document decodes subconv's output as the router's YAML reads any Clash document.

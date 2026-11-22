@@ -264,6 +264,103 @@ func TestTemplateUpdatesNeedNoConfirmation(t *testing.T) {
 	}
 }
 
+// A subscription on a geodata mirror the router does not trust: subconv keeps its GEOIP and
+// GEOSITE rules, and the router drops them (clashDefaultGeo).
+const mirrorGeo = `geox-url:
+  geoip: https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/geoip.dat
+  geosite: https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/geosite.dat
+  mmdb: https://cdn.jsdmirror.com/gh/MetaCubeX/meta-rules-dat@release/country.mmdb
+proxies:
+  - {name: HK 01, type: ss, server: hk.example.com, port: 8388, cipher: aes-128-gcm, password: p}
+  - {name: HK 02, type: ss, server: hk2.example.com, port: 8388, cipher: aes-128-gcm, password: p}
+proxy-groups:
+  - {name: Proxy, type: select, proxies: [HK 01, HK 02]}
+rules:
+`
+
+func mirrorRules(rules ...string) string {
+	return mirrorGeo + "  - " + strings.Join(rules, "\n  - ") + "\n"
+}
+
+// The rules the router drops itself count with subconv's toward the template: the same tenth,
+// and the final rule.
+func TestRouterDropsCountTowardTheTemplate(t *testing.T) {
+	domains := func(n int) []string {
+		var out []string
+		for i := range n {
+			out = append(out, fmt.Sprintf("DOMAIN-SUFFIX,d%d.example,Proxy", i))
+		}
+		return out
+	}
+	long := strings.Repeat("L", 400)
+	for _, tc := range []struct {
+		name, body      string
+		reason          string
+		dropped, total  int
+		ownRules, notes int // with the subscription's own rules: those kept, and the router's notices
+	}{
+		{name: "custom geodata", reason: subconv.TemplateDropped, dropped: 4, total: 6,
+			body: mirrorRules("GEOSITE,google,Proxy", "GEOSITE,youtube,Proxy", "GEOSITE,cn,DIRECT", "GEOIP,CN,DIRECT", "DOMAIN-SUFFIX,a.example,Proxy", "MATCH,Proxy")},
+		{name: "a tenth", ownRules: 8, notes: 1,
+			body: mirrorRules(slices.Concat([]string{"GEOSITE,google,Proxy"}, domains(8), []string{"MATCH,Proxy"})...)},
+		// subconv drops the USER-AGENT rule, too few by itself, and the router one more.
+		{name: "with subconv's", reason: subconv.TemplateDropped, dropped: 2, total: 11,
+			body: mirrorRules(slices.Concat([]string{"USER-AGENT,ads*,REJECT", "GEOSITE,google,Proxy"}, domains(8), []string{"MATCH,Proxy"})...)},
+		{name: "missing rule set", reason: subconv.TemplateDropped, dropped: 1, total: 3,
+			body: "rule-providers:\n  ads: {type: file, behavior: domain, path: ./ads.yaml}\n" + mirrorRules("RULE-SET,ads,REJECT", "DOMAIN-SUFFIX,a.example,Proxy", "MATCH,Proxy")},
+		// A group name too long for the router: its group and the final rule to it go.
+		{name: "final rule", reason: subconv.TemplateNoMatch,
+			body: strings.Replace(mirrorRules("DOMAIN-SUFFIX,a.example,Proxy", "MATCH,"+long), "rules:", "  - {name: "+long+", type: select, proxies: [HK 01]}\nrules:", 1)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			b := serveBranch(t, 42)
+			store, id := fileSource(t, RoutingOwn)
+			f := b.fetcher()
+			f.ruleImportRoot = t.TempDir()
+			c, err := f.Refresh(t.Context(), store, id, []byte(tc.body), Policy{Scheduled: true})
+			if err != nil || c.Decision != "ready" {
+				t.Fatal(err, c.Decision, c.Notices)
+			}
+			p := c.Profile
+			if tc.reason == "" {
+				if p.Template != nil || p.Groups[0].Name != "Proxy" || len(p.Rules) != tc.ownRules || p.Final == "" || len(c.Notices) != tc.notes {
+					t.Fatal("the subscription's own rules gave way", p.Template, p.Rules, c.Notices)
+				}
+				return
+			}
+			want := TemplateUse{Version: 42, Reason: tc.reason, Dropped: tc.dropped, Total: tc.total}
+			if p.Template == nil || *p.Template != want || p.Groups[0].Name != "🚀 Proxy" || p.Local {
+				t.Fatalf("%+v %v", p.Template, c.Notices)
+			}
+			// The rules the template replaced no longer weigh.
+			if slices.ContainsFunc(c.Notices, func(n Notice) bool { return n.Dangerous || partialNotices[n.Code] }) {
+				t.Fatal(c.Notices)
+			}
+			if st, _ := store.Status(id); st.Template == nil || *st.Template != want {
+				t.Fatalf("status: %+v", st.Template)
+			}
+		})
+	}
+}
+
+// A subscription asks for the template or keeps its own rules, whatever the router drops: with
+// the template chosen, the reason stays the choice, and without a rules branch, subconv never
+// takes the template.
+func TestRouterDropsLeaveFixedRoutingAlone(t *testing.T) {
+	body := mirrorRules("GEOSITE,google,Proxy", "GEOSITE,youtube,Proxy", "GEOSITE,cn,DIRECT", "GEOIP,CN,DIRECT", "DOMAIN-SUFFIX,a.example,Proxy", "MATCH,Proxy")
+	store, id := fileSource(t, RoutingOwn)
+	c, err := (Fetcher{}).Refresh(t.Context(), store, id, []byte(body), Policy{})
+	if err != nil || c.Decision != "ready" || c.Profile.Template != nil || len(c.Profile.Rules) != 1 || c.Profile.Final == "" {
+		t.Fatal(err, c.Decision, c.Profile.Template, c.Profile.Rules)
+	}
+	b := serveBranch(t, 42)
+	store, id = fileSource(t, RoutingTemplate)
+	c, err = b.fetcher().Refresh(t.Context(), store, id, []byte(body), Policy{})
+	if err != nil || c.Decision != "ready" || c.Profile.Template == nil || *c.Profile.Template != (TemplateUse{Version: 42, Reason: subconv.TemplateRequested}) {
+		t.Fatal(err, c.Decision, c.Profile.Template)
+	}
+}
+
 // The template's rules mean the default geodata, whatever the subscription chose for its own,
 // and a script the subscription routed by is gone with its rules.
 func TestTemplateIgnoresTheSubscriptionsGeodataAndScript(t *testing.T) {
