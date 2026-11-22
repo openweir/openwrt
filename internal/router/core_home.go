@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io/fs"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -32,6 +33,38 @@ func privateDir(path string) error {
 		return errors.New("unsafe core work directory")
 	}
 	return os.Chmod(path, 0700)
+}
+
+// reclaimDir removes a runtime directory that holds anything another account owns. The core
+// runs as root without CAP_DAC_OVERRIDE, so a directory or cache.db an older OpenWeir left in
+// /var/run under its own core account would stay unwritable until a reboot. Only a full start
+// calls it, before the core runs; the state there is rebuilt (the fake-ip cache starts empty).
+func reclaimDir(path string) error {
+	foreign := false
+	err := filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if st, ok := info.Sys().(*syscall.Stat_t); !ok || int(st.Uid) != os.Geteuid() {
+			foreign = true
+			return fs.SkipAll
+		}
+		return nil
+	})
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if foreign {
+		return os.RemoveAll(path)
+	}
+	return nil
 }
 
 func prepareMihomo(p subscription.Profile) error {

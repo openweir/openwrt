@@ -316,6 +316,11 @@ func (s *System) Start(ctx context.Context, i Intent) (err error) {
 	if _, e = coreGID(); e != nil {
 		return e
 	}
+	for _, dir := range []string{coreHome, RunDir + "/core"} {
+		if e = reclaimDir(dir); e != nil {
+			return errors.New("cannot reclaim the core's runtime directory")
+		}
+	}
 	if e = prepareMihomo(profile); e != nil {
 		return errors.New("cannot prepare authorized rule sets")
 	}
@@ -366,7 +371,7 @@ func (s *System) Start(ctx context.Context, i Intent) (err error) {
 		return e
 	}
 	info, e := os.Lstat(work)
-	if e != nil || !info.IsDir() || info.Mode().Perm() != 0700 {
+	if e != nil || !info.IsDir() || info.Mode().Perm() != 0700 || int(info.Sys().(*syscall.Stat_t).Uid) != os.Geteuid() {
 		return errors.New("invalid private core work directory")
 	}
 	cmd := coreCommand(n.Method, launch, work)
