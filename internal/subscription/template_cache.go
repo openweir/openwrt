@@ -82,13 +82,21 @@ func (s *templateStage) Put(key string, value []byte) {
 }
 
 // pin sweeps the copy and holds its current generation, on first use. It returns the base
-// directory, or "" without one.
+// directory, or "" without one. A copy the refresh cannot write (lockTemplate) is not swept,
+// and one it cannot lock at all is read as the link names it, without the lock: holding the
+// generation keeps sweeps from removing it all the same.
 func (s *templateStage) pin() string {
 	if !s.pinned {
 		s.pinned = true
-		if lock, err := lockTemplate(s.root); err == nil {
-			current, _ := sweepTemplate(s.root)
-			s.name, s.base = holdBase(s.root, current)
+		lock, writable, err := lockTemplate(s.root)
+		var current string
+		if err == nil && writable {
+			current, _ = sweepTemplate(s.root)
+		} else {
+			current, _ = currentGeneration(s.root)
+		}
+		s.name, s.base = holdBase(s.root, current)
+		if err == nil {
 			unlock(lock)
 		}
 	}
@@ -141,7 +149,7 @@ func (s *templateStage) promote() {
 	if err != nil {
 		return
 	}
-	lock, err := lockTemplate(s.root)
+	lock, _, err := lockTemplate(s.root)
 	if err != nil {
 		return
 	}
@@ -284,19 +292,25 @@ func floorVersion(b []byte) int64 {
 	return v
 }
 
-func lockTemplate(root string) (*os.File, error) {
-	if err := os.MkdirAll(root, 0700); err != nil {
-		return nil, err
+// lockTemplate takes the copy's lock, exclusively. On a copy it cannot write, such as a file
+// system remounted read-only, the lock file is opened for reading, which flock needs no more:
+// writable is false then. Without the lock file, as on a full file system before one was ever
+// created, there is no lock.
+func lockTemplate(root string) (lock *os.File, writable bool, err error) {
+	path := filepath.Join(root, templateLock)
+	if err = os.MkdirAll(root, 0700); err == nil {
+		lock, err = os.OpenFile(path, os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0600)
 	}
-	f, err := os.OpenFile(filepath.Join(root, templateLock), os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0600)
-	if err != nil {
-		return nil, err
+	if writable = err == nil; !writable {
+		if lock, err = os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0); err != nil {
+			return nil, false, err
+		}
 	}
-	if err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
-		f.Close()
-		return nil, err
+	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		lock.Close()
+		return nil, false, err
 	}
-	return f, nil
+	return lock, writable, nil
 }
 
 // currentGeneration is the generation the link names, or "" for root: the copy before

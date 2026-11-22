@@ -348,3 +348,71 @@ func TestTemplateSweepTrustsOnlyAWholeLink(t *testing.T) {
 		})
 	}
 }
+
+// readOnly makes dir and the files given in it read-only until the test ends. Only a process
+// without root's override sees them so.
+func readOnly(t *testing.T, dir string, files ...string) {
+	t.Helper()
+	if os.Geteuid() == 0 {
+		t.Skip("root writes read-only files")
+	}
+	for _, name := range files {
+		if err := os.Chmod(filepath.Join(dir, name), 0400); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Chmod(dir, 0500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(dir, 0700) })
+}
+
+// A copy the router cannot write, as on a file system remounted read-only or one full before
+// the lock file was ever created, is still read: through a lock opened for reading, or without
+// one. Nothing of it is swept, and a promotion leaves it as it was.
+func TestTemplateCopyReadWithoutWriting(t *testing.T) {
+	t.Run("before generations, without a lock file", func(t *testing.T) {
+		root := t.TempDir()
+		os.WriteFile(filepath.Join(root, rules.ManifestPath), branchManifest(t, 1, version1), 0600)
+		os.WriteFile(filepath.Join(root, rules.TemplatePath), []byte("t1"), 0600)
+		readOnly(t, root)
+		s := &templateStage{root: root}
+		if v := manifestVersion(t, s); v != 1 {
+			t.Fatal("the copy was not read:", v)
+		}
+		if b, ok := s.Get(rules.TemplatePath); !ok || string(b) != "t1" {
+			t.Fatal("the template was not read")
+		}
+		s.close()
+	})
+	for name, files := range map[string][]string{"read-only lock": {templateLock}, "no lock file": nil} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			s := &templateStage{root: root}
+			stageVersion(t, s, 1, version1)
+			s.promote()
+			s.close()
+			// A generation a promotion did not finish, which a sweep would remove.
+			os.Mkdir(filepath.Join(root, templateGeneration+"cut"), 0700)
+			if files == nil {
+				os.Remove(filepath.Join(root, templateLock))
+			}
+			readOnly(t, root, files...)
+			before := dirNames(t, root)
+
+			s = &templateStage{root: root}
+			if v := manifestVersion(t, s); v != 1 {
+				t.Fatal("the copy was not read:", v)
+			}
+			if b, ok := s.Get("providers/b.txt"); !ok || string(b) != "b" {
+				t.Fatal("a rule set was not read")
+			}
+			stageVersion(t, s, 2, map[string]string{rules.TemplatePath: "t2", "providers/a.txt": "a"})
+			s.promote()
+			s.close()
+			if got := dirNames(t, root); !slices.Equal(got, before) {
+				t.Fatal(got, before)
+			}
+		})
+	}
+}
