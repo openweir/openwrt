@@ -1,4 +1,4 @@
-import { bytes, tlsMessage, datetime, day } from '../dom.js';
+import { bytes, tlsMessage, datetime, day, say, hush, attach } from '../dom.js';
 // LuCI loads this module on demand. Subscription secrets are submitted directly
 // to rpcd and never enter a route, storage key or display label.
 const formats = {
@@ -264,11 +264,15 @@ async function retryDownload(u, source, group, content, feedback, replacementURL
     await new Promise(resolve => dialog.addEventListener('close', resolve, { once: true }));
     return retry && !u.signal.aborted && importSource(u, source, content, feedback, undefined, replacementURL);
 }
+// With a feedback element the outcome is written there, beside the control that started it: a
+// failure is marked shown so the page does not repeat it, and a blocked version opens its review in
+// place. Without one, or while 全部更新 queues reviews (present), the review opens over the page.
 export async function importSource(u, source, content, feedback, confirmation, replacementURL, present) {
     const previous = (u.sources || []).some((s) => s.source === source && s.ready);
     if (feedback) {
         feedback.hidden = false;
         feedback.textContent = content ? '正在导入…' : '正在更新…';
+        delete feedback.dataset.tone;
     }
     try {
         const r = await write(u, 'refresh', {
@@ -299,6 +303,11 @@ export async function importSource(u, source, content, feedback, confirmation, r
         }
         if (r?.decision !== 'ready') {
             const message = previous ? '已保留上次配置' : '此配置无法导入';
+            if (feedback && !present) {
+                feedback.replaceChildren(u.h('details', {}, u.h('summary', {}, message), review(u, r)));
+                feedback.dataset.tone = 'error';
+                return false;
+            }
             if (feedback) feedback.textContent = message;
             const open = () => u.dialog(message, review(u, r));
             if (present) await present(() => new Promise(resolve => open().addEventListener('close', resolve, { once: true })));
@@ -314,6 +323,7 @@ export async function importSource(u, source, content, feedback, confirmation, r
         const description = failureMessage(err.message, err.provider, err.tls);
         if (feedback) {
             feedback.textContent = '更新失败 · ' + description + (previous ? ' · 已保留上次配置' : '');
+            feedback.dataset.tone = 'error';
         }
         const group = err.provider?.download_group;
         if (group?.options?.length && !u.signal.aborted) {
@@ -322,8 +332,9 @@ export async function importSource(u, source, content, feedback, confirmation, r
             feedback.append(' ', u.button('选择规则下载出口', async () => { if (await retry()) await u.refresh(); }));
             return false;
         }
-        if (description !== err.message) throw new Error(description);
-        throw err;
+        const failure = description !== err.message ? new Error(description) : err;
+        if (feedback) failure.shown = true;
+        throw failure;
     }
 }
 async function chooseSource(u, s) {
@@ -471,7 +482,9 @@ function login(u, mount, close) {
     );
 }
 // Save the subscription first so its card shows at once, then import in the background;
-// the card reads "正在导入…" until the download and conversion finish.
+// the card reads "正在导入…" until the download and conversion finish. A failure is told on the
+// new card (or the overview's subscription card), unless the card already shows the failure the
+// router recorded; on any other page it goes to the alert at the top.
 async function saveNewSource(u, config, content, close) {
     await write(u, 'configure', { config });
     const importing = (u.memory.importing ||= new Set());
@@ -480,11 +493,13 @@ async function saveNewSource(u, config, content, close) {
     await u.refresh();
     // u.refresh() aborts the page's signal; the import must outlive the page it started on.
     const background = { ...u, signal: new AbortController().signal };
+    let failure = '';
     importSource(background, config.id, content)
-        .catch((e) => u.notify(e.message))
+        .catch((e) => { failure = e.message; })
         .finally(async () => {
             importing.delete(config.id);
             await u.refresh();
+            if (failure) u.tell(['source:' + config.id, 'sources'], [config.name, '导入失败', failure].filter(Boolean).join(' · '));
         });
     return true;
 }
@@ -504,15 +519,18 @@ export function onboarding(u, environment, trigger) {
     const picker = u.button('或导入配置文件', () => f.input.click(), 'ow-link');
     f.input.hidden = true;
     const progress = u.h('span', { role: 'status', class: 'ow-muted' });
+    // A file that cannot be read or saved is reported under the picker.
+    const fileLine = u.feedback();
     f.input.addEventListener('change', async () => {
         if (!f.input.files?.[0]) return;
         const name = f.input.files[0].name || '本地配置';
         picker.disabled = true;
         progress.textContent = '正在导入…';
+        hush(fileLine);
         try {
             await saveNewSource(u, { id: fileID, kind: 'file', name: name.slice(0, 128) }, await f.text(), close);
         } catch (e) {
-            u.notify(e.message);
+            if (e.name !== 'AbortError') say(fileLine, e.message, { control: picker });
         } finally {
             picker.disabled = false;
             progress.textContent = '';
@@ -527,7 +545,7 @@ export function onboarding(u, environment, trigger) {
     body.append(
         muted(u, '登录 OpenWeir 服务商，或直接添加订阅链接、导入配置文件。'),
         u.h('section', { class: 'ow-setup-section' }, u.h('h3', {}, '登录 OpenWeir 服务商'), loginPane),
-        u.h('section', { class: 'ow-setup-section' }, linkForm, actions(u, picker, f.input, progress)),
+        u.h('section', { class: 'ow-setup-section' }, linkForm, actions(u, picker, f.input, progress), fileLine),
         u.h('h3', {}, '运行环境检查'),
         environment,
     );
@@ -701,7 +719,8 @@ export async function subscriptions(u) {
         await Promise.all([worker(), worker()]);
         if (!u.signal.aborted) {
             await u.refresh();
-            if (errors.length) u.notify('更新失败 · ' + errors.join('、'));
+            // The cards say why; the line under 全部更新 names which ones failed.
+            if (errors.length) u.tell('update-all', '更新失败 · ' + errors.join('、'));
         }
     });
     updateAll.disabled = !sources.some(canRefresh);
@@ -709,7 +728,10 @@ export async function subscriptions(u) {
         const warning = noticeSummary(s.notices);
         const message = u.h(
             'div',
-            { class: 'ow-muted', role: 'status', hidden: !s.last_failure && !s.last_change && !s.needs_refresh },
+            {
+                class: 'ow-muted', role: 'status', hidden: !s.last_failure && !s.last_change && !s.needs_refresh,
+                'data-tone': s.last_failure ? 'error' : null,
+            },
             s.last_failure
                 ? '上次更新失败 · ' + failureMessage(s.last_failure, s.last_provider, s.last_tls) + (s.ready ? ' · 已保留上次配置' : '')
                 : s.needs_refresh ? (s.kind === 'file' ? '内核已切换，请重新导入原文件以生成配置' : '内核已切换，等待重新获取订阅')
@@ -801,6 +823,9 @@ export async function subscriptions(u) {
             });
         });
         update.disabled = importing;
+        // The card's other actions report under its buttons; a failed background import is told
+        // here too, unless the message above already shows the failure the router recorded.
+        const cardLine = u.feedback(null, 'source:' + s.source, { covered: !!s.last_failure });
         const card = u.h(
             'section',
             { class: 'ow-card ow-source-card', 'data-kind': s.kind },
@@ -825,15 +850,19 @@ export async function subscriptions(u) {
                 u.button('编辑', () => editSource(u, s, agents)),
                 removeButton(u, s),
             ),
+            cardLine,
         );
+        attach(card, cardLine);
         return card;
     }
     grid.append(...sources.map(sourceCard));
     const add = u.button('＋ 添加订阅', () => addSource(u, agents), 'ow-primary');
+    const toolbar = u.h('div', { class: 'ow-row ow-toolbar' }, u.h('h2', {}, '订阅'), actions(u, updateAll, add));
     const body = u.h(
         'div',
         { class: 'ow-stack' },
-        u.h('div', { class: 'ow-row ow-toolbar' }, u.h('h2', {}, '订阅'), actions(u, updateAll, add)),
+        toolbar,
+        u.feedback(toolbar, 'update-all'),
         sources.length
             ? grid
             : u.h(
