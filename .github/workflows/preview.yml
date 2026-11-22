@@ -65,7 +65,7 @@ jobs:
             echo "::error::v$version is already released; merge main into develop so the next version is computed past it."
             exit 1
           fi
-          # CI numbered this preview when it built the packages (version-r<N>); both formats agree.
+          # CI's gate job numbered this preview once for both formats (version-r<N>).
           number=$(cat dist/preview/preview-installer-ipk/preview-number)
           test "$number" = "$(cat dist/preview/preview-installer-apk/preview-number)"
           case "$number" in [1-9]|[1-9][0-9]|[1-9][0-9][0-9]|[1-9][0-9][0-9][0-9]) ;; *) exit 1;; esac

@@ -17,7 +17,8 @@ concurrency:
 jobs:
   # main and develop often point at one commit after a release; main's run covers it, so the
   # develop run skips every check and the preview workflow publishes nothing.
-  # The version is worked out here once, so every job builds and publishes the same one.
+  # The version and the package revisions are worked out here once, so every job builds and
+  # publishes the same ones.
   # Every job here has a timeout of two to three times its usual length, so a hang fails in
   # minutes instead of GitHub's six hours. A job that calls another workflow cannot take one;
   # its limits belong on the called workflow's own jobs.
@@ -30,6 +31,8 @@ jobs:
     outputs:
       run: ${{ steps.same.outputs.run }}
       version: ${{ steps.version.outputs.version }}
+      preview: ${{ steps.number.outputs.preview }}
+      revision: ${{ steps.number.outputs.revision }}
     steps:
       # Checked out first, even for a run that skips, for the retry helper.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -64,6 +67,24 @@ jobs:
           go run ./cmd/openweir-release version "$version"
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "Version $version" >> "$GITHUB_STEP_SUMMARY"
+      # Package revisions count up within a version: a push to develop builds preview N as
+      # version-rN, and main builds the release as the next revision after the last preview,
+      # so every build upgrades the one before it. Both package formats take these numbers, so
+      # a preview published while they build cannot number them apart.
+      - name: Number the preview and the release revision
+        id: number
+        if: steps.same.outputs.run == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+          DEVELOP: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' }}
+        run: |
+          set -euo pipefail
+          . packaging/openwrt/retry.sh
+          last=$(retry bounded 120 gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName \
+            --jq "[.[].tagName | select(startswith(\"v$VERSION-preview.\")) | ltrimstr(\"v$VERSION-preview.\") | select(test(\"^[0-9]+\$\")) | tonumber] | max // 0")
+          if [ "$DEVELOP" = true ]; then echo "preview=$((last + 1))" >> "$GITHUB_OUTPUT"; fi
+          echo "revision=$((last + 1))" >> "$GITHUB_OUTPUT"
   core:
     needs: gate
     if: needs.gate.outputs.run == 'true'
@@ -236,6 +257,8 @@ jobs:
     with:
       format: ipk
       version: ${{ needs.gate.outputs.version }}
+      preview: ${{ needs.gate.outputs.preview }}
+      revision: ${{ needs.gate.outputs.revision }}
   apk:
     name: Universal APK
     needs: [gate, runtime]
@@ -243,6 +266,8 @@ jobs:
     with:
       format: apk
       version: ${{ needs.gate.outputs.version }}
+      preview: ${{ needs.gate.outputs.preview }}
+      revision: ${{ needs.gate.outputs.revision }}
   # Publishing runs as part of this workflow, so it uses this commit's workflow files and the
   # packages this run tested (a workflow_run trigger would run main's copy instead).
   preview:
