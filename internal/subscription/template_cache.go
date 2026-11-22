@@ -87,8 +87,8 @@ func (s *templateStage) pin() string {
 	if !s.pinned {
 		s.pinned = true
 		if lock, err := lockTemplate(s.root); err == nil {
-			s.name = sweepTemplate(s.root)
-			s.base = holdGeneration(filepath.Join(s.root, s.name))
+			current, _ := sweepTemplate(s.root)
+			s.name, s.base = holdBase(s.root, current)
 			unlock(lock)
 		}
 	}
@@ -146,7 +146,7 @@ func (s *templateStage) promote() {
 		return
 	}
 	defer unlock(lock)
-	if current := currentGeneration(s.root); current != s.name {
+	if current, _ := currentGeneration(s.root); current != s.name {
 		other := filepath.Join(s.root, current)
 		if b, ok := readGeneration(other, rules.ManifestPath); ok {
 			if om, err := rules.ParseManifest(b); err == nil && om.Version >= m.Version {
@@ -300,13 +300,30 @@ func lockTemplate(root string) (*os.File, error) {
 }
 
 // currentGeneration is the generation the link names, or "" for root: the copy before
-// generations, or none.
-func currentGeneration(root string) string {
+// generations, or none. ok tells that the copy is as the link says, which a sweep relies on:
+// there is no link, or it names a generation's directory. A link that cannot be read, that
+// names anything else, or whose generation is gone, is not.
+func currentGeneration(root string) (name string, ok bool) {
 	name, err := os.Readlink(filepath.Join(root, templateCurrent))
-	if err != nil || !strings.HasPrefix(name, templateGeneration) || strings.ContainsRune(name, filepath.Separator) {
-		return ""
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return "", true
+	case err != nil || !strings.HasPrefix(name, templateGeneration) || strings.ContainsRune(name, filepath.Separator):
+		return "", false
 	}
-	return name
+	info, err := os.Stat(filepath.Join(root, name))
+	return name, err == nil && info.IsDir()
+}
+
+// holdBase holds the generation the link names (name) or, without one or when it cannot be
+// held, the copy before generations (root, as ""), whatever of it is left.
+func holdBase(root, name string) (string, *os.File) {
+	if name != "" {
+		if f := holdGeneration(filepath.Join(root, name)); f != nil {
+			return name, f
+		}
+	}
+	return "", holdGeneration(root)
 }
 
 // holdGeneration opens a generation's directory with a shared lock, which keeps sweeps from
@@ -339,9 +356,13 @@ func ifUnheld(dir string, remove func()) {
 // current one that no refresh holds (one a promotion did not finish, or that a newer one
 // replaced), a link a promotion did not finish, and once a generation is current, the copy
 // before generations; while that copy is still current, its old temporary files. It returns
-// the current generation.
-func sweepTemplate(root string) string {
-	current := currentGeneration(root)
+// the current generation (currentGeneration). A link it cannot trust leaves it nothing to
+// tell the current generation from the rest by: it removes nothing then.
+func sweepTemplate(root string) (string, bool) {
+	current, ok := currentGeneration(root)
+	if !ok {
+		return current, false
+	}
 	entries, _ := os.ReadDir(root)
 	before := false
 	for _, e := range entries {
@@ -384,5 +405,5 @@ func sweepTemplate(root string) string {
 			return nil
 		})
 	}
-	return current
+	return current, true
 }

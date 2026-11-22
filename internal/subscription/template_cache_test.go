@@ -286,3 +286,65 @@ func TestTemplatePromotionSurvivesAFailedSync(t *testing.T) {
 		t.Fatal("a later sweep left the replaced generation")
 	}
 }
+
+func dirNames(t *testing.T, dir string) []string {
+	t.Helper()
+	list, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range list {
+		names = append(names, e.Name())
+	}
+	return names
+}
+
+// A link that names no generation, or that cannot be read, tells the sweep nothing: it removes
+// no generation and not the copy before generations, and the refresh reads what that copy left.
+// The next promotion puts the link right, and the sweep after it cleans up.
+func TestTemplateSweepTrustsOnlyAWholeLink(t *testing.T) {
+	for name, link := range map[string]func(path string) error{
+		"dangling":   func(path string) error { return os.Symlink(templateGeneration+"gone", path) },
+		"elsewhere":  func(path string) error { return os.Symlink("../template", path) },
+		"unreadable": func(path string) error { return os.WriteFile(path, nil, 0600) }, // readlink: EINVAL
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			s := &templateStage{root: root}
+			stageVersion(t, s, 1, version1)
+			s.promote()
+			s.close()
+			gen1 := current(t, root)
+			// The copy before generations, as an older helper may still write it.
+			if err := os.WriteFile(filepath.Join(root, rules.ManifestPath), branchManifest(t, 1, version1), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(filepath.Join(root, templateCurrent)); err != nil {
+				t.Fatal(err)
+			}
+			if err := link(filepath.Join(root, templateCurrent)); err != nil {
+				t.Fatal(err)
+			}
+			before := dirNames(t, root)
+
+			reader := &templateStage{root: root}
+			if v := manifestVersion(t, reader); v != 1 {
+				t.Fatal("the copy before generations was not read:", v)
+			}
+			if got := dirNames(t, root); !slices.Equal(got, before) {
+				t.Fatal("swept without a link to trust:", got, before)
+			}
+			reader.close()
+
+			s = &templateStage{root: root}
+			stageVersion(t, s, 2, map[string]string{rules.TemplatePath: "t2", "providers/a.txt": "a"})
+			s.promote()
+			s.close()
+			gen2 := current(t, root)
+			if got := dirNames(t, root); gen2 == gen1 || !slices.Equal(got, []string{templateCurrent, filepath.Base(gen2), templateLock}) {
+				t.Fatal(got)
+			}
+		})
+	}
+}
