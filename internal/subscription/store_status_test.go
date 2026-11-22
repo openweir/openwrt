@@ -2,6 +2,7 @@ package subscription
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -296,5 +297,85 @@ func TestStatusFileOfThePreviousVersion(t *testing.T) {
 	}
 	if r, _ := store.read(id); r.Providers != nil || r.Attempts != 0 || r.UpdatedAt != "" {
 		t.Fatal("older status file of the previous version read", r.Providers, r.Attempts)
+	}
+}
+
+func commitBody(t *testing.T, s *Store, body string) {
+	t.Helper()
+	ticket, err := s.Begin("source")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Commit(ticket, Candidate{Decision: "ready", Profile: mustParse(t, body)}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+const (
+	oneNode    = "http://edge.example:8080#Edge"
+	twoNodes   = oneNode + "\nhttp://edge2.example:8080#Edge 2"
+	threeNodes = twoNodes + "\nhttp://edge3.example:8080#Edge 3"
+)
+
+// A rollback reads the record without the lock to validate the snapshot it would restore. Read
+// while a commit replaces the record file and then its status file, the record file can be the
+// one before the commit and the status file the commit's: the rollback is superseded rather than
+// restoring a snapshot it did not validate.
+func TestRollbackOfATornRead(t *testing.T) {
+	store := OpenStore(t.TempDir())
+	commitBody(t, store, oneNode)
+	commitBody(t, store, twoNodes)
+	before, _ := os.ReadFile(store.path("source"))
+	commitBody(t, store, threeNodes)
+	after, _ := os.ReadFile(store.path("source"))
+
+	// The commit's status file is in place; the reader still finds the record file before it.
+	if err := os.WriteFile(store.path("source"), before, 0600); err != nil {
+		t.Fatal(err)
+	}
+	var validated []string
+	err := store.RollbackChecked(t.Context(), "source", func(_ context.Context, p Profile) (func() error, error) {
+		validated = nodeNames(&p)
+		if err := os.WriteFile(store.path("source"), after, 0600); err != nil {
+			t.Fatal(err)
+		}
+		return func() error { return nil }, nil
+	})
+	if !errors.Is(err, ErrSuperseded) || len(validated) != 1 {
+		t.Fatal(err, validated)
+	}
+	if p, _ := store.Load("source"); len(p.Nodes) != 3 {
+		t.Fatal("rolled back to a snapshot not validated", nodeNames(&p))
+	}
+	if err := store.RollbackChecked(t.Context(), "source", func(context.Context, Profile) (func() error, error) {
+		return func() error { return nil }, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := store.Load("source"); len(p.Nodes) != 2 {
+		t.Fatal(nodeNames(&p))
+	}
+}
+
+// Under the lock, the rollback restores only the snapshot it validated.
+func TestRollbackRestoresTheSnapshotItValidated(t *testing.T) {
+	store := OpenStore(t.TempDir())
+	commitBody(t, store, oneNode)
+	commitBody(t, store, twoNodes)
+	err := store.RollbackChecked(t.Context(), "source", func(_ context.Context, p Profile) (func() error, error) {
+		if err := store.update("source", func(r *record) error {
+			other := mustParse(t, threeNodes)
+			r.Previous = &other
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return func() error { return nil }, nil
+	})
+	if !errors.Is(err, ErrSuperseded) {
+		t.Fatal(err)
+	}
+	if p, _ := store.Load("source"); len(p.Nodes) != 2 {
+		t.Fatal("restored a snapshot not validated", nodeNames(&p))
 	}
 }

@@ -511,6 +511,7 @@ func (s *Store) Rollback(id string) error { return s.RollbackChecked(context.Bac
 func (s *Store) RollbackChecked(ctx context.Context, id string, v Validator) error {
 	var t Ticket
 	var recheck func() error
+	var validated string
 	if v != nil {
 		r, e := s.read(id)
 		if e != nil {
@@ -526,6 +527,7 @@ func (s *Store) RollbackChecked(ctx context.Context, id string, v Validator) err
 			return ErrNotReady
 		}
 		t = Ticket{id, r.Epoch, r.Generation}
+		validated = digest(*r.Previous)
 		recheck, e = v(ctx, *r.Previous)
 		if e != nil {
 			return e
@@ -548,6 +550,11 @@ func (s *Store) RollbackChecked(ctx context.Context, id string, v Validator) err
 		if recheck != nil {
 			if err := check(r, t); err != nil {
 				return err
+			}
+			// The snapshot restored is the one validated, whatever the read without the lock
+			// found of a record a commit was replacing.
+			if digest(*r.Previous) != validated {
+				return ErrSuperseded
 			}
 			if err := recheck(); err != nil {
 				return err
