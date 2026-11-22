@@ -216,7 +216,28 @@ func (s *Store) Begin(id string) (Ticket, error) {
 	return t, err
 }
 
+// sweep removes the temporary files of record writes that a killed helper left. Every write
+// holds state.lock, so under it none is in use.
+func (s *Store) sweep() {
+	lock, e := os.OpenFile(filepath.Join(s.dir, "state.lock"), os.O_RDWR, 0600)
+	if e != nil {
+		return
+	}
+	defer lock.Close()
+	if syscall.Flock(int(lock.Fd()), syscall.LOCK_EX) != nil {
+		return
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	entries, _ := os.ReadDir(s.dir)
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".snapshot-") {
+			os.Remove(filepath.Join(s.dir, entry.Name()))
+		}
+	}
+}
+
 func (s *Store) begin(ctx context.Context, id string, retryGeneration uint64, scheduled bool) (Ticket, *record, error) {
+	s.sweep()
 	var t Ticket
 	var snapshot *record
 	e := s.updateContext(ctx, id, func(r *record) error {

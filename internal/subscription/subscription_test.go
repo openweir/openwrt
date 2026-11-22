@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync/atomic"
@@ -509,4 +510,19 @@ func prepareTestCandidate(sourceID string, body []byte, previous *Profile, polic
 		return Candidate{}, err
 	}
 	return Assess(p, previous, policy), nil
+}
+
+// A killed helper's record write leaves a temporary file, which the next refresh removes.
+func TestStoreSweepsSnapshotLeftovers(t *testing.T) {
+	store, id := fileSource(t, RoutingOwn)
+	leftover := filepath.Join(store.dir, ".snapshot-123")
+	if err := os.WriteFile(leftover, []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Begin(id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(leftover); err == nil {
+		t.Fatal("leftover stayed")
+	}
 }
