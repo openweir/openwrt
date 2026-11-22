@@ -435,12 +435,17 @@ export async function overview(ui) {
 				: preparing || kernel.bootstrap?.stage === 'running' ? '内核准备中' : '先选择内核';
 	let look = powerLook(ui.status),
 		shown;
+	// What the next button needs to carry on from this one: its look, word and pulse timing, and
+	// whether it is still on screen. The button itself is held weakly, so a page switch frees it.
+	const remember = () => {
+		ui.memory.power = { ...shown, el: new WeakRef(power) };
+	};
 	// Changes the button where it stands: at once on a press, and back if the router refuses.
 	const show = (next) => {
 		if (!power.isConnected) return;
 		look = next;
 		shown = paintPower(power, next, powerWords(next, offWord()), shown, !reducedMotion());
-		ui.memory.power = { ...shown, el: power };
+		remember();
 	};
 	const start = async () => {
 		// Disconnecting: a press waits for the router to let go (the button is aria-disabled).
@@ -518,12 +523,12 @@ export async function overview(ui) {
 	power.append(icon, h('span', { class: 'ow-power-label' }, h('span')));
 	// The poll redraws the page on every phase. The new button shows the right look from the start;
 	// on its first frame it eases over from what the button it replaces showed, its pulse in step.
-	const replacing = !!ui.memory.power?.el?.isConnected;
+	const replacing = !!ui.memory.power?.el?.deref()?.isConnected;
 	shown = paintPower(power, look, powerWords(look, offWord()), ui.memory.power, false);
 	onFirstFrame(power, ui.signal, () => {
 		worn.delete(power); // its pulse starts now: time it afresh
 		shown = paintPower(power, look, powerWords(look, offWord()), ui.memory.power, replacing && !reducedMotion());
-		ui.memory.power = { ...shown, el: power };
+		remember();
 	});
 	// Off, the word follows the kernel as it finishes downloading.
 	kernelUpdates.addEventListener('change', () => look === 'off' && !preparing && show('off'), { signal: ui.signal });
