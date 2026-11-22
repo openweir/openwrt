@@ -18,8 +18,13 @@ jobs:
   # main and develop often point at one commit after a release; main's run covers it, so the
   # develop run skips every check and the preview workflow publishes nothing.
   # The version is worked out here once, so every job builds and publishes the same one.
+  # Every job here has a timeout of two to three times its usual length, so a hang fails in
+  # minutes instead of GitHub's six hours. A job that calls another workflow cannot take one;
+  # its limits belong on the called workflow's own jobs.
   gate:
     runs-on: ubuntu-latest
+    # A few API calls and one small Go program.
+    timeout-minutes: 10
     outputs:
       run: ${{ steps.same.outputs.run }}
       version: ${{ steps.version.outputs.version }}
@@ -57,6 +62,8 @@ jobs:
     if: needs.gate.outputs.run == 'true'
     name: Router configuration and authenticated mihomo controller
     runs-on: ubuntu-24.04-arm
+    # Minutes with the cached core; a cache miss first builds mihomo, about ten more.
+    timeout-minutes: 30
     env:
       MIHOMO_REF: 15fb245e92789566cff12e3060ae861534dcf892
     steps:
@@ -132,6 +139,8 @@ jobs:
     if: needs.gate.outputs.run == 'true'
     name: LuCI navigation and interactions
     runs-on: ubuntu-latest
+    # Mostly installing Chromium's system libraries; the checks themselves take a few minutes.
+    timeout-minutes: 20
     env:
       PLAYWRIGHT_VERSION: 1.62.1
     steps:
@@ -153,6 +162,9 @@ jobs:
     needs: gate
     if: needs.gate.outputs.run == 'true'
     runs-on: ubuntu-latest
+    # The race-enabled tests of every package are the slow part. This leaves room for go
+    # test's own 10-minute limit per package to fire first and print the hung goroutines.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - name: Check router shell scripts
@@ -182,6 +194,8 @@ jobs:
       matrix:
         abi: [amd64, '386', arm64, arm5, arm6, arm7, mips, mipsle, riscv64, loong64]
     runs-on: ubuntu-latest
+    # One cross-compiled Go program per ABI.
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
