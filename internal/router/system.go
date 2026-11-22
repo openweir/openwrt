@@ -523,8 +523,8 @@ applyLoop:
 const coreGroup = "openweir-core"
 
 // coreCapabilities bounds every capability set of the core to CAP_NET_ADMIN (TProxy sockets,
-// SO_MARK, the TUN device) and CAP_NET_BIND_SERVICE (TProxy UDP replies from ports below 1024).
-// No CAP_NET_RAW: TUN mode routes only TCP and UDP to the core, so ICMP never needs a raw socket.
+// SO_MARK, the TUN device), CAP_NET_BIND_SERVICE (TProxy UDP replies from ports below 1024) and
+// CAP_NET_RAW (raw sockets for Hysteria's faketcp).
 const coreCapabilities = "/etc/openweir/core-capabilities.json"
 
 func coreGID() (int, error) {

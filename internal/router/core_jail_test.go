@@ -43,7 +43,7 @@ func TestCoreCapabilityFileGrantsOnlyNetworkCapabilities(t *testing.T) {
 		t.Fatal(got)
 	}
 	for _, name := range names {
-		if got := slices.Sorted(slices.Values(sets[name])); !slices.Equal(got, []string{"CAP_NET_ADMIN", "CAP_NET_BIND_SERVICE"}) {
+		if got := slices.Sorted(slices.Values(sets[name])); !slices.Equal(got, []string{"CAP_NET_ADMIN", "CAP_NET_BIND_SERVICE", "CAP_NET_RAW"}) {
 			t.Fatal(name, got)
 		}
 	}

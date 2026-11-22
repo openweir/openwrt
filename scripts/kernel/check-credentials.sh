@@ -27,13 +27,13 @@ esac
 chmod 755 "$work/mihomo"
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o "$work/manager" ./cmd/openweir-kernel
 # The core runs as root in the openweir-core group (2701). The restricted checks hold no
-# capability; the jailed core holds CAP_NET_ADMIN and CAP_NET_BIND_SERVICE (0x1400) only.
+# capability; the jailed core holds CAP_NET_ADMIN, CAP_NET_BIND_SERVICE and CAP_NET_RAW (0x3400) only.
 cat > "$work/probe.go" <<'PROBE'
 package main
 import("fmt"; "os"; "strings"; "syscall")
 func main() {
  b,e:=os.ReadFile("/proc/self/status");if e!=nil{panic(e)}
- found:=0; caps:="0000000000000000"; if os.Getenv("EXPECT_NETWORK")=="1"{caps="0000000000001400"}
+ found:=0; caps:="0000000000000000"; if os.Getenv("EXPECT_NETWORK")=="1"{caps="0000000000003400"}
  for _,s:=range strings.Split(string(b),"\n"){f:=strings.Fields(s);if len(f)<1{continue}
  switch f[0] {
  case "Uid:": for _,n:=range f[1:]{if n!="0"{panic(s)}};found++
