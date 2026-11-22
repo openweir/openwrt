@@ -203,14 +203,6 @@ func (s *app) handle(ctx context.Context, method string, r request) (any, error)
 	case "devices":
 		v, e := router.Devices(ctx)
 		return items(v), e
-	case "kernel_impact":
-		var v struct {
-			Tag string `json:"tag"`
-		}
-		if len(r.Args) > 0 && json.Unmarshal(r.Args, &v) != nil {
-			return nil, errors.New("invalid version")
-		}
-		return s.sys.Impact(ctx, status.Intent, v.Tag)
 	case "network_preferences":
 		return router.ReadPreferences(ctx)
 	case "custom_rules":

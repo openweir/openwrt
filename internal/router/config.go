@@ -81,10 +81,29 @@ func coreTarget(s string) string {
 	}
 }
 
+// Issue is a configuration problem the kernel helper or the compiler names by its object.
+type Issue struct {
+	Kind   string `json:"kind"`
+	Object string `json:"object"`
+	Reason string `json:"reason"`
+}
+
+func (i Issue) Error() string {
+	if i.Object == "" {
+		return i.Reason
+	}
+	return i.Object + ": " + i.Reason
+}
+
+// incompatible reports a node whose protocol this core release does not support.
+func incompatible(n subscription.Node, c kernel.TargetCapabilities) bool {
+	return c.Control == kernel.Controller && subscription.CapabilityAvailability(n.CapabilityKey(), &c.Naive, c.ProtocolSupport) == "unsupported"
+}
+
 // unchain adds to unsupported the nodes that connect through a proxy the core will not have:
 // one missing from the profile or unsupported here, or a group without a usable member.
-// Groups skip them like any unsupported member. It returns the nodes it added.
-func unchain(p subscription.Profile, unsupported map[string]bool) []string {
+// Groups skip them like any unsupported member.
+func unchain(p subscription.Profile, unsupported map[string]bool) {
 	known := map[string]bool{subscription.Direct: true, subscription.Reject: true}
 	for _, n := range p.Nodes {
 		known[n.ID] = !n.Special
@@ -94,13 +113,11 @@ func unchain(p subscription.Profile, unsupported map[string]bool) []string {
 	}
 	down := maps.Clone(unsupported)
 	usable := func(id string) bool { return known[id] && !down[id] }
-	var added []string
 	for changed := true; changed; {
 		changed = false
 		for _, n := range p.Nodes {
 			if via := n.Dialer(); via != "" && !down[n.ID] && !usable(via) {
 				down[n.ID], unsupported[n.ID], changed = true, true, true
-				added = append(added, n.ID)
 			}
 		}
 		for _, g := range p.Groups {
@@ -109,7 +126,6 @@ func unchain(p subscription.Profile, unsupported map[string]bool) []string {
 			}
 		}
 	}
-	return added
 }
 
 // chainGroups lists, in profile order, the groups that usable chained nodes connect through
@@ -390,7 +406,7 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 	}
 	unsupported := map[string]bool{}
 	for _, node := range p.Nodes {
-		if !node.Special && incompatible(node, c) != "" {
+		if !node.Special && incompatible(node, c) {
 			unsupported[node.ID] = true
 		}
 	}

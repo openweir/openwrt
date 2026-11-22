@@ -6,7 +6,6 @@
         "openweir": [
           "environment",
           "devices",
-          "kernel_impact",
           "network_preferences",
           "custom_rules",
           "plugin_check",
