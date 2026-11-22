@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/openweir/openwrt/internal/cnlist"
 	sub "github.com/openweir/openwrt/internal/subscription"
 )
 
@@ -125,5 +126,34 @@ func TestRefreshCarriesRoutingChoice(t *testing.T) {
 	}
 	if s, err := st.Status("file"); err != nil || s.Rules != sub.RoutingTemplate {
 		t.Fatal("routing choice not saved with its update", err, s.Rules)
+	}
+}
+
+// The rules page checks a GEOSITE,CN or GEOIP,CN set, or a local profile's mainland routes,
+// against the router's mainland lists: the sets the core routes them by.
+func TestMainlandSetsMatchTheRoutersLists(t *testing.T) {
+	saved := cnlist.Packaged
+	t.Cleanup(func() { cnlist.Packaged = saved })
+	cnlist.Packaged = "../../../files/usr/share/openweir/rules"
+	st := sub.OpenStore(t.TempDir())
+	for source, content := range map[string]string{
+		"own":   "proxies: [{name: Edge, type: http, server: edge.example, port: 8080}]\nrules: ['GEOSITE,CN,DIRECT', 'GEOIP,CN,DIRECT,no-resolve', 'MATCH,Edge']",
+		"local": "http://edge.example:81#Edge",
+	} {
+		if err := st.Configure(sub.Source{ID: source, Kind: "file", Name: source}); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := run(t.Context(), st, "refresh", input{Source: source, Content: content}, sub.Fetcher{}); err != nil {
+			t.Fatal(err)
+		}
+		for _, q := range []struct {
+			set, query string
+			want       bool
+		}{{sub.DomesticDomainSet, "www.baidu.com", true}, {sub.DomesticDomainSet, "www.example.org", false}, {sub.DomesticIPSet, "223.5.5.5", true}, {sub.DomesticIPSet, "8.8.8.8", false}} {
+			out, _, err := run(t.Context(), st, "set_match", input{Source: source, RuleSet: q.set, Query: q.query}, sub.Fetcher{})
+			if err != nil || out.(map[string]bool)["matched"] != q.want {
+				t.Fatal(source, q, out, err)
+			}
+		}
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -213,6 +214,30 @@ rules:
 					t.Fatal(at, rules)
 				}
 			}
+		}
+	}
+}
+
+// The LuCI pages find a mainland list's hits and connections by the name the core loads it
+// under, its rules and lookups by the subscription's tag, and show it in Chinese (dom.js
+// mainlandSets).
+func TestPagesNameTheChinaListsAsTheCore(t *testing.T) {
+	dom, err := os.ReadFile("../../files/www/luci-static/resources/openweir/dom.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	table := regexp.MustCompile(`(?s)export const mainlandSets = \{\n(.*?)\n\};`).FindSubmatch(dom)
+	if table == nil {
+		t.Fatal("dom.js has no mainlandSets")
+	}
+	entries := regexp.MustCompile(`'([^']+)': \{ label: '([^']+)', tag: '([^']+)' \},`).FindAllSubmatch(table[1], -1)
+	if len(entries) != len(mainlandSets) || len(entries) != strings.Count(string(table[1]), "\n")+1 {
+		t.Fatalf("dom.js lists %d mainland sets, the core %d", len(entries), len(mainlandSets))
+	}
+	for _, e := range entries {
+		name, label, tag := string(e[1]), string(e[2]), string(e[3])
+		if mainlandSets[tag] != name || !regexp.MustCompile(`\p{Han}`).MatchString(label) {
+			t.Errorf("dom.js shows %s (%s) as %q", name, tag, label)
 		}
 	}
 }

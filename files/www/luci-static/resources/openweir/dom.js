@@ -112,6 +112,22 @@ export const knownNames = {
 	'@reject': 'REJECT',
 	'@default': '默认代理',
 };
+// The plugin's mainland lists, by the names the core loads them under and its connections
+// report. A subscription's GEOSITE,CN and GEOIP,CN rules name them by tag, and so do lookups
+// in them; a local profile routes both direct.
+export const mainlandSets = {
+	'openweir-dns-cn': { label: '大陆域名', tag: '@openweir-geosite-cn' },
+	'openweir-ip-cn': { label: '大陆 IP', tag: '@openweir-geoip-cn' },
+};
+const mainlandTags = new Map(Object.entries(mainlandSets).map(([name, set]) => [set.tag, name]));
+export const isMainland = (name) => Object.hasOwn(mainlandSets, name);
+// A rule set's name in the core: a mainland tag reads as its list's.
+export const mainlandName = (tag) => mainlandTags.get(tag) || tag;
+// A rule set as the pages show it.
+export function setLabel(name) {
+	const core = mainlandName(name);
+	return isMainland(core) ? mainlandSets[core].label : name;
+}
 export const resultName = { routed: '已分流', established: '已建立', failed: '失败', closed: '已关闭' };
 export async function pages(ui, source, action) {
 	const items = [];

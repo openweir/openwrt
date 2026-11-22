@@ -814,6 +814,12 @@ try {
 				await setCard('Streaming').getByText('二进制',{exact:true}).waitFor();
 				assert.match(await setCard('Streaming').locator('dl').innerText(), /条目\s*1 条\s*命中连接\s*3 次\s*去向\s*直连/);
 				assert.match(await setCard('Domestic').locator('dl').innerText(), /命中连接\s*—/);
+				// GEOSITE,CN uses the plugin's mainland domain list: a built-in card under its Chinese
+				// name, with the hits the core counts for that list.
+				const china = setCard('大陆域名');
+				await china.getByText('内置',{exact:true}).waitFor();
+				assert.match(await china.locator('dl').innerText(), /条目\s*每周自动更新\s*命中连接\s*2 次\s*去向\s*直连/);
+				assert.equal(await page.locator('.ow-set-card h3').filter({hasText:'openweir'}).count(), 0, 'no rule set shows by an internal name');
 				await setCard('Streaming').getByRole('button',{name:'详情'}).click();
 				const detail = page.getByRole('dialog',{name:'Streaming'});
 				await detail.getByText('引用此规则集的规则').waitFor();

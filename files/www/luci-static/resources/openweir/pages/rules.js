@@ -1,5 +1,5 @@
 // The rules page: custom rules and the rule sets of the active subscription.
-import { attach, hush, diagnosticMessage } from '../dom.js';
+import { attach, hush, diagnosticMessage, day, mainlandSets, isMainland, mainlandName, setLabel } from '../dom.js';
 import { ids, actions, muted, badge, field, input, choice, read, date, form, confirm, importSource, reimport } from './sources.js';
 
 const matchType = {
@@ -31,6 +31,12 @@ const editorTypes = [
 ];
 const routeName = (u, target) =>
     ({ '@direct': '直连', '@reject': '拦截', '@global': '全局', '@default': '默认代理' })[target] || u.name(target);
+// A rule set a rule names reads as the pages show it: the plugin's mainland lists by their labels.
+function setRef(key, value) {
+    if (key === 'rule_set') return setLabel(value);
+    if (key === 'clash') return value.replace(/(RULE-SET,)([^,()]+)/gi, (_, kind, name) => kind + setLabel(name));
+    return value;
+}
 function describeRule(match) {
     return Object.entries(match || {}).map(([k, v]) => ({
         type: matchType[k] || k,
@@ -38,7 +44,7 @@ function describeRule(match) {
             k === 'ip_is_private'
                 ? '私有地址'
                 : (Array.isArray(v) ? v : [v])
-                      .map((value) => (typeof value === 'object' ? JSON.stringify(value) : String(value)))
+                      .map((value) => (typeof value === 'object' ? JSON.stringify(value) : setRef(k, String(value))))
                       .join('、'),
     }));
 }
@@ -175,7 +181,9 @@ async function editRule(u, custom, index, source, isLocal) {
         );
 }
 const limitRules = 50;
+// The rules and lookups of the subscription name a mainland list by its tag.
 async function setDetail(u, source, name, info) {
+    const tag = isMainland(name) ? mainlandSets[name].tag : name;
     const list = u.h('div', { class: 'ow-rule-list' }, u.h('p', { class: 'ow-muted' }, '正在读取…'));
     const query = u.h('input', { type: 'search', placeholder: '域名或 IP，如 example.com', 'aria-label': '检查是否命中' }),
         answer = u.h('p', { class: 'ow-muted', role: 'status' });
@@ -185,7 +193,7 @@ async function setDetail(u, source, name, info) {
         check.disabled = true;
         answer.textContent = '正在检查…';
         try {
-            const r = await read(u, 'set_match', { source, rule_set: name, query: value });
+            const r = await read(u, 'set_match', { source, rule_set: tag, query: value });
             answer.textContent = value + (r.matched ? ' 命中此规则集' : ' 不在此规则集中');
         } catch (e) {
             answer.textContent = diagnosticMessage(e.message);
@@ -200,13 +208,15 @@ async function setDetail(u, source, name, info) {
         }
     });
     const lookup = u.h('div', { class: 'ow-stack' }, u.h('h3', {}, '检查是否命中'), u.h('div', { class: 'ow-row' }, query, check), answer);
+    // The router updates its mainland lists itself once a week.
+    const china = u.status.china_lists;
     const facts = [
-        ['来源', info.builtIn ? '内置，随插件更新' : '订阅'],
+        ['来源', info.builtIn ? '内置，每周自动更新' : '订阅'],
         ['条目', info.builtIn ? '—' : (info.count ?? '—') + ' 条' + (info.binary ? '（二进制格式，无法逐条列出）' : '')],
-        ['更新时间', !info.builtIn && info.primary?.updated_at ? date(info.primary.updated_at) : '—'],
+        ['更新时间', info.builtIn ? (china ? day(china) : '插件内置版本') : date(info.primary?.updated_at)],
     ];
     u.dialog(
-        name,
+        setLabel(name),
         u.h(
             'div',
             { class: 'ow-stack' },
@@ -219,9 +229,9 @@ async function setDetail(u, source, name, info) {
     );
     try {
         const rows = [];
-        if (info.builtIn) rows.push({ match: { rule_set: name }, target: '@direct' });
+        if (info.builtIn && info.local) rows.push({ match: { rule_set: name }, target: '@direct' });
         else if (source) {
-            const data = await read(u, 'rules', { source, limit: limitRules, rule_set: name });
+            const data = await read(u, 'rules', { source, limit: limitRules, rule_set: tag });
             data.items.forEach((r, i) => rows.push({ ...r, position: data.positions?.[i] }));
         }
         list.replaceChildren(
@@ -249,7 +259,7 @@ async function setDetail(u, source, name, info) {
 function setRoutes(items) {
     const routes = new Map();
     for (const rule of items || [])
-        for (const tag of new Set([rule.match?.rule_set, rule.rule_set].flat().filter(Boolean))) {
+        for (const tag of new Set([rule.match?.rule_set, rule.rule_set].flat().filter(Boolean).map(mainlandName))) {
             if (!routes.has(tag)) routes.set(tag, []);
             if (rule.target && !routes.get(tag).includes(rule.target)) routes.get(tag).push(rule.target);
         }
@@ -286,7 +296,7 @@ function setCard(u, name, info, hits, routes, open) {
         u.h(
             'div',
             { class: 'ow-set-title' },
-            u.h('h3', { id: heading }, name),
+            u.h('h3', { id: heading }, setLabel(name)),
             u.h(
                 'span',
                 { class: 'ow-set-tags' },
@@ -299,7 +309,7 @@ function setCard(u, name, info, hits, routes, open) {
         u.h(
             'dl',
             { class: 'ow-set-stats' },
-            stat('条目', info.builtIn ? '随插件更新' : (info.count ?? '—') + ' 条'),
+            stat('条目', info.builtIn ? '每周自动更新' : (info.count ?? '—') + ' 条'),
             stat('命中连接', hit ? hit + ' 次' : '—', hit ? 'ow-set-hit' : null),
             routes?.length ? stat('去向', setRoute(u, routes), 'ow-set-route') : null,
         ),
@@ -311,24 +321,28 @@ function setCard(u, name, info, hits, routes, open) {
     );
 }
 // What the subscription or the plugin provides: its rule sets, one card each, and how often each was hit.
+// A subscription's GEOSITE,CN and GEOIP,CN rules and a local profile's mainland routes use the
+// plugin's mainland lists, which the core loads once each: one built-in card per list, under the
+// name its connections and hits report.
 function ruleSetCard(u, source, primary, initial, hits) {
     const mode = u.status.intent?.mode;
-    const names = Object.keys(initial.sets || {});
-    if (initial.local) names.push(...['geosite-cn', 'geoip-cn'].filter((s) => !names.includes(s)));
+    const names = [
+        ...new Set([...Object.keys(initial.sets || {}).map(mainlandName), ...(initial.local ? Object.keys(mainlandSets) : [])]),
+    ];
     const routes = setRoutes(initial.items);
     const feedback = u.h('div', { class: 'ow-muted', role: 'status', hidden: true });
     const btn = u.button('更新订阅规则集', () =>
         primary?.kind === 'file' ? reimport(u, source, feedback) : importSource(u, source, '', feedback),
     );
-    btn.disabled = !primary?.ready || initial.local || !names.length;
+    btn.disabled = !primary?.ready || initial.local || names.every(isMainland);
     const cards = names.map((name) => {
-        const builtIn = !!initial.local,
-            binary = !!initial.binary?.[name],
+        const builtIn = isMainland(name),
+            binary = !builtIn && !!initial.binary?.[name],
             count = binary ? initial.entries?.[name] : initial.sets[name];
-        // The plugin's own sets send their matches direct, as their details say.
-        const route = routes.get(name) || (builtIn ? ['@direct'] : null);
+        // A local profile sends the mainland lists direct, as their details say.
+        const route = routes.get(name) || (builtIn && initial.local ? ['@direct'] : null);
         return setCard(u, name, { builtIn, binary, count }, hits, route, () =>
-            setDetail(u, source, name, { builtIn, binary, count, primary, mode }),
+            setDetail(u, source, name, { builtIn, binary, count, primary, mode, local: initial.local }),
         );
     });
     return u.h(

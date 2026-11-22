@@ -375,12 +375,15 @@ func setMatch(store *sub.Store, in input) (any, []string, error) {
 			return answer(sub.SetMatch(set, in.Query))
 		}
 	}
-	if behavior, ok := map[string]string{"geosite-cn": "domain", "geoip-cn": "ipcidr"}[in.RuleSet]; ok && p.Summary().Local {
-		data, e := os.ReadFile(cnlist.Path(in.RuleSet))
+	// GEOSITE,CN and GEOIP,CN rules, and a local profile's mainland routes, match by the router's
+	// mainland lists; the rules page asks for them by these tags.
+	mainland := map[string]struct{ list, behavior string }{sub.DomesticDomainSet: {cnlist.Domains, "domain"}, sub.DomesticIPSet: {cnlist.Addresses, "ipcidr"}}
+	if m, ok := mainland[in.RuleSet]; ok {
+		data, e := os.ReadFile(cnlist.Path(m.list))
 		if e != nil {
 			return nil, nil, e
 		}
-		return answer(sub.SetMatch(sub.BinarySet{Tag: in.RuleSet, Format: "mrs", Behavior: behavior, Data: data}, in.Query))
+		return answer(sub.SetMatch(sub.BinarySet{Tag: in.RuleSet, Format: "mrs", Behavior: m.behavior, Data: data}, in.Query))
 	}
 	return answer(sub.InlineSetMatch(p.Rules, in.RuleSet, in.Query))
 }

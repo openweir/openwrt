@@ -134,11 +134,14 @@ export function fixture(empty = false, preparing = false) {
 					};
 				if (action === 'status') return { ok: true, data: sources.find((s) => s.source === r.args.source) };
                 if (action === 'rules') {
-                    const tags = ['Streaming', 'Domestic'];
+                    // The subscription's own sets, then its GEOSITE,CN rule, which names the plugin's
+                    // mainland domain list by its tag.
+                    const tags = ['Streaming', 'Domestic', '@openweir-geosite-cn'];
 					const items = tags.filter(tag => !r.args.rule_set || tag === r.args.rule_set)
-						.map(tag => ({match:{rule_set:tag},rule_set:tag,target:'@direct'}));
-					const sets = Object.fromEntries(tags.map(tag => [tag,1]));
-					return {ok:true,data:{items,total:items.length,positions:items.map(row => tags.indexOf(row.rule_set)+1),sets,entries:sets,binary:sets}};
+						.map(tag => ({match:tag.startsWith('@') ? {clash:'RULE-SET,' + tag} : {rule_set:tag},rule_set:tag,target:'@direct'}));
+					const sets = Object.fromEntries(tags.map(tag => [tag,1])),
+						own = Object.fromEntries(tags.slice(0, 2).map(tag => [tag,1]));
+					return {ok:true,data:{items,total:items.length,positions:items.map(row => tags.indexOf(row.rule_set)+1),sets,entries:own,binary:own}};
 				}
 				const rows =
 					action === 'nodes'
@@ -299,7 +302,8 @@ export function fixture(empty = false, preparing = false) {
 					] }
 					: { resources: [], blocked: false };
 			case 'rule_hits':
-				return { Streaming: { count: 3, last: Date.now() } };
+				// The core counts the mainland list's hits under the built-in set's name.
+				return { Streaming: { count: 3, last: Date.now() }, 'openweir-dns-cn': { count: 2, last: Date.now() } };
 			case 'routes':
 				return {
 					items: connections.map((v) => ({

@@ -1,4 +1,4 @@
-import { card, h, select, segment, empty, clock, download, resultName, eventMessage, datetime, attach, hush } from '../dom.js';
+import { card, h, select, segment, empty, clock, download, resultName, eventMessage, datetime, attach, hush, setLabel } from '../dom.js';
 
 const levels = { info: '信息', warn: '警告', error: '错误' };
 const sources = {
@@ -33,7 +33,7 @@ export async function records(ui) {
 	const ruleLabel = (rule) => {
 		if (!rule) return '—';
 		const set = ruleSetOf(rule);
-		if (set) return '规则集 ' + set;
+		if (set) return '规则集 ' + setLabel(set);
 		const [type, ...payload] = rule.split(',');
 		return type === 'Match' ? '兜底' : type + (payload.length ? ' ' + payload.join(',') : '');
 	};
@@ -153,7 +153,7 @@ export async function records(ui) {
 			if (state.rule && !sets.includes(state.rule)) sets.unshift(state.rule);
 			ruleFilter.replaceChildren(
 				h('option', { value: '' }, '全部规则集'),
-				...sets.map((x) => h('option', { value: x }, x)),
+				...sets.map((x) => h('option', { value: x }, setLabel(x))),
 			);
 			ruleFilter.value = state.rule;
 		}
