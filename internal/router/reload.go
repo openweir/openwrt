@@ -85,14 +85,11 @@ func takeover(i Intent, n Network) (guard, telegram string, err error) {
 	return
 }
 
-func (s *System) remember(i Intent, n Network, tag string, config []byte) {
+// remember takes the profile Start compiled config from, so a refresh that lands while the
+// core starts still changes the key and closes connections on the next reload.
+func (s *System) remember(i Intent, n Network, p subscription.Profile, tag string, config []byte) {
 	guard, telegram, err := takeover(i, n)
-	// Start compiled config from this stored profile. Without it the key matches no reload,
-	// so the first reload closes connections rather than keep routes it cannot vouch for.
-	routing := ""
-	if p, e := subscription.OpenStore(Root + "/sources").Load(i.Source); e == nil {
-		routing = routingKey(i, p)
-	}
+	routing := routingKey(i, p)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if err != nil {
