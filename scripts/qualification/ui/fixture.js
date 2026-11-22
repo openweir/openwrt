@@ -36,6 +36,12 @@ export function fixture(empty = false, preparing = false) {
 			not_before: '2026-01-01T00:00:00Z', not_after: '2027-01-01T00:00:00Z',
 		},
 	});
+	// A configuration file imported by hand: no link and no request UA, so the store reports no
+	// agent, and only importing it again updates it.
+	sources.push({
+		source: 'p4', name: '离线配置', kind: 'file', format: 'clash', ready: true, local: false,
+		epoch: 1, generation: 1, node_count: 4, group_count: 2, rule_count: 1,
+	});
 	if (empty) sources.length = 0;
 	const saved = { revision: 5, mode: 'smart', enabled: !empty, source: empty ? '' : 'p0', policy: {}, choices: {} };
 	const kernel = { target: 'arm64', selected: preparing ? '' : 'v0.1.3', trust_ready: false };

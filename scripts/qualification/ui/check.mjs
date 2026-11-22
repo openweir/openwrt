@@ -493,6 +493,21 @@ try {
 			await page.getByRole('link', { name, exact: true }).click();
 			await page.getByRole('heading', { name: name === '规则' ? '自定义规则' : name, exact: true }).first().waitFor();
 			if (name === '订阅') {
+				// Every card names its kind in words. Its data-kind is what the stylesheet keys on;
+				// only the provider account's is platform, the card set apart from the rest.
+				const cardKinds = await page.locator('.ow-source-card').evaluateAll(cards => cards.map(card =>
+					[card.dataset.kind, card.querySelector('.ow-source-kind')?.textContent]));
+				assert.deepEqual(cardKinds, [
+					['platform', '服务商账户'],
+					['external', '链接订阅'],
+					['external', '链接订阅'],
+					['external', '链接订阅'],
+					['file', '本地文件'],
+				], 'subscription kinds');
+				// A file has no automatic update; its card imports the file again.
+				const fileCard = page.locator('.ow-source-card[data-kind="file"]');
+				assert.equal(await fileCard.locator('.ow-source-meta').textContent(), 'Clash YAML');
+				await fileCard.getByRole('button', {name:'导入新文件', exact:true}).waitFor();
 				// Three cards a row on a wide page and one on a phone; a row's cards share one height.
 				const boxes = await page.locator('.ow-source-card').evaluateAll(cards => cards.map(card => {
 					const box = card.getBoundingClientRect(),
