@@ -42,7 +42,9 @@ firewall_status() {
 
 # A ruleset is validated by the actual kernel for every enabled family before
 # any routes or DNS change. Each table is committed with --noflush. The filter
-# allowances land before the first fw3 zone rejection, including guest zones.
+# allowances and the TProxy listener guard land before the first fw3 zone rule,
+# including guest zones. Verify, repair and release find every owned rule through
+# legacy_snapshot.
 legacy_plan() {
  fam=$1
  if [ "$fam" = 4 ]; then
@@ -73,6 +75,16 @@ legacy_plan() {
     echo "-I INPUT -i $device -s $src -d $dst -p tcp --dport $dport $tag -j ACCEPT"
    fi
   done </var/run/openweir/telegram-input.xt
+ fi
+ # As fw4's listener_guard chain: only packets the takeover marked reach the transparent
+ # listener, so no device (nor the WAN) connects to it straight and has the core serve a
+ # connection addressed to itself. Inserted last, the guard heads INPUT, ahead of the
+ # allowances above and every fw3 rule; the router's own connections over loopback stay.
+ # The core listens on IPv6 only with the IPv6 takeover (the lan-tproxy listener in config.go).
+ if [ "$method" = tproxy ] && { [ "$fam" = 4 ] || [ "$v6" = 1 ]; }; then
+  for proto_name in tcp udp; do
+   echo "-I INPUT ! -i lo -p $proto_name --dport $port -m mark ! --mark $mark/0xffff $tag -j REJECT"
+  done
  fi
  echo COMMIT
  if [ "$fam" = 6 ] && [ "$v6" != 1 ]; then return 0; fi
