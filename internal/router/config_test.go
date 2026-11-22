@@ -348,8 +348,9 @@ func TestDNSSplitsDomesticAndProxiedUpstreams(t *testing.T) {
 	if dns["respect-rules"] != true || dns["nameserver-policy"].(map[string]any)["rule-set:"+dnsDomesticSet] == nil || c["rule-providers"].(map[string]any)[dnsDomesticSet] == nil {
 		t.Fatal(dns)
 	}
-	if c["sniffer"].(map[string]any)["override-destination"] != true || !slices.Contains(c["rules"].([]any), any(quicBlock)) {
-		t.Fatal("sniffer override or QUIC block missing")
+	// A device's own proxy app reaches its node: the sniffed name steers rules but is not dialled.
+	if sn := c["sniffer"].(map[string]any); sn["override-destination"] != false || sn["parse-pure-ip"] != true || !slices.Contains(c["rules"].([]any), any(quicBlock)) {
+		t.Fatal("sniffer must not rewrite destinations, or QUIC block missing")
 	}
 	// UDP 443 to mainland addresses is not refused, and the address check never resolves a name.
 	cnIP := c["rule-providers"].(map[string]any)[domesticIPSet].(map[string]any)

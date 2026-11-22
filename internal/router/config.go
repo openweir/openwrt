@@ -354,16 +354,17 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 			"nameserver": foreignDNS, "proxy-server-nameserver": domesticDNS, "direct-nameserver": domesticDNS, "respect-rules": true,
 			"nameserver-policy": dnsPolicy(n.Resolver, domesticDNS, foreignDNS), "fake-ip-range": "172.30.254.1/30"},
 		"find-process-mode": "off", "tcp-concurrent": true, "unified-delay": true, "keep-alive-interval": 15, "keep-alive-idle": 600}
-	// Dial the sniffed domain, not the address the device chose. Devices may still hold
-	// poisoned answers (IPv6 resolvers from router advertisements, hard-coded DNS, cached
-	// lookups), and proxying such an address makes the node dial a bogus host and every
-	// such connection is refused. Services that break when rewritten are skipped below.
-	config["sniffer"] = obj{"enable": true, "override-destination": true, "parse-pure-ip": true, "force-dns-mapping": true,
+	// The sniffed domain steers the rules, but the connection still goes to the address the
+	// device chose, as OpenClash's sniffer has it (override-destination false). A device's own
+	// proxy app dials its node by address with a TLS or QUIC name that is often a disguise
+	// (REALITY, Hysteria2 and TUIC with a borrowed SNI); dialling that name would reach the
+	// disguise site and break the device's tunnel. DNS protection already hands devices fake
+	// addresses the core maps back to their names, so poisoned answers rarely get this far.
+	config["sniffer"] = obj{"enable": true, "override-destination": false, "parse-pure-ip": true, "force-dns-mapping": true,
 		// Push and smart-home services break when their destination is rewritten.
 		"skip-domain": []string{"+.push.apple.com", "Mijia Cloud", "+.mi.com", "+.xiaomi.net", "dlg.io.mi.com", "+.oray.com", "+.sunlogin.net"},
 		// The router's own programs on the mixed port name their destination or pin a checked
-		// address (the subscription fallback); rewriting that to the sniffed name would have
-		// the core resolve it again, open to DNS rebinding onto an internal host.
+		// address (the subscription fallback); their sniffed names must not steer the rules.
 		"skip-src-address": []string{"127.0.0.0/8", "::1/128"},
 		"sniff":            obj{"TLS": obj{"ports": []string{"443", "8443"}}, "HTTP": obj{"ports": []string{"80", "8080-8880"}}, "QUIC": obj{"ports": []string{"443"}}}}
 	// quic-go's UDP segmentation offload breaks Hysteria2 and TUIC nodes on OpenWrt 24.10
