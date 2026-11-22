@@ -87,6 +87,23 @@ jobs:
             "$1/control.test" -test.v -test.run "^TestMihomoController$"
             "$1/router.test" -test.v -test.run "^Test(UpstreamCoreControl|WireSharedOutbound)$"
           ' sh "$RUNNER_TEMP"
+      # The source job is not root, so these tests skip there. The runner's root holds every
+      # capability, as procd's does on a router: OPENWEIR_CORE_FIXTURE=1 makes the launch test
+      # require the core's open-file limit instead of tolerating a container that lacks
+      # CAP_SYS_RESOURCE. The launch and reclaim tests must pass, not skip; the nft check
+      # skips where the runner has no nft.
+      - name: Launch the core as root and reclaim another account's state
+        run: |
+          sudo unshare --net sh -ec '
+            ip link set lo up
+            OPENWEIR_CORE_FIXTURE=1 "$1/router.test" -test.v \
+              -test.run "^Test(CoreLaunchHoldsEveryCapability|ReclaimDirKeepsOwnStateAndDropsForeign|NFTableGoneAnswersOnlyForACertainlyMissingTable)$" \
+              > "$1/root.log" || { cat "$1/root.log"; exit 1; }
+            cat "$1/root.log"
+            for test in CoreLaunchHoldsEveryCapability ReclaimDirKeepsOwnStateAndDropsForeign; do
+              grep -q "^--- PASS: Test$test " "$1/root.log" || { echo "::error::Test$test did not run as root"; exit 1; }
+            done
+          ' sh "$RUNNER_TEMP"
       - name: Install the publisher's latest stable ARM64 asset
         env:
           GH_TOKEN: ${{ github.token }}
