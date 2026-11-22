@@ -65,8 +65,8 @@ export function mount(root, invoke, upload) {
 	// browser's open requests ("XHR request aborted by browser"). Reads are retried briefly.
 	const transient = (e) => /aborted|timed? ?out|network|xhr/i.test(e?.message || '');
 	const rereadable = new Set(['task', 'status', 'routes', 'traffic', 'groups', 'live_groups', 'latencies', 'logs',
-		'connections', 'live_rules', 'environment', 'devices', 'custom_rules', 'network_preferences', 'plugin_check',
-		'subscription_read', 'kernel_read', 'conflicts', 'kernel_impact']);
+		'connections', 'environment', 'devices', 'custom_rules', 'network_preferences', 'plugin_check',
+		'subscription_read', 'kernel_read', 'conflicts']);
 	const call = async (method, args) => {
 		for (let attempt = 1; ; attempt++) {
 			try {

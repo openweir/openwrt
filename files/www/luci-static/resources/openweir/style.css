@@ -235,8 +235,7 @@
 	white-space: nowrap;
 }
 .ow nav a[aria-current='page'],
-.ow .ow-segment [aria-pressed='true'],
-.ow .ow-segment [aria-selected='true'] {
+.ow .ow-segment [aria-pressed='true'] {
 	background: var(--ow-panel);
 	color: var(--ow-accent);
 	font-weight: 650;
@@ -778,10 +777,6 @@
 	margin-bottom: 12px;
 }
 .ow .ow-warning {
-	display: flex;
-	flex-wrap: wrap;
-	align-items: center;
-	gap: 10px;
 	background: #fff0d9;
 	color: #7b420a;
 }
@@ -1117,53 +1112,6 @@
 	margin: 0;
 }
 .ow .ow-mono {
-	font-family: ui-monospace, monospace;
-}
-.ow .ow-log > div {
-	padding: 0 0 9px 124px;
-}
-.ow .ow-level.warn {
-	background: #ffebc8;
-	color: #774609;
-}
-.ow .ow-level.error {
-	background: #ffe0dd;
-	color: #992d26;
-}
-.ow .ow-table {
-	width: 100%;
-	border-collapse: collapse;
-	table-layout: fixed;
-}
-.ow .ow-table th,
-.ow .ow-table td {
-	text-align: left;
-	overflow-wrap: anywhere;
-	padding: 9px 6px;
-	border-bottom: 1px solid var(--ow-line);
-	background: transparent;
-	color: inherit;
-}
-.ow .ow-table th {
-	color: var(--ow-secondary);
-	font-size: 12px;
-}
-.ow .ow-table td small {
-	display: block;
-}
-.ow .ow-rule-list {
-	display: grid;
-	gap: 0;
-}
-.ow .ow-rule-row {
-	display: flex;
-	align-items: center;
-	flex-wrap: wrap;
-	gap: 10px;
-	padding: 10px 0;
-	border-bottom: 1px solid var(--ow-line);
-}
-.ow .ow-mono {
 	overflow-wrap: anywhere;
 }
 @container (max-width:840px) {
@@ -1414,7 +1362,6 @@
 .ow .ow-row:has(> .ow-label) > :not(.ow-label) { flex: none; }
 .ow .ow-device-toolbar { justify-content: space-between; }
 .ow .ow-device-toolbar > input[type='search'] { margin-left: auto; }
-.ow .ow-warning > button:last-child { margin-left: auto; }
 .ow .ow-source-card .ow-actions > .ow-danger:last-child { margin-left: auto; }
 .ow .ow-label > small:empty { display: none; }
 .ow .ow-log-detail { display: block; margin-top: 4px; font-size: 12px; overflow-wrap: anywhere; }

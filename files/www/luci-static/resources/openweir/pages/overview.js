@@ -1,5 +1,5 @@
 import { diagnosticMessage, day, pluginName, conflictItem } from '../dom.js';
-import { h, card, bytes, select, field, empty, segment, modeNames, clock, resultName, say, hush, attach } from '../dom.js';
+import { h, card, bytes, field, empty, segment, modeNames, clock, resultName, say, hush, attach } from '../dom.js';
 import { installLatest, kernelMessage, kernelStorage, kernelSummary } from './versions.js';
 
 const states = {
