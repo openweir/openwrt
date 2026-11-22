@@ -16,7 +16,6 @@ func TestPurgeDeletesWhatOpenWeirKeeps(t *testing.T) {
 		"/etc/openweir/sources", "/etc/openweir/private", "/etc/openweir/rulesets", "/etc/openweir/cnlists",
 		// The routing template cache, geodata (up to 64 MiB a file) and the user's imported files.
 		"/etc/openweir/template", "/etc/openweir/geodata", "/etc/openweir/imports",
-		"/tmp/openweir-upload",
 	} {
 		if !slices.Contains(paths, want) {
 			t.Error("purge keeps", want)

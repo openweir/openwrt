@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/openweir/openwrt/internal/kernel"
-	"os"
 	"strconv"
+	"strings"
 	"time"
+
+	"github.com/openweir/openwrt/internal/kernel"
+	"github.com/openweir/openwrt/internal/tlsdiag"
 )
 
 func kernelStatus(ctx context.Context) (kernel.Status, error) {
@@ -38,16 +40,12 @@ func (s *app) kernelJob(r request) (any, error) {
 	if r.Action != "rollback" && (json.Unmarshal(args["tag"], &tag) != nil || !kernel.TagPattern.MatchString(tag)) {
 		return nil, errors.New("invalid version")
 	}
-	bundle, e := checkKernelArgs(r.Action, args)
-	if e != nil {
+	if e = checkKernelArgs(r.Action, args); e != nil {
 		return nil, e
 	}
 	return s.runJob("kernel_write", "kernel/"+r.Action, func(ctx context.Context) (json.RawMessage, error) {
 		if e := s.yieldFirstKernel(ctx); e != nil {
 			return nil, e
-		}
-		if bundle != "" {
-			defer os.RemoveAll(bundle)
 		}
 		if r.Action == "install-json" {
 			args["stage_only"] = json.RawMessage("true")
@@ -101,6 +99,62 @@ func (s *app) kernelJob(r request) (any, error) {
 		out, _ := json.Marshal(map[string]string{"selected": tag})
 		return out, nil
 	})
+}
+
+// LuCI may choose a transport, but only the installer may choose trusted metadata.
+func checkKernelArgs(action string, args map[string]json.RawMessage) error {
+	for key := range args {
+		switch {
+		case (action == "select" || action == "install-json") && key == "tag":
+		case action == "install-json" && (key == "mode" || key == "url" || key == "mirror"):
+		default:
+			return errors.New("unsupported kernel request field")
+		}
+	}
+	return nil
+}
+
+// Never forward raw helper stderr: file paths and mirror URLs can contain secrets.
+func publicKernelError(stderr string) error {
+	message := strings.TrimSpace(stderr)
+	if failure := tlsdiag.Parse(message); failure != nil {
+		return errors.New(failure.Wire())
+	}
+	switch message {
+	case errKernelRevision.Error():
+		return errKernelRevision
+	case kernel.ErrReleaseRateLimit.Error():
+		return kernel.ErrReleaseRateLimit
+	case kernel.ErrTemporaryDownload.Error():
+		return kernel.ErrTemporaryDownload
+	case "publisher has no stable release":
+		return errors.New("publisher has no stable release")
+	case "latest stable release unreachable", "invalid latest stable release identity", "latest stable release lacks a verified archive for this router":
+		return errors.New(message)
+	case "release file size or SHA-256 mismatch", "archive was modified during extraction":
+		return errors.New("release checksum mismatch")
+	case "invalid or ambiguous upstream checksum", "upstream checksum is missing for this architecture",
+		"invalid original release asset digest", "original release supplies no SHA-256 for this archive":
+		return errors.New("upstream release checksum unavailable")
+	case "original release lacks a matching Linux CLI archive", "invalid Linux ELF",
+		"wrong ELF machine, class or endian", "core OS/architecture mismatch",
+		"core instruction set exceeds the declared target", "wrong ARM instruction or floating-point ABI",
+		"wrong software floating-point ABI":
+		return errors.New("release archive incompatible with this router")
+	case "release source unreachable":
+		return errors.New("release source unreachable")
+	case "core failed restricted version validation", "Mihomo executable reported a different version":
+		return errors.New("release executable failed version validation")
+	case "insufficient free storage; active core retained", "insufficient shared storage; active core retained",
+		"insufficient temporary space for release archive", "insufficient space on cache volume",
+		"insufficient trial RAM and 48 MiB system reserve", "persistent mode requires 128 MiB storage and 256 MiB RAM",
+		"temporary mode requires 64 MiB storage and 512 MiB RAM":
+		return errors.New("insufficient resources for this storage mode")
+	}
+	if strings.HasPrefix(message, "cannot verify original release via GitHub: ") || strings.HasPrefix(message, "original release checksum unavailable: ") {
+		return errors.New("upstream release checksum unavailable")
+	}
+	return errors.New("kernel operation failed")
 }
 
 // A selected tag is only a saved preference. A running change finishes when

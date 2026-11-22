@@ -32,7 +32,7 @@ function route() {
 	return { page: Object.hasOwn(views, page) ? page : 'overview', detail };
 }
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-export function mount(root, invoke, upload) {
+export function mount(root, invoke) {
 	root.className = 'ow';
 	const nav = h('nav', { 'aria-label': 'OpenWeir' });
 	const main = h('div', { class: 'ow-main' });
@@ -294,7 +294,6 @@ export function mount(root, invoke, upload) {
 				detail,
 				status,
 				sources,
-				upload,
 				signal: controller.signal,
 				refresh: render,
 			};

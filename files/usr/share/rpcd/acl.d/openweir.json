@@ -42,16 +42,7 @@
           "select_node",
           "clear",
           "subscription_write",
-          "kernel_write",
-          "kernel_upload"
-        ]
-      },
-      "cgi-io": [
-        "upload"
-      ],
-      "file": {
-        "/tmp/openweir-upload/*/*.gz": [
-          "write"
+          "kernel_write"
         ]
       }
     }

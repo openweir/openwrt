@@ -1,7 +1,6 @@
 'use strict';
 'require view';
 'require rpc';
-'require request';
 
 return view.extend({
 	load: function() {
@@ -25,21 +24,7 @@ return view.extend({
 			link.dataset.openweir = '';
 			document.head.appendChild(link);
 		}
-		function upload(path, file) {
-			var data = new FormData();
-			data.append('sessionid', rpc.getSessionID());
-			data.append('filename', path);
-			data.append('filedata', file);
-			return request.post(L.env.cgi_base + '/cgi-upload', data, {timeout:0}).then(function(res) {
-				var result = res.json();
-				if (!res.ok || !result || result.failure || Number(result.size) !== file.size) {
-					if (Array.isArray(result && result.failure) && Number(result.failure[0]) === 28)
-						throw new Error('路由器的临时存储空间不足。');
-					throw new Error('文件上传失败，请检查路由器的临时存储和 LuCI 上传权限。');
-				}
-			});
-		}
-		module.mount(root, call, upload);
+		module.mount(root, call);
 		return root;
 	},
 	handleSaveApply: null,

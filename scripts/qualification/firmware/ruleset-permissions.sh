@@ -22,6 +22,12 @@ cat /tmp/guest-architectures >> /etc/opkg.conf
 printf 'arch aarch64_cortex-a53 9\n' >> /etc/opkg.conf
 cd /root/candidate
 sha256sum -c SHA256SUMS
+# The core comes from the archive in /root/bundles. Mark the first-run download as already
+# tried, as on a router that has made it, so the manager the package starts does not hold
+# the kernel installer's lock with a download of its own.
+mkdir -p /etc/openweir/mihomo-kernel
+chmod 0711 /etc/openweir /etc/openweir/mihomo-kernel
+: >/etc/openweir/mihomo-kernel/.first-install-attempted
 opkg install ./luci-app-openweir_*.ipk
 report first_postinst
 for i in $(seq 1 30); do [ -S /var/run/openweir/manager.sock ] && break; sleep 1; done
@@ -33,13 +39,10 @@ tag=$(cat /root/bundles/release-tag)
 (cd /root/bundles && sha256sum -c SHA256SUMS)
 set -- /root/bundles/*.gz
 [ "$#" -eq 1 ] && [ -f "$1" ]
-archive=$1
-bytes=$(wc -c <"$archive")
-ticket=$(call kernel_upload "{\"args\":{\"bytes\":$bytes}}")
-dir=$(jsonfilter -s "$ticket" -e '@.path')
-[ -d "$dir" ]
-cp "$archive" "$dir/"
-wait_job "$(call kernel_write "{\"action\":\"install-json\",\"args\":{\"tag\":\"$tag\",\"mode\":\"double\",\"bundle\":\"$dir\"}}")"
+# The installer verifies the original archive against its GitHub release, as for a
+# download, and the manager selects it.
+openweir-kernel install --tag "$tag" --mode double --bundle /root/bundles --stage-only
+wait_job "$(call kernel_write "{\"action\":\"select\",\"args\":{\"tag\":\"$tag\"}}")"
 [ -z "$(openweir-kernel status | jsonfilter -e '@.active')" ]
 report daemon_official_archive_upload
 dir=/etc/openweir/imports/rulesets/source-fixture

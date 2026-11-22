@@ -406,8 +406,6 @@ func (s *app) handle(ctx context.Context, method string, r request) (any, error)
 		}
 		id, e := s.m.Choose(r.Source, r.Group, r.Node)
 		return revisionTask(id), e
-	case "kernel_upload":
-		return prepareUpload(r.Args)
 	case "health_check":
 		if status.Phase != "running" {
 			return nil, errors.New("core is not running")
@@ -671,9 +669,9 @@ func uninstall(ctx context.Context) error {
 
 // purgePaths lists what `openweird purge` deletes once the network is direct again: the
 // kernels, subscriptions and accounts, private state, rule sets, CN lists, the routing
-// template cache, geodata, the files the user imported and pending uploads.
+// template cache, geodata and the files the user imported.
 func purgePaths() []string {
-	return []string{router.Root + "/kernel", "/tmp/openweir/kernel", router.Root + "/mihomo-kernel", router.Root + "/sources", router.Root + "/private", router.Root + "/rulesets", cnlist.Dir, "/tmp/openweir/mihomo-kernel", uploadRoot,
+	return []string{router.Root + "/kernel", "/tmp/openweir/kernel", router.Root + "/mihomo-kernel", router.Root + "/sources", router.Root + "/private", router.Root + "/rulesets", cnlist.Dir, "/tmp/openweir/mihomo-kernel",
 		subscription.TemplateDir, router.GeodataDir, subscription.ImportDir}
 }
 

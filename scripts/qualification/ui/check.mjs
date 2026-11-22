@@ -11,7 +11,7 @@ const { chromium } = await import(process.env.OPENWEIR_PLAYWRIGHT || 'playwright
 const output = process.env.OPENWEIR_UI_OUTPUT || path.join(root, 'build/ui-check');
 await fs.mkdir(output, { recursive: true });
 const html =
-	'<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>OpenWeir · LuCI</title><link rel="stylesheet" href="/style.css"><style>body{margin:0}dialog{margin:0;top:0;left:0}</style><div id="app"></div><script type="module">import {mount} from "/app.js";import {fixture} from "/fixture.js";const qs=new URLSearchParams(location.search);const f=fixture(qs.has("empty"),qs.has("bootstrap"));window.model=f;mount(document.querySelector("#app"),async(m,r)=>structuredClone(await f.rpc(m,r)),f.upload);</script>';
+	'<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>OpenWeir · LuCI</title><link rel="stylesheet" href="/style.css"><style>body{margin:0}dialog{margin:0;top:0;left:0}</style><div id="app"></div><script type="module">import {mount} from "/app.js";import {fixture} from "/fixture.js";const qs=new URLSearchParams(location.search);const f=fixture(qs.has("empty"),qs.has("bootstrap"));window.model=f;mount(document.querySelector("#app"),async(m,r)=>structuredClone(await f.rpc(m,r)));</script>';
 const server = http.createServer(async (req, res) => {
 	try {
 		let url = new URL(req.url, 'http://127.0.0.1').pathname;

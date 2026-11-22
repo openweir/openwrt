@@ -17,15 +17,16 @@ wait_job() {
  return 1
 }
 install_bundle() {
- local tag archive bytes ticket dir
+ local tag dir
  tag=$1
- archive=/root/bundles/"$tag"/mihomo-"${tag#v}"-linux-arm64.tar.gz
- bytes=$(wc -c <"$archive")
- ticket=$(call kernel_upload "{\"args\":{\"bytes\":$bytes}}")
- dir=$(jsonfilter -s "$ticket" -e '@.path')
- [ -d "$dir" ]
- cp "$archive" "$dir/"
- wait_job "$(call kernel_write "{\"action\":\"install-json\",\"args\":{\"tag\":\"$tag\",\"mode\":\"double\",\"bundle\":\"$dir\"}}")"
+ # Only the original archive, as copied to a router by hand: the installer checks it
+ # against the release metadata it pinned for this tag. The manager then selects it.
+ dir=/tmp/original-archive
+ mkdir -m 0700 "$dir"
+ cp /root/bundles/"$tag"/mihomo-"${tag#v}"-linux-arm64.tar.gz "$dir/"
+ openweir-kernel install --tag "$tag" --mode double --bundle "$dir" --stage-only
+ rm -r "$dir"
+ wait_job "$(call kernel_write "{\"action\":\"select\",\"args\":{\"tag\":\"$tag\"}}")"
 }
 wait_phase() {
  phase=$1;limit=$2;prior=

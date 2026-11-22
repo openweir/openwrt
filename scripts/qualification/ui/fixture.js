@@ -40,7 +40,7 @@ export function fixture(empty = false, preparing = false) {
 	const saved = { revision: 5, mode: 'smart', enabled: !empty, source: empty ? '' : 'p0', policy: {}, choices: {} };
 	const kernel = { target: 'arm64', selected: preparing ? '' : 'v0.1.3', trust_ready: false };
 	if (preparing) kernel.bootstrap = {id:'initial', action:'kernel/bootstrap', stage:'running'};
-	const installs = [], uploads = [];
+	const installs = [];
 	const probes = { url: {}, tcp: {} };
 	const controls = { holdProbe: false, longRefresh: false, phase: null, loginPlans: 1, failRefresh: false };
 	let pendingProbe;
@@ -258,8 +258,6 @@ export function fixture(empty = false, preparing = false) {
 					{ tag: 'v0.0.0-alpha.2ca4a53', prerelease: true, installable: true, asset: 'mihomo-linux-arm64-alpha-2ca4a53.gz' },
 					{ tag: 'v0.1.5-rc1', prerelease: true, installable: false },
 				]);
-			case 'kernel_upload':
-				return r.args.remove ? { removed: true } : { id: 'fixture-upload', path: '/tmp/openweir-upload/fixture-upload' };
 			case 'kernel_write':
 				if (controls.kernelInstallError) throw Error(controls.kernelInstallError);
 				installs.push(r.args);
@@ -377,5 +375,5 @@ export function fixture(empty = false, preparing = false) {
 		}
 		return { task: 'intent-' + ++saved.revision, revision: saved.revision };
 	}
-	return { rpc, saved, kernel, choices, trace, controls, reads, get maxRefreshTasks() { return maxRefreshTasks; }, installs, uploads, upload: async (path, file) => uploads.push({ path, name: file.name, bytes: file.size }) };
+	return { rpc, saved, kernel, choices, trace, controls, reads, get maxRefreshTasks() { return maxRefreshTasks; }, installs };
 }
