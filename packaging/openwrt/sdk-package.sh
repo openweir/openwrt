@@ -145,7 +145,9 @@ stop_service() {
 }
 case "${PKG_UPGRADE:-0}:${1:-remove}" in 1:*|*:upgrade) [ -n "$root" ] || stop_service; exit 0;; esac
 if [ -n "$root" ]; then remove_manager; exit 0; fi
-if [ ! -e "$manager" ] && [ ! -d /var/run/openweir/network ]; then remove_manager; exit 0; fi
+# The core's runtime directories go with the package, so a reinstall starts from a clean state.
+clean_runtime() { rm -rf /var/run/openweir/core /var/run/openweir/mihomo; }
+if [ ! -e "$manager" ] && [ ! -d /var/run/openweir/network ]; then clean_runtime; remove_manager; exit 0; fi
 # Removal (also opkg --force-reinstall) restores direct networking only. Kernels, subscriptions,
 # accounts and rule sets stay for the next installation; `openweird purge` removes them by hand.
 if ! /usr/sbin/openweird uninstall || ! stop_service; then
@@ -156,6 +158,7 @@ if ! /usr/sbin/openweird uninstall || ! stop_service; then
  exit 1
 fi
 /etc/init.d/openweir disable
+clean_runtime
 remove_manager
 HOOK
 chmod 0755 "$input/preinst" "$input/postinst" "$input/prerm"
