@@ -32,13 +32,13 @@ func (c Client) Delays(ctx context.Context) (map[string]Latency, error) {
 	}
 	return out, nil
 }
-func (c Client) delay(ctx context.Context, base, name string, out any) error {
+func (c Client) delay(ctx context.Context, name string, out any) error {
 	part, e := segment(name)
 	if e != nil {
 		return e
 	}
 	q := url.Values{"url": {"https://www.gstatic.com/generate_204"}, "timeout": {"5000"}}
-	e = c.call(ctx, "GET", base+part+"/delay?"+q.Encode(), nil, out)
+	e = c.call(ctx, "GET", "/proxies/"+part+"/delay?"+q.Encode(), nil, out)
 	if errors.Is(e, statusError(504)) || errors.Is(e, statusError(503)) {
 		return ErrProbeFailed
 	}
@@ -46,16 +46,11 @@ func (c Client) delay(ctx context.Context, base, name string, out any) error {
 }
 func (c Client) Measure(ctx context.Context, name string) (Latency, error) {
 	var r struct{ Delay uint64 }
-	if e := c.delay(ctx, "/proxies/", name, &r); e != nil {
+	if e := c.delay(ctx, name, &r); e != nil {
 		return Latency{}, e
 	}
 	if r.Delay == 0 {
 		return Latency{}, ErrProbeFailed
 	}
 	return Latency{time.Now().Unix(), r.Delay}, nil
-}
-func (c Client) GroupDelay(ctx context.Context, name string) (map[string]uint64, error) {
-	var out map[string]uint64
-	e := c.delay(ctx, "/group/", name, &out)
-	return out, e
 }

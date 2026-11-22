@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"net/url"
 	"os"
@@ -428,43 +427,9 @@ func (s *Store) RequireLogin(t Ticket) error {
 	})
 }
 
-func (s *Store) Cancel(t Ticket) error {
-	return s.update(t.Source, func(r *record) error {
-		if e := check(r, t); e != nil {
-			return e
-		}
-		r.Generation++
-		return nil
-	})
-}
 func (s *Store) Current(t Ticket) bool {
 	r, e := s.read(t.Source)
 	return e == nil && check(r, t) == nil
-}
-func (s *Store) ValidateReference(source, nodeID string, epoch uint64) error {
-	r, e := s.read(source)
-	if e != nil {
-		return e
-	}
-	if r.Revoked || r.Epoch != epoch {
-		return ErrRevoked
-	}
-	if r.Suspended {
-		return ErrSuspended
-	}
-	if r.Current != nil {
-		for _, n := range r.Current.Nodes {
-			if n.ID == nodeID {
-				return nil
-			}
-		}
-		for _, g := range r.Current.Groups {
-			if g.ID == nodeID {
-				return nil
-			}
-		}
-	}
-	return fmt.Errorf("source member unavailable")
 }
 
 // Configure explicitly creates a source or updates filters and request preferences.

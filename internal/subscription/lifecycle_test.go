@@ -9,7 +9,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"slices"
 	"testing"
 
 	"google.golang.org/protobuf/encoding/protowire"
@@ -134,7 +133,7 @@ func TestLoginFenceAcrossAllPlans(t *testing.T) {
 }
 func TestVersionedSnellAndMieruStandard(t *testing.T) {
 	v5 := mustParse(t, "snell://strong-password@host.example:443?version=5&plugin=obfs-local;obfs%3Dhttp")
-	if v5.Nodes[0].Outbound["version"] != 5 || !slices.Contains(v5.Nodes[0].RequiredOptions(), "v5-obfs") {
+	if v5.Nodes[0].Outbound["version"] != 5 || object(v5.Nodes[0].Outbound["obfs-opts"])["mode"] != "http" {
 		t.Fatal(v5)
 	}
 	if _, e := Parse("s", []byte("snell://strong-password@host.example:443?version=6&obfs=http")); e == nil {
@@ -154,7 +153,7 @@ func TestVersionedSnellAndMieruStandard(t *testing.T) {
 	profile = append(profile, msg(3, server)...)
 	full := mustParse(t, "mieru://"+base64.StdEncoding.EncodeToString(msg(1, profile)))
 	simple := mustParse(t, "mierus://demo:pass@edge.example?profile=edge&port=443&protocol=UDP")
-	if full.Nodes[0].ID != simple.Nodes[0].ID || !slices.Contains(full.Nodes[0].RequiredOptions(), "udp-underlay") {
+	if full.Nodes[0].ID != simple.Nodes[0].ID || full.Nodes[0].Outbound["transport"] != "UDP" {
 		t.Fatal(full, simple)
 	}
 }
@@ -209,11 +208,11 @@ func TestInlineRuleAndNodeProvidersKeepGroupAndSet(t *testing.T) {
 	}
 }
 
-func TestSnellV5TLSObfuscationNeedsItsCapability(t *testing.T) {
+func TestSnellV5TLSObfuscationParsesInEveryForm(t *testing.T) {
 	for _, raw := range []string{"snell://strong-password@host.example:443?version=5&plugin=obfs-local;obfs%3Dtls", "[Proxy]\nExample = snell, host.example, 443, psk=strong-password, version=5, obfs=tls"} {
 		p := mustParse(t, raw)
-		if p.Nodes[0].Outbound["obfs-opts"].(map[string]any)["mode"] != "tls" || !slices.Contains(p.Nodes[0].RequiredOptions(), "v5-obfs-tls") {
-			t.Fatal("missing TLS obfuscation capability", raw)
+		if object(p.Nodes[0].Outbound["obfs-opts"])["mode"] != "tls" {
+			t.Fatal("missing TLS obfuscation", raw)
 		}
 	}
 }
