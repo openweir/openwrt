@@ -472,8 +472,10 @@ export async function overview(ui) {
 			ui.go('subscriptions', 'add');
 			return;
 		}
-		// Connecting again: what stopped the last attempt no longer applies.
+		// Connecting again: what stopped the last attempt no longer applies, and what stops this
+		// one is news.
 		hush(powerLine);
+		powerLine.setAttribute('role', 'alert');
 		if (!kernel.selected) {
 			// Connecting needs a kernel: download the newest stable one first.
 			preparing = true;
@@ -521,11 +523,27 @@ export async function overview(ui) {
 	});
 	// Off, the word follows the kernel as it finishes downloading.
 	kernelUpdates.addEventListener('change', () => look === 'off' && !preparing && show('off'), { signal: ui.signal });
+	// What runs once the page is on screen.
+	const onShown = [];
+	ui.afterRender = () => {
+		for (const fn of onShown) fn();
+	};
 	// Under the status line: why the proxy is not running as asked, or what the last start said.
-	// Either keeps the proxy from working, so it is announced at once.
+	// Either keeps the proxy from working, so it is announced at once, but only as news. The page
+	// redraws at every phase, and after a fault the router's retries clear the problem while they
+	// start and set it again when they fail: the same problem back in a new line shows without
+	// being read out again, until the proxy runs or stops.
+	const problem = ui.status.error ? diagnosticMessage(ui.status.error) : '',
+		settled = ui.status.phase === 'running' || ui.status.phase === 'direct';
 	const powerLine = ui.feedback(power, null, { assertive: true });
-	if (ui.status.error)
-		say(powerLine, [diagnosticMessage(ui.status.error), ' ', ui.button('查看日志', () => ui.go('logs'), 'ow-link')], { control: power });
+	if (problem) {
+		if (ui.memory.problem === problem) powerLine.setAttribute('role', 'status');
+		say(powerLine, [problem, ' ', ui.button('查看日志', () => ui.go('logs'), 'ow-link')], { control: power });
+	}
+	onShown.push(() => {
+		if (problem) ui.memory.problem = problem;
+		else if (settled) delete ui.memory.problem;
+	});
 	let history = (ui.memory.traffic ||= []);
 	if (!running || ui.memory.run !== ui.status.running_since) {
 		history.length = 0;
@@ -854,13 +872,13 @@ export async function overview(ui) {
 		const open = () => onboarding(ui, environment, setup);
 		setup = ui.button('打开初始化引导', open, 'ow-primary');
 		const key = 'openweir.setup.seen.' + location.pathname;
-		ui.afterRender = () => {
+		onShown.push(() => {
 			if (ui.memory.setupSeen) return;
 			try { if (sessionStorage.getItem(key)) return; } catch (_) {}
 			open();
 			ui.memory.setupSeen = true;
 			try { sessionStorage.setItem(key, '1'); } catch (_) {}
-		};
+		});
 	}
 	const grid = h(
 		'div',

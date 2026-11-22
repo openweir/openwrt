@@ -1483,8 +1483,9 @@
 	padding: 0 2px;
 	vertical-align: baseline;
 }
-/* A blocking error (the service's problem under the power button) stands apart from the text around it. */
-.ow .ow-feedback[role='alert'][data-tone='error'] {
+/* A blocking error (the service's problem under the power button) stands apart from the text around
+   it, announced or not (overview.js reads out only a new one). */
+.ow .ow-feedback.ow-blocking[data-tone='error'] {
 	padding: 6px 10px;
 	border-radius: 10px;
 	background: color-mix(in srgb, var(--ow-danger) 10%, var(--ow-panel));

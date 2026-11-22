@@ -156,10 +156,10 @@ export function mount(root, invoke) {
 				return;
 			}
 			// A new attempt clears what the last one reported. A line about a blocking condition
-			// (role alert) is cleared by the page once it actually retries; a dialog's status line
-			// is cleared by any of its buttons.
+			// is cleared by the page once it actually retries; a dialog's status line is cleared by
+			// any of its buttons.
 			const line = feedbackFor(el);
-			if (line && !line.contains(el) && line.getAttribute('role') !== 'alert') hush(line);
+			if (line && !line.contains(el) && !line.classList.contains('ow-blocking')) hush(line);
 			const status = el.closest('dialog')?.querySelector('.ow-modal-status');
 			if (status) {
 				status.hidden = true;
@@ -284,8 +284,11 @@ export function mount(root, invoke) {
 				report,
 				tell,
 				// A feedback line for the controls inside scope, optionally under a key for tell().
+				// An assertive line reports a blocking condition: its control's next press leaves
+				// it to the page, which clears it once it actually retries.
 				feedback: (scope, key, { assertive = false, covered = false } = {}) => {
 					const line = feedback(scope, assertive);
+					if (assertive) line.classList.add('ow-blocking');
 					if (key) lines.set(key, covered ? null : line);
 					return line;
 				},
@@ -358,9 +361,11 @@ export function mount(root, invoke) {
 			};
 			const content = await views[page][1](ui);
 			if (controller.signal.aborted) return;
-			main.replaceChildren(content);
+			// Kept outcomes are in their new lines before these are shown: they are not news, so a
+			// screen reader does not read them out again at every redraw.
 			keyed = lines;
 			retell();
+			main.replaceChildren(content);
 			ui.afterRender?.();
 		} catch (e) {
 			if (!controller.signal.aborted) {
