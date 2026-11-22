@@ -81,7 +81,7 @@ rules:
 		t.Fatal("rule-provider ASN dependency omitted")
 	}
 	dir := filepath.Join(t.TempDir(), "sets")
-	if err := MaterializeSets(p, dir, os.Getgid()); err != nil {
+	if err := MaterializeSets(p, dir); err != nil {
 		t.Fatal(err)
 	}
 	set.Data[0] ^= 1

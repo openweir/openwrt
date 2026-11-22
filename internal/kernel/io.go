@@ -249,7 +249,7 @@ func (s Source) metadata(ctx context.Context, tag, target, key string) (material
 	v, e := Verify(key, tag, target, m.manifest, m.sig, m.caps)
 	return m, v, e
 }
-func writeAtomic(file string, data []byte, mode os.FileMode, gid int) error {
+func writeAtomic(file string, data []byte, mode os.FileMode) error {
 	dir := filepath.Dir(file)
 	f, e := os.CreateTemp(dir, ".write-")
 	if e != nil {
@@ -257,11 +257,6 @@ func writeAtomic(file string, data []byte, mode os.FileMode, gid int) error {
 	}
 	defer os.Remove(f.Name())
 	defer f.Close()
-	if gid >= 0 {
-		if e = f.Chown(-1, gid); e != nil {
-			return e
-		}
-	}
 	if e = f.Chmod(mode); e != nil {
 		return e
 	}

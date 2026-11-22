@@ -12,7 +12,6 @@ import (
 
 type Options struct {
 	Root, Temp, Target, Board, Key string
-	CoreGID                        int
 	Capacity                       func(string, string) (Capacity, error)
 	Inspect                        func(context.Context, Launch, string) error
 }
@@ -72,7 +71,7 @@ func New(o Options) (*Manager, error) {
 		m.Capacity = systemCapacity
 	}
 	if m.Inspect == nil {
-		return nil, errors.New("non-root core inspector required")
+		return nil, errors.New("restricted core inspector required")
 	}
 	return m, nil
 }
@@ -187,7 +186,7 @@ func validPick(p *pick) bool {
 func (m *Manager) commit(s *state) error {
 	if old, e := readSmall(filepath.Join(m.Root, "state.json"), maxDocument); e == nil {
 		if _, e = parseState(old); e == nil {
-			if e = writeAtomic(filepath.Join(m.Root, "state.prev.json"), old, 0600, -1); e != nil {
+			if e = writeAtomic(filepath.Join(m.Root, "state.prev.json"), old, 0600); e != nil {
 				return e
 			}
 		}
@@ -197,7 +196,7 @@ func (m *Manager) commit(s *state) error {
 	if e != nil {
 		return e
 	}
-	return writeAtomic(filepath.Join(m.Root, "state.json"), b, 0600, -1)
+	return writeAtomic(filepath.Join(m.Root, "state.json"), b, 0600)
 }
 func (m *Manager) locked(fn func(*state) error) error {
 	if e := m.setup(); e != nil {

@@ -322,15 +322,15 @@ func TestCandidateCannotReplaceLiveDeviceAddresses(t *testing.T) {
 		t.Fatal(macs)
 	}
 	dir := t.TempDir()
-	if err := ensureDeviceFiles(dir, macs, os.Getegid()); err != nil {
+	if err := ensureDeviceFiles(dir, macs); err != nil {
 		t.Fatal(err)
 	}
 	file := filepath.Join(dir, macProviderName(macs[0])+".txt")
 	data := []byte("192.0.2.11/32\n")
-	if err := writeDeviceProvider(file, data, os.Getegid()); err != nil {
+	if err := writeDeviceProvider(file, data); err != nil {
 		t.Fatal(err)
 	}
-	if err := ensureDeviceFiles(dir, macs, os.Getegid()); err != nil {
+	if err := ensureDeviceFiles(dir, macs); err != nil {
 		t.Fatal(err)
 	}
 	got, err := os.ReadFile(file)

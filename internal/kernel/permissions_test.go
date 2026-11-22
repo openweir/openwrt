@@ -42,7 +42,7 @@ func TestPrivateUmaskInstallPromotionAndRecovery(t *testing.T) {
 				requireMode(t, filepath.Dir(l.Path), 0755)
 				if cfg != "" {
 					requireMode(t, filepath.Dir(cfg), 0711)
-					requireMode(t, cfg, 0640)
+					requireMode(t, cfg, 0600)
 				}
 				return nil
 			}

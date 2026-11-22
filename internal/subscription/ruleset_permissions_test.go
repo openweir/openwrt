@@ -8,23 +8,17 @@ import (
 	"testing"
 )
 
-// With execute-only group permissions the core can initially read a known file,
-// but cannot install the directory watch for subsequent atomic replacements.
-func TestRuleDirectoryAllowsCoreWatchesAndRepairsEarlierPermissions(t *testing.T) {
+// The core runs as root and reads and watches the directory as its owner.
+func TestRuleDirectoryIsPrivateToRoot(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "rulesets")
-	for _, previous := range []bool{false, true} {
-		if previous {
-			if err := os.Chmod(dir, 0710); err != nil {
-				t.Fatal(err)
-			}
-		}
-		lock, err := lockSets(dir, os.Getgid())
+	for range 2 {
+		lock, err := lockSets(dir)
 		if err != nil {
 			t.Fatal(err)
 		}
 		unlock(lock)
 		parent, err := os.Stat(dir)
-		if err != nil || parent.Mode().Perm() != 0750 {
+		if err != nil || parent.Mode().Perm() != 0700 {
 			t.Fatal(parent, err)
 		}
 		file, err := os.Stat(filepath.Join(dir, "sets.lock"))

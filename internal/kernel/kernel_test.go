@@ -67,7 +67,7 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatal(e)
 	}
 	root := t.TempDir()
-	m, e := New(Options{Root: filepath.Join(root, "state"), Temp: filepath.Join(root, "tmp"), Target: "amd64", Key: pub.String(), CoreGID: -1, Inspect: func(_ context.Context, l Launch, cfg string) error {
+	m, e := New(Options{Root: filepath.Join(root, "state"), Temp: filepath.Join(root, "tmp"), Target: "amd64", Key: pub.String(), Inspect: func(_ context.Context, l Launch, cfg string) error {
 		_, e := os.Stat(l.Path)
 		return e
 	}, Capacity: func(string, string) (Capacity, error) {
@@ -480,7 +480,7 @@ func TestPreflightDoesNotScheduleOrExposeConfiguration(t *testing.T) {
 	m.Inspect = func(_ context.Context, l Launch, p string) error {
 		path = p
 		st, e := os.Stat(p)
-		if e != nil || st.Mode().Perm() != 0640 || p == f.cfg || l.Tag != "v1.0.0" {
+		if e != nil || st.Mode().Perm() != 0600 || p == f.cfg || l.Tag != "v1.0.0" {
 			t.Fatalf("unrestricted candidate check: %s %v", p, e)
 		}
 		return errors.New("denied by core")

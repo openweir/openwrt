@@ -118,7 +118,7 @@ func (m *Manager) Check(ctx context.Context, tag, config string) error {
 		if space.Persistent.Free < int64(len(buf))+16*MiB {
 			return errors.New("insufficient space for configuration check")
 		}
-		if e = writeAtomic(path, buf, 0640, m.CoreGID); e != nil {
+		if e = writeAtomic(path, buf, 0600); e != nil {
 			return e
 		}
 		defer os.Remove(path)
@@ -190,7 +190,7 @@ func (m *Manager) BeginAuthorized(ctx context.Context, config, expectedTag strin
 		if cap.Persistent.Free < 16*MiB+int64(len(data))+2*MiB {
 			return errors.New("insufficient storage for the config snapshot and reserve")
 		}
-		if e = writeAtomic(launch.Config, data, 0640, m.CoreGID); e != nil {
+		if e = writeAtomic(launch.Config, data, 0600); e != nil {
 			return e
 		}
 		if e = m.Inspect(ctx, launch, launch.Config); e != nil {

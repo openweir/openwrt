@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"os/user"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -85,12 +84,7 @@ func run(args []string) error {
 		}
 		return json.NewEncoder(os.Stdout).Encode(items)
 	}
-	acct, e := user.Lookup("openweir-core")
-	gid := -1
-	if e == nil {
-		gid, _ = strconv.Atoi(acct.Gid)
-	}
-	m, e := kernel.New(kernel.Options{Root: "/etc/openweir/mihomo-kernel", Temp: "/tmp/openweir/mihomo-kernel", Target: target, Board: arch, CoreGID: gid, Key: kernel.PublicKey, Inspect: inspect})
+	m, e := kernel.New(kernel.Options{Root: "/etc/openweir/mihomo-kernel", Temp: "/tmp/openweir/mihomo-kernel", Target: target, Board: arch, Key: kernel.PublicKey, Inspect: inspect})
 	if e != nil {
 		return e
 	}

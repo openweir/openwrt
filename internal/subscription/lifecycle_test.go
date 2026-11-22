@@ -43,12 +43,12 @@ func TestRevocationRetainsSharedRuleProviderUntilLastSourceRemoved(t *testing.T)
 			t.Fatal(e)
 		}
 	}
-	if e = MaterializeSets(p, dir, os.Getgid()); e != nil {
+	if e = MaterializeSets(p, dir); e != nil {
 		t.Fatal(e)
 	}
 	f := filepath.Join(dir, set.Filename())
 	st, e := os.Stat(f)
-	if e != nil || st.Mode().Perm() != 0640 {
+	if e != nil || st.Mode().Perm() != 0600 {
 		t.Fatal(e)
 	}
 	if e = store.Revoke("source"); e != nil {
@@ -70,7 +70,7 @@ func TestRevocationRetainsSharedRuleProviderUntilLastSourceRemoved(t *testing.T)
 		t.Fatal("unreferenced set persists")
 	}
 	p.BinarySets[0].SHA256 = hex.EncodeToString(make([]byte, 32))
-	if e = MaterializeSets(p, dir, os.Getgid()); e == nil {
+	if e = MaterializeSets(p, dir); e == nil {
 		t.Fatal("accepted changed data")
 	}
 }

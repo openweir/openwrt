@@ -52,10 +52,6 @@ body=$(CFG="$json" ucode -e 'printf("%J",{action:"refresh",args:{source:"fixture
 wait_job "$(call subscription_write "$body")"
 call source '{"source":"fixture"}'
 call mode '{"mode":"smart"}'
-# Reproduce an installed older directory, even if a prior operation prepared it.
-mkdir -p /etc/openweir/rulesets
-chgrp openweir-core /etc/openweir/rulesets
-chmod 0710 /etc/openweir/rulesets
 began=$(cut -d. -f1 /proc/uptime)
 prior=
 call start
@@ -71,10 +67,11 @@ done
 elapsed=$(( $(cut -d. -f1 /proc/uptime)-began ))
 [ "$elapsed" -ge 60 ]
 report daemon_first_confirm_s "$elapsed"
-[ "$(ls -ld /etc/openweir/rulesets | cut -c1-10)" = drwxr-x--- ]
+# Rule sets are private to root, which the core runs as.
+[ "$(ls -ld /etc/openweir/rulesets | cut -c1-10)" = drwx------ ]
 count=0
 for f in /etc/openweir/rulesets/*.mrs; do
- [ -f "$f" ] && [ "$(ls -l "$f" | cut -c1-10)" = -rw-r----- ]
+ [ -f "$f" ] && [ "$(ls -l "$f" | cut -c1-10)" = -rw------- ]
  count=$((count+1))
 done
 [ "$count" -eq 2 ]

@@ -118,14 +118,10 @@ func (s *System) Reload(ctx context.Context, i Intent) error {
 	if e != nil {
 		return errors.New("active subscription unavailable")
 	}
-	gid, e := coreGID()
-	if e != nil {
-		return e
-	}
-	if e = prepareMihomo(profile, gid); e != nil {
+	if e = prepareMihomo(profile); e != nil {
 		return errors.New("cannot prepare authorized rule sets")
 	}
-	if _, e = syncDevices(ctx, policyMACs(i), n, gid); e != nil {
+	if _, e = syncDevices(ctx, policyMACs(i), n); e != nil {
 		return e
 	}
 	config, e := Compile(i, profile, cap, n, client.Secret)
@@ -155,7 +151,7 @@ func (s *System) Reload(ctx context.Context, i Intent) error {
 		s.records.Log("core", "warn", "connections_not_reset")
 	}
 	s.records.CoreStarted(i.Source)
-	s.restartMonitor(i, n, gid, client)
+	s.restartMonitor(i, n, client)
 	s.mu.Lock()
 	if s.applied != nil {
 		s.applied.config = digest
@@ -167,11 +163,11 @@ func (s *System) Reload(ctx context.Context, i Intent) error {
 
 // restartMonitor replaces the device watcher and connection recorder so they
 // follow the reloaded policy.
-func (s *System) restartMonitor(i Intent, n Network, gid int, client control.Client) {
+func (s *System) restartMonitor(i Intent, n Network, client control.Client) {
 	s.mu.Lock()
 	if s.cancelMonitor != nil {
 		s.cancelMonitor()
 	}
 	s.mu.Unlock()
-	s.startMonitor(i, n, gid, client.Secret)
+	s.startMonitor(i, n, client.Secret)
 }

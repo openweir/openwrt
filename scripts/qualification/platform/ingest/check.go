@@ -27,7 +27,7 @@ func verifyCore(dir, source string, p subscription.Profile) bool {
 	caps := kernel.TargetCapabilities{Control: kernel.Controller, Naive: os.Getenv("OPENWEIR_TEST_NAIVE") == "1", TProxy: true, TUN: true}
 	b, err := router.Compile(router.Intent{Source: source, Mode: "smart"}, p, caps, router.Network{Method: "tproxy", DNS: true, Resolver: "192.0.2.53"}, strings.Repeat("synthetic-test-", 3))
 	must(err)
-	must(subscription.MaterializeSets(p, filepath.Join(coreDir, "rulesets"), os.Getegid()))
+	must(subscription.MaterializeSets(p, filepath.Join(coreDir, "rulesets")))
 	builtin, err := filepath.Abs("files/usr/share/openweir/rules")
 	must(err)
 	must(os.Symlink(builtin, filepath.Join(coreDir, "builtin")))

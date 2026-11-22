@@ -39,10 +39,10 @@ func (s BinarySet) contents() ([]byte, error) {
 	}
 	return s.Data, nil
 }
-func lockSets(dir string, gid int) (*os.File, error) {
-	// The core reads the parent directory with inotify for each local rule set.
-	// Its dedicated group needs to read and traverse the directory.
-	e := os.Mkdir(dir, 0750)
+func lockSets(dir string) (*os.File, error) {
+	// The directory is private to root, which the core runs as. The core
+	// watches it with inotify for each local rule set.
+	e := os.Mkdir(dir, 0700)
 	if e != nil && !errors.Is(e, os.ErrExist) {
 		return nil, e
 	}
@@ -53,12 +53,7 @@ func lockSets(dir string, gid int) (*os.File, error) {
 	if int(d.Sys().(*syscall.Stat_t).Uid) != os.Geteuid() {
 		return nil, errors.New("invalid_rule_directory_owner")
 	}
-	if gid >= 0 {
-		if e = os.Chown(dir, -1, gid); e != nil {
-			return nil, e
-		}
-	}
-	if e = os.Chmod(dir, 0750); e != nil {
+	if e = os.Chmod(dir, 0700); e != nil {
 		return nil, e
 	}
 	f, e := os.OpenFile(filepath.Join(dir, "sets.lock"), os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0600)
@@ -82,14 +77,14 @@ func syncDirectory(path string) error {
 
 // MaterializeSets writes the exact bytes referenced by the approved profile.
 // Both formats use content-addressed paths independent of remote tags.
-func MaterializeSets(p Profile, dir string, gid int) error {
+func MaterializeSets(p Profile, dir string) error {
 	if len(p.BinarySets) == 0 {
 		return nil
 	}
-	if len(p.BinarySets) > maxProviders || gid < 0 {
+	if len(p.BinarySets) > maxProviders {
 		return errors.New("invalid_binary_set_config")
 	}
-	lock, e := lockSets(dir, gid)
+	lock, e := lockSets(dir)
 	if e != nil {
 		return e
 	}
@@ -115,7 +110,7 @@ func MaterializeSets(p Profile, dir string, gid int) error {
 			if !st.Mode().IsRegular() {
 				return errors.New("invalid_cached_rule_file")
 			}
-			if st.Size() == int64(len(data)) && st.Mode().Perm() == 0640 && int(st.Sys().(*syscall.Stat_t).Gid) == gid && int(st.Sys().(*syscall.Stat_t).Uid) == os.Geteuid() {
+			if st.Size() == int64(len(data)) && st.Mode().Perm() == 0600 && int(st.Sys().(*syscall.Stat_t).Uid) == os.Geteuid() {
 				b, e := os.ReadFile(dst)
 				if e == nil && bytes.Equal(b, data) {
 					continue
@@ -124,25 +119,20 @@ func MaterializeSets(p Profile, dir string, gid int) error {
 		} else if !errors.Is(e, os.ErrNotExist) {
 			return e
 		}
-		if e = writeSet(dir, dst, gid, data); e != nil {
+		if e = writeSet(dir, dst, data); e != nil {
 			return e
 		}
 	}
 	return syncDirectory(dir)
 }
-func writeSet(dir, dst string, gid int, b []byte) error {
+func writeSet(dir, dst string, b []byte) error {
+	// CreateTemp makes the file 0600, private to root like its directory.
 	f, e := os.CreateTemp(dir, ".rule-set-")
 	if e != nil {
 		return e
 	}
 	defer os.Remove(f.Name())
 	if _, e = f.Write(b); e == nil {
-		e = f.Chown(-1, gid)
-	}
-	if e == nil {
-		e = f.Chmod(0640)
-	}
-	if e == nil {
 		e = f.Sync()
 	}
 	ce := f.Close()
@@ -161,7 +151,7 @@ func (s *Store) CollectSets(dir string) error {
 	if _, e := os.Lstat(dir); errors.Is(e, os.ErrNotExist) {
 		return nil
 	}
-	lock, e := lockSets(dir, -1)
+	lock, e := lockSets(dir)
 	if e != nil {
 		return e
 	}

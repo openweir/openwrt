@@ -53,14 +53,10 @@ func (s *System) Preflight(ctx context.Context, i Intent, candidate *subscriptio
 
 func checkProfile(ctx context.Context, i Intent, p subscription.Profile, cap kernel.TargetCapabilities, n Network, version string) error {
 	{
-		gid, e := coreGID()
-		if e != nil {
+		if e := prepareMihomo(p); e != nil {
 			return e
 		}
-		if e = prepareMihomo(p, gid); e != nil {
-			return e
-		}
-		if e = ensureDeviceFiles(coreHome+"/devices", policyMACs(i), gid); e != nil {
+		if e := ensureDeviceFiles(coreHome+"/devices", policyMACs(i)); e != nil {
 			return e
 		}
 	}

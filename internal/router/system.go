@@ -313,14 +313,13 @@ func (s *System) Start(ctx context.Context, i Intent) (err error) {
 	if e != nil {
 		return errors.New("active subscription unavailable")
 	}
-	gid, e := coreGID()
-	if e != nil {
+	if _, e = coreGID(); e != nil {
 		return e
 	}
-	if e = prepareMihomo(profile, gid); e != nil {
+	if e = prepareMihomo(profile); e != nil {
 		return errors.New("cannot prepare authorized rule sets")
 	}
-	if _, e = syncDevices(ctx, policyMACs(i), n, gid); e != nil {
+	if _, e = syncDevices(ctx, policyMACs(i), n); e != nil {
 		return e
 	}
 	compile := func(p subscription.Profile) ([]byte, error) { return Compile(i, p, cap, n, key) }
@@ -515,7 +514,7 @@ applyLoop:
 		s.mu.Unlock()
 	}
 	s.remember(i, n, caps.Tag, config)
-	s.startMonitor(i, n, gid, key)
+	s.startMonitor(i, n, key)
 	return nil
 }
 
@@ -557,7 +556,7 @@ func coreCommand(method string, launch kernel.Launch, work string) *exec.Cmd {
 	return cmd
 }
 
-func (s *System) startMonitor(i Intent, n Network, gid int, key string) {
+func (s *System) startMonitor(i Intent, n Network, key string) {
 	stream, end := context.WithCancel(context.Background())
 	audit := s.newAudit()
 	s.mu.Lock()
@@ -566,7 +565,7 @@ func (s *System) startMonitor(i Intent, n Network, gid int, key string) {
 	s.mu.Unlock()
 	go audit.run(stream)
 	if macs := policyMACs(i); len(macs) > 0 {
-		go s.watchDevices(stream, macs, n, gid)
+		go s.watchDevices(stream, macs, n)
 	}
 	recording := i.Policy.RecordConnections == nil || *i.Policy.RecordConnections
 	s.records.Record(recording)

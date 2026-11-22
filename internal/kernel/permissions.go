@@ -44,7 +44,7 @@ func makeManagedDir(path string, mode os.FileMode) error {
 }
 
 // The archive has already been verified. Only its recorded paths may be
-// exposed to the service account, checking ancestors before their children.
+// exposed to other accounts, checking ancestors before their children.
 func slotPermissions(root string, asset Asset) error {
 	if err := directoryMode(root, 0755); err != nil {
 		return err

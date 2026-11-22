@@ -30,7 +30,7 @@ func (m *Manager) saveMeta(tag string, mat material) error {
 	}
 	defer os.RemoveAll(tmp)
 	for n, b := range mat.parts() {
-		if e = writeAtomic(filepath.Join(tmp, n), b, 0600, -1); e != nil {
+		if e = writeAtomic(filepath.Join(tmp, n), b, 0600); e != nil {
 			return e
 		}
 	}
@@ -456,7 +456,7 @@ func (m *Manager) Bootstrap(ctx context.Context) (map[string]string, error) {
 	return map[string]string{"staged": tag}, nil
 }
 
-// Probe each capability using the actual candidate under the dedicated core UID.
+// Probe each capability using the actual candidate under the restricted core identity.
 func (m *Manager) probeFeatures(ctx context.Context, l Launch, tc TargetCapabilities) (TargetCapabilities, error) {
 	token, e := uidToken()
 	if e != nil {
@@ -466,7 +466,7 @@ func (m *Manager) probeFeatures(ctx context.Context, l Launch, tc TargetCapabili
 	defer os.Remove(path)
 	check := func(settings string) (bool, error) {
 		cfg := []byte("external-controller: 127.0.0.1:19761\nsecret: local-qualification-only\n" + settings + "\nrules: ['MATCH,DIRECT']\n")
-		if e := writeAtomic(path, cfg, 0640, m.CoreGID); e != nil {
+		if e := writeAtomic(path, cfg, 0600); e != nil {
 			return false, e
 		}
 		e := m.Inspect(ctx, l, path)

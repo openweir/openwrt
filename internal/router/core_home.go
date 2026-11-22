@@ -20,25 +20,25 @@ import (
 const coreHome = RunDir + "/mihomo"
 const packagedRules = "/usr/share/openweir/rules"
 
-func privateDir(path string, gid int) error {
-	if err := os.Mkdir(path, 0750); err != nil && !errors.Is(err, os.ErrExist) {
+// The core runs as root (coreCommand), so its home and device lists, like the rule sets
+// (subscription.MaterializeSets), are private to root: 0700 directories and 0600 files.
+// Being root, the core owns them as well; only its capabilities and no_new_privs confine it.
+func privateDir(path string) error {
+	if err := os.Mkdir(path, 0700); err != nil && !errors.Is(err, os.ErrExist) {
 		return err
 	}
 	st, err := os.Lstat(path)
 	if err != nil || !st.IsDir() || int(st.Sys().(*syscall.Stat_t).Uid) != os.Geteuid() {
 		return errors.New("unsafe core work directory")
 	}
-	if err = os.Chown(path, -1, gid); err != nil {
-		return err
-	}
-	return os.Chmod(path, 0750)
+	return os.Chmod(path, 0700)
 }
 
-func prepareMihomo(p subscription.Profile, gid int) error {
-	if err := privateDir(coreHome, gid); err != nil {
+func prepareMihomo(p subscription.Profile) error {
+	if err := privateDir(coreHome); err != nil {
 		return err
 	}
-	if err := privateDir(coreHome+"/devices", gid); err != nil {
+	if err := privateDir(coreHome + "/devices"); err != nil {
 		return err
 	}
 	for name, target := range map[string]string{
@@ -60,7 +60,7 @@ func prepareMihomo(p subscription.Profile, gid int) error {
 	if err = f.Close(); err != nil {
 		return err
 	}
-	return subscription.MaterializeSets(p, Root+"/rulesets", gid)
+	return subscription.MaterializeSets(p, Root+"/rulesets")
 }
 
 func prepareGeo(ctx context.Context, config []byte, p subscription.Profile) error {
@@ -99,7 +99,7 @@ func policyMACs(i Intent) []string {
 
 // A candidate preflight only needs readable provider files. The running core's
 // watcher owns updates so a concurrent check cannot consume a DHCP change.
-func ensureDeviceFiles(dir string, macs []string, gid int) error {
+func ensureDeviceFiles(dir string, macs []string) error {
 	for _, mac := range macs {
 		file := filepath.Join(dir, macProviderName(mac)+".txt")
 		if _, err := os.Stat(file); err == nil {
@@ -107,18 +107,13 @@ func ensureDeviceFiles(dir string, macs []string, gid int) error {
 		} else if !os.IsNotExist(err) {
 			return err
 		}
-		// Link a fully initialized empty file without replacing a concurrent update.
+		// Link a fully initialized empty file (0600, as CreateTemp makes it) without
+		// replacing a concurrent update.
 		tmp, err := os.CreateTemp(dir, ".empty-")
 		if err != nil {
 			return err
 		}
-		err = tmp.Chown(-1, gid)
-		if err == nil {
-			err = tmp.Chmod(0640)
-		}
-		if closeErr := tmp.Close(); err == nil {
-			err = closeErr
-		}
+		err = tmp.Close()
 		if err == nil {
 			err = os.Link(tmp.Name(), file)
 			if errors.Is(err, os.ErrExist) {
@@ -133,7 +128,7 @@ func ensureDeviceFiles(dir string, macs []string, gid int) error {
 	return nil
 }
 
-func syncDevices(ctx context.Context, macs []string, n Network, gid int) ([]string, error) {
+func syncDevices(ctx context.Context, macs []string, n Network) ([]string, error) {
 	if len(macs) == 0 {
 		return nil, nil
 	}
@@ -159,8 +154,7 @@ func syncDevices(ctx context.Context, macs []string, n Network, gid int) ([]stri
 		if old, e := os.ReadFile(file); e == nil && bytes.Equal(old, content) {
 			continue
 		}
-		// Set ownership before rename, so the core never observes an unreadable file.
-		if err := writeDeviceProvider(file, content, gid); err != nil {
+		if err := writeDeviceProvider(file, content); err != nil {
 			return nil, err
 		}
 		changed = append(changed, name)
@@ -168,18 +162,14 @@ func syncDevices(ctx context.Context, macs []string, n Network, gid int) ([]stri
 	return changed, nil
 }
 
-func writeDeviceProvider(path string, data []byte, gid int) error {
+// writeDeviceProvider replaces the list in one rename; CreateTemp makes it 0600.
+func writeDeviceProvider(path string, data []byte) error {
 	f, err := os.CreateTemp(filepath.Dir(path), ".device-")
 	if err != nil {
 		return err
 	}
 	defer os.Remove(f.Name())
-	if _, err = f.Write(data); err == nil {
-		err = f.Chown(-1, gid)
-	}
-	if err == nil {
-		err = f.Chmod(0640)
-	}
+	_, err = f.Write(data)
 	closeErr := f.Close()
 	if err != nil {
 		return err
@@ -190,7 +180,7 @@ func writeDeviceProvider(path string, data []byte, gid int) error {
 	return os.Rename(f.Name(), path)
 }
 
-func (s *System) watchDevices(ctx context.Context, macs []string, n Network, gid int) {
+func (s *System) watchDevices(ctx context.Context, macs []string, n Network) {
 	ticker := time.NewTicker(10 * time.Second)
 	defer ticker.Stop()
 	pending := map[string]bool{}
@@ -200,7 +190,7 @@ func (s *System) watchDevices(ctx context.Context, macs []string, n Network, gid
 			return
 		case <-ticker.C:
 		}
-		changed, err := syncDevices(ctx, macs, n, gid)
+		changed, err := syncDevices(ctx, macs, n)
 		if err != nil {
 			continue
 		}
