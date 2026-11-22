@@ -1,5 +1,5 @@
 import { diagnosticMessage, day, pluginName, conflictItem } from '../dom.js';
-import { h, card, bytes, select, field, empty, segment, modeNames, clock, resultName } from '../dom.js';
+import { h, card, bytes, select, field, empty, segment, modeNames, clock, resultName, say, hush, attach } from '../dom.js';
 import { installLatest, kernelMessage, kernelStorage, kernelSummary } from './versions.js';
 
 const states = {
@@ -130,7 +130,7 @@ function environmentRows(fields) {
 	return h('div', { class: 'ow-environment' },
 		fields.map(([key, value]) => h('div', {}, h('span', {}, key), h('strong', {}, value))));
 }
-function sourceCard(ui) {
+function sourceCard(ui, setup) {
 	const current = ui.status.intent.source;
 	const sources = [...ui.sources.filter((s) => !s.revoked)].sort(
 		(a, b) => Number(b.source === current) - Number(a.source === current),
@@ -145,6 +145,8 @@ function sourceCard(ui) {
 		),
 	);
 	box.classList.add('ow-sources');
+	// Switching fails here; a subscription added from the setup reports its import here too.
+	box.append(ui.feedback(box, 'sources'));
 	function item(s) {
 		const active = s.source === current,
 			p = s.usage || s.plan;
@@ -194,7 +196,11 @@ function sourceCard(ui) {
 			h('div', { class: 'ow-stack' }, ...sources.map(item), link),
 		));
 	}
-	if (!sources.length) box.append(empty('尚未添加订阅'));
+	// Without a subscription the card offers the setup that adds the first one.
+	if (!sources.length)
+		box.append(setup
+			? h('div', { class: 'ow-source-setup' }, h('p', {}, '添加第一个订阅，开始配置全屋代理。'), setup)
+			: empty('尚未添加订阅'));
 	if (sources.length) box.append(h('div', { class: 'ow-source-list' }, ...sources.map(item)));
 	return box;
 }
@@ -205,6 +211,12 @@ function deviceCard(ui, devices) {
 	let filter = 'all';
 	const query = h('input', { type: 'search', placeholder: '搜索名称 / IP / MAC', 'aria-label': '搜索设备' }),
 		list = h('div', {});
+	// A device's line follows its row through searches and filters.
+	const lines = new Map();
+	const reported = (row, mac) => {
+		if (!lines.has(mac)) lines.set(mac, ui.feedback());
+		return [row, attach(row, lines.get(mac))];
+	};
 	const online = devices.filter((d) => d.reachability === 'reachable').length;
 	const filters = h('div', { class: 'ow-segment', 'aria-label': '设备筛选', role: 'group' });
 	function policyOf(d) {
@@ -234,7 +246,7 @@ function deviceCard(ui, devices) {
 			});
 		for (const b of filters.children) b.setAttribute('aria-pressed', String(b.dataset.value === filter));
 		list.replaceChildren(
-			...visible.map((d) =>
+			...visible.flatMap((d) => reported(
 				h(
 					'div',
 					{ class: 'ow-device-row' },
@@ -256,7 +268,8 @@ function deviceCard(ui, devices) {
 						(v) => choose(d, v),
 					),
 				),
-			),
+				d.mac,
+			)),
 		);
 		if (!visible.length) list.append(empty('暂无匹配设备'));
 	}
@@ -344,13 +357,15 @@ export async function overview(ui) {
 			ui.go('subscriptions', 'add');
 			return;
 		}
+		// Connecting again: what stopped the last attempt no longer applies.
+		hush(powerLine);
 		if (!kernel.selected) {
 			// Connecting needs a kernel: download the newest stable one first.
 			try {
 				kernel = await installLatest(ui, kernelUpdates);
 			} catch (error) {
-				if (error.name !== 'AbortError') ui.notify(kernelMessage(error.message));
-				return;
+				if (error.name === 'AbortError') return;
+				throw Error(kernelMessage(error.message));
 			}
 		}
 		// Show the disconnect (red) control at once, pulsing until the core is up; the refresh
@@ -390,6 +405,11 @@ export async function overview(ui) {
 		}),
 	);
 	power.append(icon, h('span', {}, powerLabel));
+	// Under the status line: why the proxy is not running as asked, or what the last start said.
+	// Either keeps the proxy from working, so it is announced at once.
+	const powerLine = ui.feedback(power, null, { assertive: true });
+	if (ui.status.error)
+		say(powerLine, [diagnosticMessage(ui.status.error), ' ', ui.button('查看日志', () => ui.go('logs'), 'ow-link')], { control: power });
 	let history = (ui.memory.traffic ||= []);
 	if (!running || ui.memory.run !== ui.status.running_since) {
 		history.length = 0;
@@ -428,6 +448,7 @@ export async function overview(ui) {
 		{ class: 'ow-connection' },
 		header,
 		sub,
+		powerLine,
 		power,
 		h('strong', { class: 'ow-plan-label' }, cat.primary?.name || '尚未选择订阅'),
 		h('small', { class: 'ow-muted' }, devices.unavailable ? '等待局域网接口' : devices.items.length + ' 台局域网设备'),
@@ -476,27 +497,25 @@ export async function overview(ui) {
 		if (!rows.length) routeBox.append(empty('暂无实际代理路线'));
 	}
 	routeRows(routes.items || []);
-	const right = h(
+	const modes = h(
 		'div',
-		{ class: 'ow-route-side' },
-		h(
-			'div',
-			{ class: 'ow-modes' },
-			field(
-				'代理模式',
-				segment(ui, '代理模式', modeNames, intent.mode, async (mode) => {
-					await ui.run('mode', { mode, revision: intent.revision });
-					await ui.refresh();
-				}),
-			),
+		{ class: 'ow-modes' },
+		field(
+			'代理模式',
+			segment(ui, '代理模式', modeNames, intent.mode, async (mode) => {
+				await ui.run('mode', { mode, revision: intent.revision });
+				await ui.refresh();
+			}),
 		),
 	);
+	const right = h('div', { class: 'ow-route-side' }, modes, ui.feedback(modes));
 	if (intent.mode === 'global') {
 		const groups = await ui.rpc('groups'),
 			sel = groups['@global'];
 		const nodes = cat.nodes.filter((n) => !n.special && n.availability !== 'unsupported');
 		const saved = sel?.saved || nodes[0]?.id;
 		const grid = h('div', { class: 'ow-routes ow-global-nodes', role: 'group', 'aria-label': '全局节点' });
+		const gridLine = ui.feedback(grid);
 		for (const n of nodes) {
 			const cell = h(
 				'button',
@@ -515,11 +534,12 @@ export async function overview(ui) {
 			);
 			cell.addEventListener('click', async () => {
 				if (n.id === saved) return;
+				hush(gridLine);
 				try {
 					await ui.run('select_node', { source: intent.source, group: '@global', node: n.id });
 					await ui.refresh();
 				} catch (e) {
-					ui.notify(e.message);
+					if (e.name !== 'AbortError') ui.report(cell, e);
 				}
 			});
 			grid.append(cell);
@@ -531,7 +551,7 @@ export async function overview(ui) {
 				h('h3', {}, '全局节点'),
 				ui.button('管理代理', () => ui.go('proxy'), 'ow-link'),
 			),
-			nodes.length ? grid : empty('当前订阅没有可用节点'),
+			...(nodes.length ? [grid, gridLine] : [empty('当前订阅没有可用节点')]),
 		);
 	} else if (intent.mode === 'direct') {
 		right.append(
@@ -596,7 +616,7 @@ export async function overview(ui) {
 		check.disabled = !running;
 	}
 	drawChecks();
-	right.append(probes);
+	right.append(probes, ui.feedback(probes));
 	const hero = h('section', { class: 'ow-card ow-hero', 'aria-label': '连接状态' }, statusSide, right);
 	function toggle(label, value, fn) {
 		const b = ui.button('', () => fn(!value), 'ow-switch');
@@ -605,9 +625,11 @@ export async function overview(ui) {
 		b.setAttribute('aria-checked', String(value));
 		return b;
 	}
+	// A setting that fails to save says so on the line under its row.
+	const lined = (row, key) => [row, ui.feedback(row, key)];
 	const proxyPrefs = card(
 		'代理',
-		h(
+		lined(h(
 			'div',
 			{ class: 'ow-row' },
 			'新设备默认',
@@ -621,20 +643,20 @@ export async function overview(ui) {
 				policy.default_direct ? 'direct' : 'proxy',
 				(v) => savePolicy({ default_direct: v === 'direct' }),
 			),
-		),
-		updateRow('大陆 IP 直连', toggle('大陆 IP 直连', !!prefs.bypass_cn, (v) => saveP({ bypass_cn: v })),
-			h('small', { class: 'ow-muted' }, '国内 IP 不经内核，更快；全局模式下不生效')),
-		h(
+		)),
+		lined(updateRow('大陆 IP 直连', toggle('大陆 IP 直连', !!prefs.bypass_cn, (v) => saveP({ bypass_cn: v })),
+			h('small', { class: 'ow-muted' }, '国内 IP 不经内核，更快；全局模式下不生效'))),
+		lined(h(
 			'div',
 			{ class: 'ow-row' },
 			'开机启动',
 			toggle('开机启动', prefs.enabled, (v) => saveP({ enabled: v })),
-		),
+		)),
 	);
 	const dnsPrefs = card(
 		'DNS',
-		updateRow('DNS 保护', toggle('DNS 保护', prefs.dns, (v) => saveP({ dns: v })),
-			h('small', { class: 'ow-muted' }, '由内核解析，防污染')),
+		lined(updateRow('DNS 保护', toggle('DNS 保护', prefs.dns, (v) => saveP({ dns: v })),
+			h('small', { class: 'ow-muted' }, '由内核解析，防污染'))),
 		upstreamRow(ui, '国内域名', '直连解析', 'domestic', prefs.dns_domestic, (v) => saveP({ dns_domestic: v })),
 		upstreamRow(ui, '其他域名', '经代理加密解析', 'foreign', prefs.dns_foreign, (v) => saveP({ dns_foreign: v })),
 	);
@@ -659,7 +681,7 @@ export async function overview(ui) {
 						} });
 						await ui.refresh();
 						d.close();
-						ui.notify('已恢复默认设置');
+						ui.tell('repair', '已恢复默认设置', 'done');
 					} catch (e) {
 						ui.notify(e.message);
 					}
@@ -668,35 +690,34 @@ export async function overview(ui) {
 	};
 	const repair = card(
 		'',
-		h('div', { class: 'ow-row' }, h('h2', {}, '故障与恢复'), ui.button('恢复默认', restoreDefaults, 'ow-link')),
-		h('div', { class: 'ow-row' }, '防火墙', ui.button('检查运行环境', async () => {
+		// 恢复默认 confirms here once its dialog closes.
+		lined(h('div', { class: 'ow-row' }, h('h2', {}, '故障与恢复'), ui.button('恢复默认', restoreDefaults, 'ow-link')), 'repair'),
+		lined(h('div', { class: 'ow-row' }, '防火墙', ui.button('检查运行环境', async () => {
 			const env = await ui.rpc('environment');
 			if (!ui.signal.aborted) ui.dialog('防火墙运行环境', environmentRows(firewallDetails(env)));
-		}, 'ow-link')),
-		updateRow(failOpenLabel, fallback, h('small', { id: 'ow-fail-open-help', class: 'ow-muted' }, failOpen
+		}, 'ow-link'))),
+		lined(updateRow(failOpenLabel, fallback, h('small', { id: 'ow-fail-open-help', class: 'ow-muted' }, failOpen
 			? '连续 3 次检查失败后恢复直连'
-			: '内核故障时代理流量中断')),
-		updateRow('节点失联时自动切换',
+			: '内核故障时代理流量中断'))),
+		lined(updateRow('节点失联时自动切换',
 			toggle('节点失联时自动切换', policy.auto_failover !== false, (v) => savePolicy({ auto_failover: v })),
-			h('small', { class: 'ow-muted' }, '切到同组可用节点')),
-		h(
+			h('small', { class: 'ow-muted' }, '切到同组可用节点'))),
+		lined(h(
 			'div',
 			{ class: 'ow-row' },
 			'记录连接',
 			toggle('记录连接', policy.record_connections !== false, (v) => savePolicy({ record_connections: v })),
-		),
+		)),
 		ui.button('查看日志', () => ui.go('logs'), 'ow-link'),
 	);
 	const updates = card(
 		'更新',
-		h(
+		lined(h(
 			'div',
 			{ class: 'ow-row' },
 			'订阅自动更新',
-			toggle('订阅自动更新', prefs.update_hours > 0, (on) =>
-				saveP({ update_hours: on ? ui.memory.updateHours || 6 : 0 }).catch((e) => ui.notify(e.message)),
-			),
-		),
+			toggle('订阅自动更新', prefs.update_hours > 0, (on) => saveP({ update_hours: on ? ui.memory.updateHours || 6 : 0 })),
+		)),
 		prefs.update_hours > 0 && updateInterval(ui, prefs.update_hours, saveP),
 		updateRow('OpenWeir 插件', ...pluginUpdate(ui)),
 		updateRow(...kernelSummary(ui, kernel, kernelUpdates)),
@@ -705,19 +726,8 @@ export async function overview(ui) {
 		updateRow('大陆域名与 IP 列表', h('small', { class: 'ow-muted' }, '每周自动更新'),
 			h('small', { class: 'ow-muted' }, ui.status.china_lists ? '更新于 ' + day(ui.status.china_lists) : '插件内置版本')),
 	);
-	const grid = h(
-		'div',
-		{ class: 'ow-dashboard' },
-		hero,
-		// Subscriptions share the column beside the hero.
-		h('div', { class: 'ow-side-stack' }, sourceCard(ui)),
-		devices.unavailable ? card('设备',empty('局域网接口尚未就绪'),ui.button('重新检测',ui.refresh,'ow-link')) : deviceCard(ui, devices.items),
-		proxyPrefs,
-		dnsPrefs,
-		repair,
-		updates,
-	);
-	const content = h('div', { class: 'ow-stack' });
+	// Without a subscription the setup opens once; the subscription card offers it again.
+	let setup = null;
 	if (!ui.sources.some((s) => !s.revoked)) {
 		const [{ onboarding }, env, conflicts] = await Promise.all([
 			import('./sources.js'), ui.rpc('environment').catch(() => null), ui.rpc('conflicts').catch(() => null),
@@ -729,8 +739,7 @@ export async function overview(ui) {
 			['可用存储', bytes(env?.free_bytes)],
 		]);
 		const open = () => onboarding(ui, environment, setup);
-		const setup = ui.button('打开初始化引导', open, 'ow-primary');
-		content.append(h('div', { class: 'ow-row ow-card' }, h('span', {}, '添加第一个订阅，开始配置全屋代理。'), setup));
+		setup = ui.button('打开初始化引导', open, 'ow-primary');
 		const key = 'openweir.setup.seen.' + location.pathname;
 		ui.afterRender = () => {
 			if (ui.memory.setupSeen) return;
@@ -740,16 +749,20 @@ export async function overview(ui) {
 			try { sessionStorage.setItem(key, '1'); } catch (_) {}
 		};
 	}
-	if (ui.status.error)
-		content.append(
-			h(
-				'div',
-				{ class: 'ow-warning', role: 'alert' },
-				diagnosticMessage(ui.status.error),
-				ui.button('查看日志', () => ui.go('logs'), 'ow-link'),
-			),
-		);
-	content.append(grid);
+	const grid = h(
+		'div',
+		{ class: 'ow-dashboard' },
+		hero,
+		// Subscriptions share the column beside the hero.
+		h('div', { class: 'ow-side-stack' }, sourceCard(ui, setup)),
+		devices.unavailable ? card('设备',empty('局域网接口尚未就绪'),ui.button('重新检测',ui.refresh,'ow-link')) : deviceCard(ui, devices.items),
+		proxyPrefs,
+		dnsPrefs,
+		repair,
+		updates,
+	);
+	// The service's problem sits under the power button's status line, not above the page.
+	const content = h('div', { class: 'ow-stack' }, grid);
 	ui.poll(async () => {
 		const st = await ui.rpc('status');
 		if (ui.signal.aborted) return;
@@ -788,6 +801,7 @@ function pluginUpdate(ui) {
 	}
 	action.addEventListener('click', async () => {
 		note.textContent = '';
+		delete note.dataset.tone;
 		try {
 			if (candidate) {
 				show('正在更新…');
@@ -803,7 +817,10 @@ function pluginUpdate(ui) {
 			latest = !candidate;
 			note.textContent = '当前 v' + info.installed.replace(/^v/, '');
 		} catch (error) {
-			if (error.name !== 'AbortError') note.textContent = error.message;
+			if (error.name !== 'AbortError') {
+				note.textContent = error.message;
+				note.dataset.tone = 'error';
+			}
 		} finally {
 			show();
 		}
@@ -811,17 +828,20 @@ function pluginUpdate(ui) {
 	return [action, note];
 }
 
-// Hours between automatic subscription refreshes, typed by the user (1–720).
+// Hours between automatic subscription refreshes, typed by the user (1–720). A value out of
+// range or a failed save is reported on the line under the field.
 function updateInterval(ui, hours, saveP) {
 	ui.memory.updateHours = hours;
+	const line = ui.feedback();
 	const input = h('input', {
 		type: 'number', min: 1, max: 720, step: 1, inputmode: 'numeric', value: hours,
-		'aria-label': '更新间隔（小时）', class: 'ow-hours',
+		'aria-label': '更新间隔（小时）', class: 'ow-hours', 'aria-describedby': line.id,
 	});
 	input.addEventListener('change', async () => {
+		hush(line);
 		const value = Number(input.value);
 		if (!Number.isInteger(value) || value < 1 || value > 720) {
-			ui.notify('请输入 1 到 720 之间的整数小时');
+			say(line, '请输入 1 到 720 之间的整数小时');
 			input.value = hours;
 			return;
 		}
@@ -830,11 +850,11 @@ function updateInterval(ui, hours, saveP) {
 			ui.memory.updateHours = value;
 			await saveP({ update_hours: value });
 		} catch (e) {
-			ui.notify(e.message);
+			if (e.name !== 'AbortError') say(line, e.message);
 			input.value = hours;
 		}
 	});
-	return h('div', { class: 'ow-row' }, '更新间隔', h('span', { class: 'ow-actions' }, '每', input, '小时'));
+	return [h('div', { class: 'ow-row' }, '更新间隔', h('span', { class: 'ow-actions' }, '每', input, '小时')), line];
 }
 
 // Upstreams show a short summary; a dialog edits the list and restores the built-in servers.
@@ -864,10 +884,13 @@ function upstreamRow(ui, title, note, kind, list, save) {
 		let items = [...current];
 		const rows = h('div', { class: 'ow-stack' });
 		const presets = h('div', { class: 'ow-dns-presets' });
+		// The dialog reports beside its own controls: the list limit and a failed save.
+		const body = h('div', { class: 'ow-stack' });
+		const line = ui.feedback(body);
 		const add = (v) => {
 			if (!v || items.includes(v)) return false;
 			if (items.length >= 4) {
-				ui.notify('最多 4 个服务器');
+				say(line, '最多 4 个服务器', { control: input });
 				return false;
 			}
 			items.push(v);
@@ -891,7 +914,7 @@ function upstreamRow(ui, title, note, kind, list, save) {
 				h('code', { class: 'ow-upstream' }, v),
 				ui.button('移除', () => { items.splice(i, 1); render(); }, 'ow-link'))));
 		};
-		const d = ui.dialog(title + ' DNS', h('div', { class: 'ow-stack' },
+		body.append(
 			h('small', { class: 'ow-muted' }, '常用服务器'),
 			presets,
 			h('small', { class: 'ow-muted' }, '已选（按顺序使用）'),
@@ -901,16 +924,14 @@ function upstreamRow(ui, title, note, kind, list, save) {
 			}, 'ow-link')),
 			h('div', { class: 'ow-row' },
 				ui.button('恢复内置', () => { items = [...builtin]; render(); }, 'ow-link'),
-				ui.button('保存', async () => {
-					if (!items.length) return ui.notify('至少保留 1 个服务器');
-					try {
-						await save(items);
-						d.close();
-					} catch (e) {
-						ui.notify(e.message);
-					}
+				ui.button('保存', async (ev) => {
+					if (!items.length) return say(line, '至少保留 1 个服务器', { control: ev.currentTarget });
+					await save(items);
+					d.close();
 				}, 'ow-primary')),
-		));
+			line,
+		);
+		const d = ui.dialog(title + ' DNS', body);
 		render();
 	};
 	return updateRow(title, ui.button('管理', open, 'ow-link'),

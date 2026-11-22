@@ -66,17 +66,20 @@ export function kernelStorage(ui, status, updates, segment) {
 		note.textContent = mode === 'tmp'
 			? '不占闪存，重启后重新下载'
 			: '重启保留，可回退上一版';
+		delete note.dataset.tone;
 	};
 	describe(storageOf(status));
 	const control = segment(ui, '内核存储位置', storageModes, storageOf(status), async (mode) => {
 		if (!status.selected) return describe(mode);
 		note.textContent = '正在切换…';
+		delete note.dataset.tone;
 		try {
 			await ui.run('kernel_write', { action: 'install-json', args: { tag: status.selected, mode } });
 			status = await refresh(ui, updates);
 			describe(storageOf(status));
 		} catch (error) {
 			note.textContent = kernelMessage(error.message);
+			note.dataset.tone = 'error';
 		}
 	});
 	updates.addEventListener('change', (e) => { status = e.detail; }, { signal: ui.signal });
@@ -96,7 +99,10 @@ export function kernelSummary(ui, status, updates, setup = false) {
 		try {
 			await work();
 		} catch (error) {
-			if (error.name !== 'AbortError') note.textContent = kernelMessage(error.message);
+			if (error.name !== 'AbortError') {
+				note.textContent = kernelMessage(error.message);
+				note.dataset.tone = 'error';
+			}
 		} finally {
 			busy = '';
 			update(status);
@@ -131,12 +137,17 @@ export function kernelSummary(ui, status, updates, setup = false) {
 			note.textContent = '';
 			delete note.dataset.version;
 		}
+		if (!note.textContent) delete note.dataset.tone;
 		if (status.pending && !note.textContent) note.textContent = '新内核正在确认运行正常';
 		const failure = state === '下载失败' && (status.bootstrap.result?.error || status.bootstrap.error);
-		if (failure && !busy && !note.textContent) note.textContent = kernelMessage(failure);
+		if (failure && !busy && !note.textContent) {
+			note.textContent = kernelMessage(failure);
+			note.dataset.tone = 'error';
+		}
 		if (!setup && (!note.textContent || note.dataset.version)) {
 			note.textContent = status.selected ? '当前 ' + status.selected : current;
 			note.dataset.version = '1';
+			delete note.dataset.tone;
 		}
 		let name = busy;
 		if (!name) {
