@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -96,6 +98,129 @@ func TestFailingRefreshBacksOff(t *testing.T) {
 	src.Attempts, src.AttemptedAt = 0, ""
 	if !dueForRefresh(src, now, now.Add(-16*time.Minute), 0) {
 		t.Fatal("successful source delayed")
+	}
+}
+
+// A link whose first import failed on the way, as when it is added while the router has no
+// internet, is retried with the back-off until it imports; one whose failure a retry cannot
+// change waits for the administrator.
+func TestFailedFirstImportRetriesOnlyTransientFailures(t *testing.T) {
+	now := time.Now().UTC()
+	at := now.Format(time.RFC3339)
+	for _, code := range []string{"subscription_request_failed", "subscription_http_500", "subscription_http_502", "subscription_http_503", "subscription_http_429", "subscription_http_408",
+		"provider_timeout", "provider_dns_failed", "provider_connection_refused", "provider_unreachable", "provider_incomplete", "provider_http_504", "provider_http_429"} {
+		for _, kind := range []string{"external", "platform"} {
+			src := subscription.Status{Kind: kind, LastFailure: code, Attempts: 1, AttemptedAt: at}
+			for _, interval := range []time.Duration{0, 24 * time.Hour} {
+				if dueForRefresh(src, now.Add(14*time.Minute), time.Time{}, interval) || !dueForRefresh(src, now.Add(15*time.Minute), time.Time{}, interval) {
+					t.Fatal("transient failure not retried after its back-off", kind, code, interval)
+				}
+			}
+			// Back-off doubles with each attempt; the in-process spacing still applies.
+			src.Attempts = 3
+			if dueForRefresh(src, now.Add(59*time.Minute), time.Time{}, 0) || !dueForRefresh(src, now.Add(time.Hour), time.Time{}, 0) || dueForRefresh(src, now.Add(time.Hour), now.Add(50*time.Minute), 0) {
+				t.Fatal("retry ignored the back-off", kind, code)
+			}
+		}
+	}
+	for _, code := range []string{"", "update_failed", "subscription_http_400", "subscription_http_403", "subscription_http_404", "subscription_http_410", "subscription_http_5000", "subscription_http_x",
+		"subscription_tls_untrusted", "subscription_tls_not_yet_valid", "subscription_web_page", "subscription_message", "subscription_empty", "unsupported_format", "no_usable_nodes",
+		"nonstandard_snell_credential", "invalid_credential", "subscription_link_unavailable", "invalid_plan_detail", "provider_http_404", "provider_tls_untrusted", "private_provider_address",
+		"provider_redirect_refused", "provider_download_failed", "provider_size_limit", "invalid_proxy_provider", "provider_cancelled"} {
+		src := subscription.Status{Kind: "external", LastFailure: code, Attempts: 1, AttemptedAt: now.Add(-7 * time.Hour).Format(time.RFC3339)}
+		if dueForRefresh(src, now, time.Time{}, time.Hour) {
+			t.Fatal("retried a failure a retry cannot change", code)
+		}
+	}
+	// Sources removed, needing a login, suspended or read from a file are never retried.
+	for _, src := range []subscription.Status{
+		{Kind: "external", Revoked: true},
+		{Kind: "platform", LoginRequired: true},
+		{Kind: "platform", Suspended: true},
+		{Kind: "file"},
+	} {
+		src.LastFailure = "subscription_request_failed"
+		if dueForRefresh(src, now, time.Time{}, time.Hour) {
+			t.Fatalf("retried %+v", src)
+		}
+	}
+}
+
+// Through the store: an offline first import records a transient failure that the scheduler
+// retries with a growing back-off, and the retry that reaches the subscription imports it. A
+// permanent answer stops the retries.
+func TestOfflineFirstImportCompletesBySchedule(t *testing.T) {
+	store := subscription.OpenStore(t.TempDir())
+	src := subscription.Source{ID: "sub", Name: "sub", Kind: "external", URL: "https://example.com/feed"}
+	if err := store.Configure(src); err != nil {
+		t.Fatal(err)
+	}
+	offline := true
+	status := http.StatusOK
+	body := "proxies: [{name: Edge, type: http, server: edge.example, port: 8080}]\nrules: ['MATCH,DIRECT']"
+	f := subscription.Fetcher{Client: &http.Client{Transport: feedTransport(func(*http.Request) (*http.Response, error) {
+		if offline {
+			return nil, &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ENETUNREACH}
+		}
+		return &http.Response{StatusCode: status, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})}}
+	due := func(st subscription.Status, attempts int) {
+		t.Helper()
+		at, err := time.Parse(time.RFC3339, st.AttemptedAt)
+		if err != nil || st.Ready || st.Attempts != attempts {
+			t.Fatal(err, st.Ready, st.Attempts)
+		}
+		wait := retryDelay(attempts, 0)
+		if dueForRefresh(st, at.Add(wait-time.Minute), time.Time{}, 0) || !dueForRefresh(st, at.Add(wait), time.Time{}, 0) {
+			t.Fatal("not retried after its back-off", st.LastFailure, attempts)
+		}
+	}
+	// The administrator adds the link while the router has no internet.
+	if _, err := f.Refresh(t.Context(), store, src.ID, nil, subscription.Policy{}); err == nil || err.Error() != "subscription_request_failed" {
+		t.Fatal(err)
+	}
+	st, err := store.Status(src.ID)
+	if err != nil || st.LastFailure != "subscription_request_failed" {
+		t.Fatal(err, st.LastFailure)
+	}
+	due(st, 1)
+	// The first scheduled retry is still offline: the next one waits twice as long.
+	if _, err := f.Refresh(t.Context(), store, src.ID, nil, subscription.Policy{Scheduled: true}); err == nil {
+		t.Fatal("offline refresh succeeded")
+	}
+	st, _ = store.Status(src.ID)
+	due(st, 2)
+	// The provider is overloaded, then the subscription arrives.
+	offline, status = false, http.StatusServiceUnavailable
+	if _, err := f.Refresh(t.Context(), store, src.ID, nil, subscription.Policy{Scheduled: true}); err == nil {
+		t.Fatal("503 imported")
+	}
+	st, _ = store.Status(src.ID)
+	if st.LastFailure != "subscription_http_503" {
+		t.Fatal(st.LastFailure)
+	}
+	due(st, 3)
+	status = http.StatusOK
+	c, err := f.Refresh(t.Context(), store, src.ID, nil, subscription.Policy{Scheduled: true})
+	if err != nil || c.Decision != "ready" {
+		t.Fatal(err, c.Decision)
+	}
+	st, _ = store.Status(src.ID)
+	if !st.Ready || st.LastFailure != "" || st.Attempts != 0 || st.PendingUpdate != nil {
+		t.Fatalf("%+v", st)
+	}
+	// A link the provider no longer serves is not retried until the administrator acts.
+	other := subscription.Source{ID: "gone", Name: "gone", Kind: "external", URL: "https://example.com/gone"}
+	if err := store.Configure(other); err != nil {
+		t.Fatal(err)
+	}
+	status = http.StatusNotFound
+	if _, err := f.Refresh(t.Context(), store, other.ID, nil, subscription.Policy{}); err == nil {
+		t.Fatal("404 imported")
+	}
+	st, _ = store.Status(other.ID)
+	if st.LastFailure != "subscription_http_404" || dueForRefresh(st, time.Now().Add(7*time.Hour), time.Time{}, 0) {
+		t.Fatal("permanent failure retried", st.LastFailure)
 	}
 }
 
