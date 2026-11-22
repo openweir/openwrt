@@ -32,9 +32,9 @@ const coreFiles = 1000000
 // the program sets the limit itself, as here: from now on the core inherits the limit.
 // The kernel refuses a hard limit above fs.nr_open, even to root. procd's own setrlimit then
 // failed as well and left openweird at its default, so the limit becomes n capped at
-// fs.nr_open, the most root may hold; should that fail too (raising a hard limit takes
-// CAP_SYS_RESOURCE), the soft limit is raised to the hard one. The error tells that the core
-// holds less than n.
+// fs.nr_open, the most root may hold, which is no fault worth reporting; should that fail too
+// (raising a hard limit takes CAP_SYS_RESOURCE), the soft limit is raised to the hard one, and
+// the error tells that the core holds less than it could.
 func setFileLimit(n uint64) error {
 	err := setFiles(n)
 	if err == nil {
@@ -45,6 +45,9 @@ func setFileLimit(n uint64) error {
 	_ = syscall.Getrlimit(syscall.RLIMIT_NOFILE, &held)
 	for _, v := range fileLimitFallbacks(n, nrOpen, held.Max) {
 		if setFiles(v) == nil {
+			if ceiling, e := strconv.ParseUint(strings.TrimSpace(string(nrOpen)), 10, 64); e == nil && v == ceiling {
+				return nil
+			}
 			break
 		}
 	}

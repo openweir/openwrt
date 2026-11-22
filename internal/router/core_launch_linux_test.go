@@ -108,7 +108,8 @@ func TestSetFileLimitReachesChildren(t *testing.T) {
 	if err := setFileLimit(min(nrOpen, 4096)); err != nil {
 		t.Fatal(err)
 	}
-	if err := setFileLimit(nrOpen + 1); !errors.Is(err, syscall.EPERM) {
+	// The ceiling is the most anyone may hold, so reaching it is no failure.
+	if err := setFileLimit(nrOpen + 1); err != nil {
 		t.Fatal(err)
 	}
 	if got, want := child(), strings.TrimSpace(string(b)); got != want+" "+want {
