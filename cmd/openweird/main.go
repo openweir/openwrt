@@ -232,17 +232,6 @@ func (s *app) handle(ctx context.Context, method string, r request) (any, error)
 	case "live_groups":
 		v, e := s.sys.Client().Groups(ctx)
 		return items(v), e
-	case "live_rules":
-		rules, err := s.sys.Client().Rules(ctx)
-		if err != nil {
-			return nil, err
-		}
-		offset := min(max(r.Offset, 0), len(rules))
-		limit := r.Limit
-		if limit <= 0 {
-			limit = 50
-		}
-		return map[string]any{"items": rules[offset : offset+min(min(limit, 100), len(rules)-offset)], "total": len(rules)}, nil
 	case "traffic":
 		return s.sys.Client().Traffic(ctx)
 	case "routes":

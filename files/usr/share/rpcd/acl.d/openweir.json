@@ -19,7 +19,6 @@
           "logs",
           "connections",
           "rule_hits",
-          "live_rules",
           "task",
           "subscription_read",
           "kernel_read",

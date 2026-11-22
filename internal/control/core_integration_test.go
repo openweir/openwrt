@@ -14,6 +14,13 @@ import (
 	"time"
 )
 
+// coreRules reads the rules the core is running, to see that a payload reload took effect.
+func coreRules(ctx context.Context, c Client) ([]struct{ Proxy string }, error) {
+	var r struct{ Rules []struct{ Proxy string } }
+	e := c.call(ctx, "GET", "/rules", nil, &r)
+	return r.Rules, e
+}
+
 // Runs the actual fork with temporary state. The test transport redirects only
 // the controller socket, so it can coexist with a user's running proxy.
 func TestMihomoController(t *testing.T) {
@@ -78,7 +85,7 @@ func TestMihomoController(t *testing.T) {
 	if err = c.Select(ctx, "Test/A", "@direct"); err != nil {
 		t.Fatal(err)
 	}
-	rules, err := c.Rules(ctx)
+	rules, err := coreRules(ctx, c)
 	if err != nil || len(rules) != 1 || rules[0].Proxy != "Test/A" {
 		t.Fatal(rules, err)
 	}
@@ -87,7 +94,7 @@ func TestMihomoController(t *testing.T) {
 	if err = c.ReloadPayload(ctx, []byte(next)); err != nil {
 		t.Fatal(err)
 	}
-	if rules, err = c.Rules(ctx); err != nil || len(rules) != 2 {
+	if rules, err = coreRules(ctx, c); err != nil || len(rules) != 2 {
 		t.Fatal(rules, err)
 	}
 	if err = c.ReloadPayload(ctx, []byte("proxy-groups: [")); err == nil {

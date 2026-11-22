@@ -186,18 +186,6 @@ func (c Client) RefreshRules(ctx context.Context, provider string) error {
 	return c.call(ctx, "PUT", "/providers/rules/"+name, nil, nil)
 }
 
-type Rule struct {
-	Type    string `json:"type"`
-	Payload string `json:"payload"`
-	Proxy   string `json:"proxy"`
-}
-
-func (c Client) Rules(ctx context.Context) ([]Rule, error) {
-	var r struct{ Rules []Rule }
-	e := c.call(ctx, "GET", "/rules", nil, &r)
-	return r.Rules, e
-}
-
 // CloseConnections closes every connection the core relays. Mihomo keeps open connections on
 // the route they started with when its configuration or a selection changes, so clients close
 // them to make the change take effect at once.
