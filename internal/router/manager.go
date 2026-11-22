@@ -69,6 +69,9 @@ type Reloader interface {
 
 var errHotFallback = errors.New("hot reload fell back to restart")
 
+// ErrRevisionChanged rejects a change made against a configuration revision that is no longer current.
+var ErrRevisionChanged = errors.New("configuration revision changed")
+
 func New(s Store, b Backend, t Timing) *Manager {
 	m := &Manager{instance: newInstance(), store: s, backend: b, timing: t, wake: make(chan struct{}, 1), hot: make(chan struct{}, 1), groups: map[string]GroupResult{}, lanes: map[string]uint64{}}
 	v, e := s.Load()
@@ -111,7 +114,7 @@ func (m *Manager) Change(expected *uint64, edit func(*Intent) error) (uint64, er
 	}
 	i := m.state.Intent.clone()
 	if expected != nil && *expected != i.Revision {
-		return 0, errors.New("configuration revision changed")
+		return 0, ErrRevisionChanged
 	}
 	if e := edit(&i); e != nil {
 		return 0, e

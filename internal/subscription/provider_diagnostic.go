@@ -35,7 +35,7 @@ func (p *ProviderDiagnostic) Unwrap() error {
 
 func (p *ProviderDiagnostic) Error() string { return p.Code }
 
-var providerCodes = set("invalid_provider_url provider_timeout provider_dns_failed provider_tls_untrusted provider_tls_expired provider_tls_not_yet_valid provider_tls_hostname provider_tls_verification_failed provider_unreachable provider_connection_refused private_provider_address provider_redirect_refused provider_download_failed provider_limit provider_size_limit invalid_proxy_provider invalid_rule_provider duplicate_rule_provider node_limit rule_limit provider_incomplete provider_cancelled provider_kernel_unavailable provider_detour_unavailable")
+var providerCodes = set("invalid_provider_url provider_timeout provider_dns_failed provider_tls_untrusted provider_tls_expired provider_tls_not_yet_valid provider_tls_hostname provider_tls_verification_failed provider_unreachable provider_connection_refused private_provider_address provider_redirect_refused provider_download_failed provider_limit provider_size_limit invalid_proxy_provider invalid_rule_provider node_limit rule_limit provider_incomplete provider_cancelled")
 
 func providerFailure(kind, raw string, cause error) error {
 	if kind != "rule" && kind != "node" {

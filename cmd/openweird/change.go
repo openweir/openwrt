@@ -50,7 +50,7 @@ func (s *app) change(ctx context.Context, method string, r request) (any, error)
 	status := s.m.Status()
 	next := status.Intent
 	if r.Revision != nil && *r.Revision != next.Revision {
-		return nil, errors.New("configuration revision has changed")
+		return nil, router.ErrRevisionChanged
 	}
 	switch method {
 	case "mode":
