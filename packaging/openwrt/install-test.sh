@@ -4,6 +4,7 @@ set -eu
 release=${1:?firmware}; arch=${2:?package arch}; feed=${3:?directory with the package for this architecture}
 rootfs=${OPENWEIR_TEST_ROOTFS:-openwrt/rootfs:$arch-$release}
 base=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+. "$base/retry.sh"
 response=$(mktemp)
 release_tool=$(mktemp)
 network= server= target= generated=
@@ -18,15 +19,34 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'exit 1' TERM INT
-(cd "$base/../.." && go build -o "$release_tool" ./cmd/openweir-release)
+# Every command run in a container is bounded: a stuck package manager or service fails
+# the job instead of holding the runner.
+in_target() { bounded 600 docker exec "$target" "$@"; }
+in_server() { bounded 600 docker exec "$server" "$@"; }
+# The build job compiled this tool already; what can fail here is the module download.
+(cd "$base/../.." && retry go build -o "$release_tool" ./cmd/openweir-release)
 # Official rootfs manifests use the OpenWrt package architecture as the OCI platform.
 target_platform=${DOCKER_DEFAULT_PLATFORM:-}
 if [ -z "${OPENWEIR_TEST_ROOTFS:-}" ]; then target_platform=linux/$arch; fi
-if ! docker image inspect "$rootfs" >/dev/null 2>&1 && ! DOCKER_DEFAULT_PLATFORM="$target_platform" docker pull "$rootfs"; then
+# Many architectures have no rootfs image. That answer is final; other pull failures are
+# retried, and the ImageBuilder remains the fallback once they run out.
+rootfs_missing=
+pull_rootfs() {
+ _pull_status=0
+ _pull=$(export DOCKER_DEFAULT_PLATFORM="$target_platform"; bounded 900 docker pull "$rootfs" 2>&1) || _pull_status=$?
+ printf '%s\n' "$_pull" >&2
+ case "$_pull_status:$_pull" in
+  0:*) return 0 ;;
+  *'manifest unknown'*|*'no matching manifest'*|*': not found'*) rootfs_missing=1; return 0 ;;
+ esac
+ return "$_pull_status"
+}
+if ! docker image inspect "$rootfs" >/dev/null 2>&1 && { ! retry pull_rootfs || [ -n "$rootfs_missing" ]; }; then
  [ -z "${OPENWEIR_TEST_ROOTFS:-}" ] || exit 1
  generated=$(sh "$base/test-rootfs.sh" "$release" "$arch")
  rootfs=$generated
 fi
+docker image inspect busybox:1.37 >/dev/null 2>&1 || retry bounded 300 docker pull --quiet busybox:1.37
 network=$(docker network create openweir-pkg-test-$$)
 server=$(docker create --network "$network" --network-alias feed busybox:1.37 httpd -f -p 8080 -h /srv)
 docker cp "$feed/." "$server:/srv"
@@ -36,7 +56,7 @@ docker start "$server" >/dev/null
 serve_release() {
  subtree=$1; shift
  asset=$("$release_tool" fake-latest "$feed$subtree" "$response" "$@")
- docker exec "$server" sh -ec '
+ in_server sh -ec '
   directory=/srv/releases/download/${1%/*}
   mkdir -p "$directory"
   ln -sf "/srv$2/${1##*/}" "$directory/${1##*/}"
@@ -45,50 +65,53 @@ serve_release() {
  docker cp "$response" "$server:/srv/releases/latest"
 }
 serve_release ""
-target=$(DOCKER_DEFAULT_PLATFORM="$target_platform" docker create --network "$network" --cap-add NET_ADMIN -e "OPENWEIR_PACKAGE_ARCH=$package_arch" --entrypoint sh "$rootfs" -c 'while :; do sleep 600; done')
+# The shell stays PID 1 and reaps orphans while it waits. The router lives an hour at
+# most, should this script die before its cleanup.
+target=$(DOCKER_DEFAULT_PLATFORM="$target_platform" docker create --network "$network" --cap-add NET_ADMIN -e "OPENWEIR_PACKAGE_ARCH=$package_arch" --entrypoint sh "$rootfs" -c 'for _ in 1 2 3 4 5 6; do sleep 600; done')
 docker start "$target" >/dev/null
+docker cp "$base/retry.sh" "$target:/tmp/openweir-retry"
 docker cp "$base/check-web.sh" "$target:/tmp/check-web"
 docker cp "$base/check-installed.sh" "$target:/tmp/check-installed"
-docker exec "$target" mkdir /tmp/verified-feed
+in_target mkdir /tmp/verified-feed
 case "$release" in
  25.*) set -- "$feed"/SHA256SUMS "$feed"/*.apk ;;
  *) set -- "$feed"/SHA256SUMS "$feed"/*.ipk ;;
 esac
 for item do docker cp "$item" "$target:/tmp/verified-feed/"; done
 docker cp "$feed/baseline" "$target:/tmp/openweir-baseline"
-docker exec "$target" sh /tmp/check-installed prepare "$release" "$arch"
+in_target sh /tmp/check-installed prepare "$release" "$arch"
 sh "$base/test-nft.sh" "$target" "$release" "$arch"
 docker network disconnect "$network" "$target"
 test "$(docker inspect -f '{{len .NetworkSettings.Networks}}' "$target")" = 0
-docker exec "$target" sh /tmp/check-installed offline-install
-docker exec "$target" sh /tmp/check-web
-docker exec "$target" sh /tmp/check-installed uninstall
+in_target sh /tmp/check-installed offline-install
+in_target sh /tmp/check-web
+in_target sh /tmp/check-installed uninstall
 docker network connect "$network" "$target"
 echo "Verified offline single-package installation, all four commands and LuCI RPC on $release ($arch)"
 # Keep the original release digest while changing the served download.
-docker exec "$server" sh -c 'set -e; for f in /srv/*.ipk /srv/*.apk; do [ -f "$f" ] || continue; cp "$f" "$f.clean"; dd if=/dev/zero of="$f" bs=1 count=16 conv=notrunc 2>/dev/null; done'
-docker exec "$target" sh /tmp/check-installed install-baseline
-docker exec "$target" sh /tmp/check-installed reject-tampered-upgrade
-docker exec "$server" sh -c 'set -e; for f in /srv/*.clean; do mv "$f" "${f%.clean}"; done'
+in_server sh -c 'set -e; for f in /srv/*.ipk /srv/*.apk; do [ -f "$f" ] || continue; cp "$f" "$f.clean"; dd if=/dev/zero of="$f" bs=1 count=16 conv=notrunc 2>/dev/null; done'
+in_target sh /tmp/check-installed install-baseline
+in_target sh /tmp/check-installed reject-tampered-upgrade
+in_server sh -c 'set -e; for f in /srv/*.clean; do mv "$f" "${f%.clean}"; done'
 for invalid in digest tag origin url duplicate draft prerelease missing; do
  serve_release "" --invalid "$invalid"
- docker exec "$target" sh /tmp/check-installed reject-invalid-release
+ in_target sh /tmp/check-installed reject-invalid-release
 done
 case "$release" in 25.*) ext=apk;; *) ext=ipk;; esac
 set -- "$feed/baseline/"*."$ext"
 serve_release "" --contents "$1"
-docker exec "$server" sh -ec 'for f in /srv/releases/download/v*/*; do ln -sf "/srv/baseline/$1" "$f"; done' sh "${1##*/}"
-docker exec "$target" sh /tmp/check-installed reject-wrong-version
+in_server sh -ec 'for f in /srv/releases/download/v*/*; do ln -sf "/srv/baseline/$1" "$f"; done' sh "${1##*/}"
+in_target sh /tmp/check-installed reject-wrong-version
 serve_release ""
-docker exec "$target" sh /tmp/check-installed upgrade
-docker exec "$target" sh /tmp/check-web
+in_target sh /tmp/check-installed upgrade
+in_target sh /tmp/check-web
 serve_release /baseline
-docker exec "$target" sh /tmp/check-installed reject-downgrade
+in_target sh /tmp/check-installed reject-downgrade
 if [ "$release" = 25.12.6 ]; then
- docker exec "$target" sh /tmp/check-installed prepare-recovery
+ in_target sh /tmp/check-installed prepare-recovery
  docker exec -d "$target" sh -ec 'exec 8>/var/run/openweir/network/lock; flock -x 8; touch /tmp/block-release; while [ -f /tmp/block-release ]; do sleep 1; done'
- docker exec "$target" sh /tmp/check-installed uninstall-with-recovery
+ in_target sh /tmp/check-installed uninstall-with-recovery
 else
- docker exec "$target" sh /tmp/check-installed uninstall preserved
+ in_target sh /tmp/check-installed uninstall preserved
 fi
 echo "Verified native package installation, GitHub digest/identity checks, upgrade and removal on OpenWrt $release ($arch)"

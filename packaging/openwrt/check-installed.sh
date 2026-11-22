@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eu
 name=luci-app-openweir
+# install-test.sh copies the shared retry helper next to this script.
+. /tmp/openweir-retry
 case "$1" in reject-*|upgrade) PATH=/tmp/openweir-test-bin:$PATH; export PATH;; esac
 case "$1" in
  prepare)
@@ -34,16 +36,18 @@ FETCH
    test -n "$depends"
    # Stage dependencies declared by the old offline-upgrade fixture as well.
    baseline_deps=$(apk --allow-untrusted adbdump --format json /tmp/openweir-baseline/*.apk | jsonfilter -e '@.info.depends[*]')
-   apk update
-   apk add $depends $baseline_deps firewall4 nftables-json kmod-nft-tproxy uhttpd uhttpd-mod-ubus curl
+   # Fetches from the firmware's own feeds; OpenWeir's packages are never retried.
+   retry apk update
+   retry apk add $depends $baseline_deps firewall4 nftables-json kmod-nft-tproxy uhttpd uhttpd-mod-ubus curl
   else
    tar -xzOf /tmp/verified-feed/*.ipk ./control.tar.gz | tar -xzO ./control > /tmp/package-control
    test "$(sed -n 's/^Architecture: //p' /tmp/package-control)" = "${OPENWEIR_PACKAGE_ARCH:-all}"
    sed -n 's/^Version: //p' /tmp/package-control > /tmp/test-candidate-version
    depends=$(sed -n 's/^Depends: //p' /tmp/package-control | tr ',' ' ')
    test -n "$depends"
-   opkg update
-   opkg install $depends firewall4 nftables-json kmod-nft-tproxy uhttpd uhttpd-mod-ubus curl
+   # Fetches from the firmware's own feeds; OpenWeir's packages are never retried.
+   retry opkg update
+   retry opkg install $depends firewall4 nftables-json kmod-nft-tproxy uhttpd uhttpd-mod-ubus curl
    # Verify against an online feed so a mistaken recommendation would pull the
    # package. Compare names and versions, as a dependency could replace a fork.
    opkg list-installed | sort >/tmp/stock-packages

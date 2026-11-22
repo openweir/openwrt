@@ -14,6 +14,8 @@ jobs:
   build:
     name: Build per-architecture installers and upgrade fixtures
     runs-on: ubuntu-latest
+    # Runs take under two minutes; the bound leaves room for retried pulls.
+    timeout-minutes: 10
     outputs:
       matrix: ${{ steps.targets.outputs.matrix }}
     steps:
@@ -40,8 +42,9 @@ jobs:
           DEVELOP: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' }}
         run: |
           set -euo pipefail
+          . packaging/openwrt/retry.sh
           version=$(cat VERSION)
-          last=$(gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName \
+          last=$(retry gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName \
             --jq "[.[].tagName | select(startswith(\"v$version-preview.\")) | ltrimstr(\"v$version-preview.\") | select(test(\"^[0-9]+\$\")) | tonumber] | max // 0")
           if [ "$DEVELOP" = true ]; then echo "number=$((last + 1))" >> "$GITHUB_OUTPUT"; fi
           echo "revision=$((last + 1))" >> "$GITHUB_OUTPUT"
@@ -56,7 +59,8 @@ jobs:
         run: |
           case "$FORMAT" in ipk) sdk=24.10.8;; apk) sdk=25.12.6;; *) exit 1;; esac
           arches=$(go run ./cmd/openweir-release arches "$FORMAT")
-          docker pull --quiet "ghcr.io/openwrt/sdk:x86_64-$sdk"
+          . packaging/openwrt/retry.sh
+          retry bounded 900 docker pull --quiet "ghcr.io/openwrt/sdk:x86_64-$sdk"
           # Four SDK builds at a time, one per runner core. Each writes its own log, shown
           # below in architecture order.
           logs=$RUNNER_TEMP/package-logs
@@ -134,6 +138,8 @@ jobs:
     name: ${{ matrix.arch }} / ${{ matrix.firmware }}
     needs: build
     runs-on: ubuntu-latest
+    # Runs take up to five minutes under emulation; the bound leaves room for retried downloads.
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.build.outputs.matrix) }}
@@ -148,8 +154,9 @@ jobs:
           path: dist/feed
       - name: Enable target execution including MIPS32 and LoongArch
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends qemu-user-binfmt
+          . packaging/openwrt/retry.sh
+          apt_install() { sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends qemu-user-binfmt; }
+          retry apt_install
           sudo systemctl restart systemd-binfmt
           for arch in aarch64 arm mips mipsel riscv64 loongarch64; do
             grep -Eq '^flags: [A-Z]*F' "/proc/sys/fs/binfmt_misc/qemu-$arch"
