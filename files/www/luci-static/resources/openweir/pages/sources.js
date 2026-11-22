@@ -1,4 +1,4 @@
-import { bytes, tlsMessage, datetime, day, say, hush, attach, diagnosticMessage } from '../dom.js';
+import { bytes, tlsMessage, datetime, day, say, hush, attach, diagnosticMessage, providerErrors } from '../dom.js';
 // LuCI loads this module on demand. Subscription secrets are submitted directly
 // to rpcd and never enter a route, storage key or display label.
 const formats = {
@@ -27,8 +27,10 @@ async function write(u, action, args) {
     try {
         return await u.run('subscription_write', { action, args });
     } catch (err) {
-        if (action !== 'refresh' && err.tls) throw new Error(tlsMessage(err.tls) || err.message);
-        throw err;
+        // A refresh describes its own failure (importSource); the other actions' codes are read here.
+        if (action === 'refresh' || err?.name === 'AbortError') throw err;
+        const message = failureMessage(err.message, null, err.tls);
+        throw message === err.message ? err : new Error(message);
     }
 }
 export const input = (u, attrs = {}) => u.h('input', attrs);
@@ -180,22 +182,9 @@ const templateWarnings = {
     UNSUPPORTED_NODE_OPTIONS: '部分节点的协议选项无法用此模板表达',
     NAIVE_CERTIFICATE_TRUST: 'Naive 节点需要路由器信任服务端证书',
 };
-const providerErrors = {
-    provider_timeout: '请求超时', provider_dns_failed: '无法解析提供方域名',
-    provider_tls_untrusted: 'HTTPS 证书校验失败', provider_connection_refused: '提供方拒绝连接',
-    provider_unreachable: '无法连接提供方', private_provider_address: '提供方指向私有或本地地址，已阻止访问',
-    provider_redirect_refused: '提供方重定向不符合下载策略', invalid_provider_url: '提供方下载地址无效',
-    provider_limit: '引用的提供方数量超过上限', provider_size_limit: '提供方文件超过下载上限', provider_incomplete: '文件传输不完整',
-    provider_kernel_unavailable: '下载此文件需要已选内核，请安装内核后刷新订阅',
-    provider_detour_unavailable: '指定下载出口无法使用',
-    provider_cancelled: '下载已取消', provider_download_failed: '引用文件下载失败',
-    invalid_proxy_provider: '节点文件格式无效', invalid_rule_provider: '规则文件格式无效',
-    duplicate_rule_provider: '规则集重复定义', node_limit: '节点数量超过上限', rule_limit: '规则数量超过上限',
-};
-
 function failureMessage(code, provider, tls) {
     const cert = tlsMessage(tls);
-    if (!provider || provider.code !== code || !['node', 'rule'].includes(provider.kind)) return cert || notices[code] || providerErrors[code] || code;
+    if (!provider || provider.code !== code || !['node', 'rule'].includes(provider.kind)) return cert || notices[code] || providerErrors[code] || diagnosticMessage(code);
     const http = /^provider_http_([1-5][0-9]{2})$/.exec(code);
     const label = provider.kind === 'rule' ? '规则提供方' : '节点提供方';
     const issue = [label, provider.file, http ? '返回 HTTP ' + http[1] : cert || providerErrors[code] || '引用文件读取失败'].filter(Boolean).join(' · ');
@@ -217,7 +206,7 @@ function noticeRows(items) {
     // The service sends null rather than [] when there is nothing to report.
     return (items || []).flatMap((n) => {
         if (n.code !== 'platform_routing_warnings') {
-            const detail = missingRejectRule(n) ? '此拦截规则引用的规则集未载入' : notices[n.code] || n.code;
+            const detail = missingRejectRule(n) ? '此拦截规则引用的规则集未载入' : notices[n.code] || diagnosticMessage(n.code);
             return [{ count: 1, text: [n.at, n.resource, detail].filter(Boolean).join(' · ') }];
         }
         if (/^[0-9]+$/.test(n.at)) {

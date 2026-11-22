@@ -8,7 +8,7 @@ const sources = {
 	subscription: '订阅',
 	dns: 'DNS',
 	firewall: '防火墙',
-	watchdog: '守护进程',
+	kernel: '内核',
 };
 const outcome = (v) => (v === 'traffic_observed' ? '已建立' : resultName[v] || v || '—');
 export async function records(ui) {

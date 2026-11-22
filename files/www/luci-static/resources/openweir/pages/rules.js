@@ -1,5 +1,5 @@
 // The rules page: custom rules and the rule sets of the active subscription.
-import { attach, hush } from '../dom.js';
+import { attach, hush, diagnosticMessage } from '../dom.js';
 import { ids, actions, muted, badge, field, input, choice, read, date, form, confirm, importSource, reimport } from './sources.js';
 
 const matchType = {
@@ -188,7 +188,7 @@ async function setDetail(u, source, name, info) {
             const r = await read(u, 'set_match', { source, rule_set: name, query: value });
             answer.textContent = value + (r.matched ? ' 命中此规则集' : ' 不在此规则集中');
         } catch (e) {
-            answer.textContent = e.message === 'invalid_set_query' ? '请输入域名或 IP 地址' : e.message;
+            answer.textContent = diagnosticMessage(e.message);
         } finally {
             check.disabled = false;
         }
@@ -241,7 +241,7 @@ async function setDetail(u, source, name, info) {
         if (info.mode && info.mode !== 'smart')
             list.append(u.h('p', { class: 'ow-muted' }, '当前不是智能分流模式，规则集暂未生效'));
     } catch (e) {
-        list.replaceChildren(u.h('p', { class: 'ow-muted' }, e.message));
+        list.replaceChildren(u.h('p', { class: 'ow-muted' }, diagnosticMessage(e.message)));
     }
 }
 // Where the loaded rules send each rule set's matches. The page reads only the first rules, so a

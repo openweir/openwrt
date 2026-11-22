@@ -142,10 +142,6 @@ const diagnosticText = {
     firewall_rules_restored: '防火墙重启或其他程序清除了代理规则，已自动恢复',
     conflict_services_stopped: '已停用冲突的代理插件',
     connections_not_reset: '未能断开旧连接，已打开的页面可能仍走原线路，刷新或重开即可',
-    dns_intercept: 'DNS 劫持未生效',
-    dns_issue: 'DNS 配置存在问题',
-    dns_reload: 'dnsmasq 重新加载失败',
-    dns_restore: 'dnsmasq 配置恢复失败',
     kernel_bootstrap_marker_invalid: '首次内核准备标记无效，已忽略',
     kernel_bootstrap_queue_failed: '首次内核准备未能加入任务队列',
     rule_provider_cleanup_failed: '清理未使用的规则集失败',
@@ -154,7 +150,6 @@ const diagnosticText = {
     update_blocked: '订阅的新版本无法使用，已保留上次配置，可到订阅页查看原因',
     initial_subscription_select_failed: '无法选择初始订阅',
     superseded: '已被更新的任务取代',
-    cancelled: '已取消',
     task_journal_write_failed: '任务记录写入失败',
     china_lists_update_failed: '大陆域名与 IP 列表多次更新失败，继续使用现有列表',
     network_unreachable: '内核发起连接时，系统报告网络不可达',
@@ -212,6 +207,83 @@ const diagnosticText = {
     kernel_restore_unavailable: '无法从下载源恢复临时内核',
     kernel_preparation_failed: '内核准备失败，未取得更具体的错误分类',
     'openweir-kernel begin failed': '内核准备启动失败，旧版日志未记录具体原因',
+    // Why a subscription operation failed (openweir-subscription's error codes), on the
+    // subscriptions page and in the log.
+    subscription_request_failed: '无法连接订阅服务器，请检查网络后重试',
+    invalid_response_size: '服务器返回的内容超过大小上限',
+    subscription_size_limit: '订阅内容超过大小上限',
+    expanded_subscription_limit: '展开引用的节点和规则后，订阅超过大小上限',
+    invalid_subscription: '无法解析订阅内容',
+    update_failed: '订阅更新失败',
+    operation_failed: '订阅操作失败',
+    context_deadline_exceeded: '操作超时',
+    not_found: '找不到这个订阅',
+    not_ready: '订阅尚未就绪，请先更新订阅',
+    login_required: '登录已失效，请重新登录服务商账户',
+    suspended: '服务商暂停了此订阅，请到服务商处查看',
+    platform_account_revoked: '服务商账户已停用',
+    subscription_app_disabled: '服务商已停止向此客户端提供订阅，请联系服务商',
+    entitlement_check_failed: '无法向服务商确认套餐状态，请稍后重试',
+    invalid_plan_list: '服务商返回的套餐列表无效',
+    invalid_node_inventory: '服务商返回的节点清单无效',
+    invalid_platform_site: '这个地址不是受支持的服务商站点',
+    invalid_origin: '服务商站点地址无效',
+    invalid_login: '请填写有效的邮箱和密码',
+    invalid_login_response: '服务商返回的登录结果无效',
+    invalid_login_token: '服务商返回的登录凭据无效',
+    verified_login_required: '请先登录服务商账户',
+    source_identity_mismatch: '订阅类型或服务商账户与原订阅不一致',
+    redirect_refused: '服务器的跳转不符合下载要求，已拒绝',
+    authenticated_redirect_refused: '带登录凭据的请求不能跳转到其他站点，已拒绝',
+    candidate_validation_failed: '新配置未通过校验，已保留上次配置',
+    preflight_revision_missing: '新配置未完成校验，请重试',
+    preflight_revision_changed: '校验期间配置已变更，请重试',
+    preflight_confirmation_timeout: '确认新配置超时，请重试',
+    invalid_candidate: '新配置无效',
+    kernel_invalidation_pending: '订阅已撤销，内核尚未停用它的配置，稍后会自动重试',
+    invalid_request: '请求无效',
+    unknown_method: '不支持的订阅操作',
+    invalid_page: '分页参数无效',
+    invalid_source: '订阅设置无效',
+    invalid_source_kind: '订阅类型无效',
+    invalid_source_url: '订阅链接无效，请填写 http 或 https 地址',
+    invalid_external_source: '链接订阅的设置无效',
+    invalid_file_source: '本地文件订阅的设置无效',
+    invalid_platform_source: '服务商订阅的设置无效',
+    invalid_template_filter: '模板筛选条件无效',
+    source_config_required: '缺少订阅设置',
+    source_preferences_required: '缺少要修改的订阅设置',
+    external_source_required: '只有链接订阅可以更换链接',
+    not_external: '这不是链接订阅',
+    invalid_provider_choice: '所选下载线路无效',
+    proxy_not_core: '代理端口不属于内核，已停止经由它下载',
+    proxy_connect_refused: '内核代理拒绝了下载连接',
+    socket_group_unavailable: '无法建立绕过代理的下载连接',
+    literal_address_required: '绕过代理下载需要 IP 地址',
+    template_rule_set_unavailable: '内置分流规则引用的规则集暂时无法取得',
+    template_cache_write_failed: '无法保存内置分流规则的本机副本',
+    geodata_download_failed: 'GeoIP / GeoSite 数据下载失败',
+    geodata_digest_mismatch: 'GeoIP / GeoSite 数据校验失败',
+    invalid_binary_set_config: '规则集设置无效',
+    binary_set_digest_mismatch: '规则集文件校验失败',
+    invalid_cached_rule_file: '本机缓存的规则集文件无效',
+    invalid_rule_set_format: '规则集格式无效',
+    invalid_rule_directory: '规则集目录无效',
+    invalid_rule_directory_owner: '规则集目录的属主不正确',
+    rule_file_size_exceeds_limit: '规则文件超过大小上限',
+    invalid_set_query: '请输入域名或 IP 地址',
+    snapshot_exceeds_storage_limit: '订阅数据超过存储上限',
+    invalid_subscription_storage: '订阅存储目录无效',
+    invalid_subscription_state: '订阅状态文件无效',
+    invalid_subscription_snapshot: '订阅快照文件无效',
+    // Import notices the subscriptions page reads here (noticeRows).
+    invalid_endpoint: '节点的地址、端口或名称无效',
+    ambiguous_group: '策略组与其他节点或策略组同名，对它的引用无法使用',
+    mihomo_unavailable_member: '策略组的部分成员不存在或不可用，已移除',
+    invalid_group: '策略组没有可用成员或配置无效，已跳过',
+    cyclic_group: '策略组之间形成循环引用',
+    unresolved_target: '规则指向的节点或策略组不存在，已跳过这条规则',
+    unsupported_group_option: '策略组有路由器无法使用的选项，已忽略',
 };
 
 const taskText = {
@@ -222,21 +294,17 @@ const taskText = {
     plugin_check: '检查插件更新',
     plugin_update: '更新插件',
     subscription_write: '订阅',
-    kernel_write: '内核',
     kernel_read: '读取内核',
     kernel: '内核',
-    conflicts: '检查插件冲突',
     configure: '应用配置',
     latency: '节点测速',
 };
 const taskStep = {
-    refresh: '刷新', configure: '修改设置', login: '登录', logout: '退出登录', site: '获取站点信息',
-    agents: '获取客户端标识', preferences: '修改偏好', rollback: '回滚', revoke: '撤销授权',
-    url: 'URL 测速', tcp: 'TCP 测速', versions: '获取版本列表', status: '读取状态',
-    capabilities: '读取能力', 'target-capabilities': '读取设备能力', 'install-json': '安装',
-    select: '切换版本', bootstrap: '首次准备', test_nodes: '测试节点', cancel_tests: '取消测试',
+    configure: '修改设置', login: '登录', logout: '退出登录', site: '获取站点信息',
+    preferences: '修改偏好', rollback: '回滚', revoke: '撤销授权',
+    url: 'URL 测速', tcp: 'TCP 测速', versions: '获取版本列表', 'install-json': '安装', select: '切换版本',
 };
-const taskStage = { running: '开始', done: '完成', failed: '失败', held: '未应用' };
+const taskStage = { done: '完成', failed: '失败', held: '未应用' };
 function taskName(action) {
     if (taskText[action]) return taskText[action];
     const [head, ...tail] = action.split('/');
@@ -261,18 +329,14 @@ const errorText = {
     'cannot launch core': '无法启动内核',
     'cannot prepare authorized rule sets': '无法准备规则集文件',
     'capability information does not match selected release': '内核能力信息与所选版本不符',
-    'capability information does not match this target': '内核能力信息与本机架构不符',
     'capability revision mismatch': '内核能力信息版本不符',
     'choose at least one LAN network': '请至少选择一个局域网',
     'configuration revision changed': '配置已被其他操作修改，请刷新后重试',
-    'control not answering': '内核控制接口无响应',
-    'control query canceled during shutdown': '服务停止时中断了内核查询',
     'control unavailable': '内核控制接口不可用',
     'core credential unavailable': '内核控制凭据不可用',
     'core did not confirm saved group selection': '内核未确认已保存的节点选择',
     'core exited during startup': '内核在启动过程中退出',
     'core group unavailable': '无法读取内核运行用户组 nogroup',
-    'core offline': '内核未运行',
     'core selection unavailable': '无法读取内核的节点选择',
     'could not save network preferences': '无法保存网络设置',
     'verified plugin update failed': '插件更新失败',
@@ -294,17 +358,12 @@ const errorText = {
     'invalid network preferences': '设置无效',
     'could not verify network prerequisites': '无法确认网络前置条件',
     'default route has no available group': '默认路线没有可用的策略组',
-    'disk full': '存储空间已满',
-    'DNS restoration failed': 'DNS 设置恢复失败',
-    'injected filesystem failure': '文件系统写入失败（测试注入）',
     'invalid control credential': '内核控制凭据无效',
     'invalid core group': '内核运行用户组 nogroup 无效（不能是 root 组）',
     'invalid launch ticket': '内核启动凭证无效',
     'invalid managed LAN': '受管局域网无效',
     'invalid private core work directory': '内核工作目录无效',
     'invalid rule provider digest': '规则集文件校验失败',
-    'LAN path lost': '局域网路径已丢失',
-    'local control unavailable': '本地控制接口不可用',
     'local core control unavailable': '本地内核控制接口不可用',
     'local core DNS answer unavailable': '内核 DNS 没有应答',
     'local proxy listener unavailable': '内核代理端口不可用',
@@ -342,7 +401,33 @@ const errorText = {
     'unverified network fault disposition': '未确认故障时的网络处理方式',
     'context deadline exceeded': '操作超时',
     'context canceled': '操作已取消',
+    'operation already in progress': '已有相同的操作正在进行，请稍后重试',
+    'core is not running': '代理未运行',
+    'kernel operation failed': '内核操作失败',
+    'kernel selection revision changed': '内核版本已被其他操作切换，请刷新后重试',
+    'candidate core rejected the configuration': '内核拒绝了此配置',
+    'no compatible members on this device': '没有当前内核可用的成员',
+    'saved member unavailable on this device': '保存的节点在当前内核中不可用',
 };
+// Why a referenced node or rule file could not be downloaded (provider_diagnostic.go), after
+// the provider's kind and file on the subscriptions page.
+export const providerErrors = {
+    provider_timeout: '请求超时', provider_dns_failed: '无法解析提供方域名',
+    provider_tls_untrusted: 'HTTPS 证书校验失败', provider_connection_refused: '提供方拒绝连接',
+    provider_unreachable: '无法连接提供方', private_provider_address: '提供方指向私有或本地地址，已阻止访问',
+    provider_redirect_refused: '提供方重定向不符合下载策略', invalid_provider_url: '提供方下载地址无效',
+    provider_limit: '引用的提供方数量超过上限', provider_size_limit: '提供方文件超过下载上限', provider_incomplete: '文件传输不完整',
+    provider_cancelled: '下载已取消', provider_download_failed: '引用文件下载失败',
+    invalid_proxy_provider: '节点文件格式无效', invalid_rule_provider: '规则文件格式无效',
+    node_limit: '节点数量超过上限', rule_limit: '规则数量超过上限',
+};
+// The name of a node or group by its ID, when the page has read the subscription (app.js).
+let memberName = () => '';
+export function nameMembers(name) {
+    memberName = name;
+}
+// The objects the kernel's rejections name besides a node or group (kernelcli rejection).
+const rejectedEntries = { proxy: '某个节点', 'proxy group': '某个策略组', rule: '某条规则', rules: '某条规则' };
 // The proxy plugins OpenWeir stops when it starts, by their init script names.
 const pluginNames = {
     openclash: 'OpenClash', passwall: 'PassWall', passwall2: 'PassWall 2', homeproxy: 'HomeProxy',
@@ -360,6 +445,7 @@ export function conflictItem(kind, name) {
 }
 const errorPatterns = [
     [/^local health: (.+)$/s, (m) => '内核健康检查连续失败 · ' + errorMessage(m[1])],
+    [/^local control unavailable: (.+)$/s, () => '本地控制接口不可用'],
     [/^(.+) \(release failed: (.+)\)$/s, (m) => errorMessage(m[1]) + ' · 清理接管规则也失败：' + errorMessage(m[2])],
     [/^network takeover blocked by: (.+)$/s, (m) => '仍有无法自动处理的冲突：' + m[1].split('; ').map((item) => {
         const [kind, ...name] = item.split(' ');
@@ -369,10 +455,24 @@ const errorPatterns = [
     [/^saved member unavailable for (.+)$/s, (m) => '策略组 ' + m[1] + ' 保存的节点不可用'],
     [/^unavailable (?:device|rule) target (.+)$/s, (m) => '规则指向的策略组 ' + m[1] + ' 不可用'],
     [/^unsupported group type (.+)$/s, (m) => '不支持的策略组类型 ' + m[1]],
+    // A change the core could not apply in place; it restarts instead.
+    [/^reload fallback (.+)$/s, (m) => '无法直接应用更改，已重启内核 · ' + errorMessage(m[1])],
+    // What the kernel rejected: a generated node or group, an entry of the configuration or the
+    // whole configuration.
+    [/^(node|group):([0-9a-f]{32}): (.+)$/s, (m) => {
+        const name = memberName(m[1] + ':' + m[2]), node = m[1] === 'node';
+        return (name ? (node ? '节点 ' : '策略组 ') + name : node ? '某个节点' : '某个策略组') + ' · ' + errorMessage(m[3]);
+    }],
+    [/^(configuration|proxy|proxy group|rules?)(?:\[\d+\])?: (.+)$/s, (m) => (rejectedEntries[m[1]] ? rejectedEntries[m[1]] + ' · ' : '') + errorMessage(m[2])],
+    [/^candidate core rejected (\S+) configuration$/, (m) => '内核拒绝了 ' + m[1] + ' 配置'],
+    [/^subscription_http_([1-5][0-9]{2})$/, (m) => '订阅服务器返回 HTTP ' + m[1]],
+    [/^provider_http_([1-5][0-9]{2})$/, (m) => '节点或规则提供方返回 HTTP ' + m[1]],
+    [/^(?:subscription|provider)_tls_([a-z_]+)$/, (m) => tlsMessage({ reason: m[1] }) || 'HTTPS 证书校验失败'],
 ];
 function errorMessage(text) {
     if (diagnosticText[text]) return diagnosticText[text];
     if (errorText[text]) return errorText[text];
+    if (providerErrors[text]) return providerErrors[text];
     for (const [re, fn] of errorPatterns) {
         const m = re.exec(text);
         if (m) return fn(m);
@@ -387,7 +487,7 @@ function errorMessage(text) {
 export function diagnosticMessage(text) {
     if (!text) return '';
     if (diagnosticText[text]) return diagnosticText[text];
-    const task = /^(\S+) (running|done|failed|held) ([A-Za-z0-9_-]+)(?: (.*))?$/s.exec(text);
+    const task = /^(\S+) (done|failed|held) ([A-Za-z0-9_-]+)(?: (.*))?$/s.exec(text);
     if (task) {
         const extra = task[4] && task[4][0] !== '{' ? diagnosticMessage(task[4]) : '';
         return taskName(task[1]) + ' · ' + taskStage[task[2]] + (extra ? ' · ' + extra : '');

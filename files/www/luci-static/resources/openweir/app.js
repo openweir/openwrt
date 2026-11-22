@@ -1,4 +1,4 @@
-import { h, card, knownNames, pages, feedback, feedbackFor, say, hush, diagnosticMessage } from './dom.js';
+import { h, card, knownNames, pages, feedback, feedbackFor, say, hush, diagnosticMessage, nameMembers } from './dom.js';
 import { overview } from './pages/overview.js';
 import { proxy } from './pages/proxy.js';
 import { subscriptions } from './pages/sources.js';
@@ -63,6 +63,8 @@ export function mount(root, invoke) {
 		catalogKey = '',
 		catalogRequest;
 	const name = (id) => names.get(id) || knownNames[id] || id || '—';
+	// The service's errors name a node or group by its ID; they read with its name once known.
+	nameMembers((id) => names.get(id) || '');
 	// Starting or stopping the proxy reloads the firewall, DNS and routes, which can drop the
 	// browser's open requests ("XHR request aborted by browser"). Reads are retried briefly.
 	const transient = (e) => /aborted|timed? ?out|network|xhr/i.test(e?.message || '');
