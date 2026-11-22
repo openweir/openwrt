@@ -1,4 +1,4 @@
-import { h, card, field, select, segment, empty, pages } from '../dom.js';
+import { h, card, field, select, segment, empty, pages, attach } from '../dom.js';
 
 const kindName = { selector: '手选', urltest: '自动', loadbalance: '负载均衡', fallback: '故障转移' };
 // Narrow cards name the long protocols by their usual short forms; the title keeps the full name.
@@ -62,6 +62,14 @@ export async function proxy(ui) {
 	const initialLimit = () => (compact.matches && !global ? 6 : 96);
 	let probeJob = null;
 	let snapshotRevision = 0;
+	// Each group panel reports its choices and tests on its own line. Panels are redrawn as
+	// results arrive, so the line outlives them and each new panel reports to it.
+	const lines = new Map();
+	const reported = (panel, id) => {
+		if (!lines.has(id)) lines.set(id, ui.feedback());
+		panel.append(attach(panel, lines.get(id)));
+		return panel;
+	};
 	const bulk = ui.button(
 		'全部测速',
 		() => {
@@ -278,7 +286,7 @@ export async function proxy(ui) {
 				retry(group, saved),
 			);
 			if (!panel.querySelector('.ow-node')) panel.append(empty(state.query ? '没有匹配项' : '暂无可用节点'));
-			fragment.append(panel);
+			fragment.append(reported(panel, group.id));
 		} else {
 			const panels = [];
 			for (const [i, g] of groups.entries()) {
@@ -338,7 +346,7 @@ export async function proxy(ui) {
 				test.setAttribute('aria-label', '测速 ' + g.name);
 				test.title = '测速 ' + g.name;
 				test.disabled = !canMeasure();
-				panels.push(h('div', { class: 'ow-group-panel' }, details, test, retry(g, chosen)));
+				panels.push(reported(h('div', { class: 'ow-group-panel' }, details, test, retry(g, chosen)), g.id));
 			}
 			const middle = Math.ceil(panels.length / 2);
 			for (const column of [panels.slice(0, middle), panels.slice(middle)])
@@ -423,7 +431,8 @@ export async function proxy(ui) {
 	if (!global) extra.append(ui.button('本地策略组', () => localGroups(ui)));
 	if (nodes.some((n) => n.special && n.protocol === 'mtproxy') || intent.policy?.telegram)
 		extra.append(ui.button('Telegram 入口', () => telegram(ui, nodes)));
-	return h('div', { class: 'ow-proxy-page' }, toolbar, body);
+	// 全部测速, the test method and the entry dialogs report under the toolbar.
+	return h('div', { class: 'ow-proxy-page' }, toolbar, ui.feedback(toolbar), body);
 }
 async function localGroups(ui) {
 	const policy = ui.status.intent.policy || {},

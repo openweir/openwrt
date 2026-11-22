@@ -1,4 +1,5 @@
 // The rules page: custom rules and the rule sets of the active subscription.
+import { attach, hush } from '../dom.js';
 import { ids, actions, muted, badge, field, input, choice, read, date, form, confirm, importSource, reimport } from './sources.js';
 
 const matchType = {
@@ -312,6 +313,8 @@ function customCard(u, custom, source, local) {
         up.disabled = i === 0;
         down.disabled = i === custom.length - 1;
         const detail = describeRule(r.match);
+        // Moving a rule that fails to save says so under the rule.
+        const line = u.feedback();
         const row = u.h(
             'div',
             { class: 'ow-rule-row', draggable: 'true' },
@@ -336,7 +339,9 @@ function customCard(u, custom, source, local) {
                 down,
                 u.button('编辑', () => editRule(u, custom, i, source, local)),
             ),
+            line,
         );
+        attach(row, line);
         row.addEventListener('dragstart', (e) => {
             dragging = i;
             e.dataTransfer.effectAllowed = 'move';
@@ -352,12 +357,14 @@ function customCard(u, custom, source, local) {
             e.preventDefault();
             const old = dragging;
             dragging = -1;
-            if (old >= 0)
+            if (old >= 0) {
+                hush(line);
                 try {
                     await move(old, i);
                 } catch (err) {
-                    u.notify(err.message);
+                    if (err.name !== 'AbortError') u.report(row, err);
                 }
+            }
         });
         rows.append(row);
     }

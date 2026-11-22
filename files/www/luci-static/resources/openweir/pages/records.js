@@ -1,4 +1,4 @@
-import { card, h, select, segment, empty, clock, download, resultName, eventMessage, datetime } from '../dom.js';
+import { card, h, select, segment, empty, clock, download, resultName, eventMessage, datetime, attach, hush } from '../dom.js';
 
 const levels = { info: '信息', warn: '警告', error: '错误' };
 const sources = {
@@ -264,20 +264,29 @@ export async function records(ui) {
 			placeholder: '搜索路由器日志',
 			value: state.serverQuery || '',
 		});
+	// What the toolbar's search and actions report sits under the toolbar.
+	const line = ui.feedback();
 	if (remoteSearch) {
 		let timer;
+		remoteSearch.setAttribute('aria-describedby', line.id);
 		remoteSearch.addEventListener('input', () => {
 			requestId++;
 			state.serverQuery = remoteSearch.value.trim();
 			state.limit = 40;
 			clearTimeout(timer);
-			timer = setTimeout(() => update().catch((e) => ui.notify(e.message)), 250);
+			hush(line);
+			timer = setTimeout(() => update().catch((e) => {
+				if (e.name !== 'AbortError') ui.report(remoteSearch, e);
+			}), 250);
 		});
 		ui.signal.addEventListener('abort', () => clearTimeout(timer), { once: true });
 	}
 	const text = () => JSON.stringify(shown, null, 2);
 	const toolbar = h('div', { class: 'ow-toolbar' }, category, logs ? source : [device, ruleFilter], search, remoteSearch);
+	attach(toolbar, line);
 	const header = h('div', { class: 'ow-records-header' }, h('h2', {}, title), follow);
+	// 实时跟随 and 导出诊断 report on the line under the header.
+	const headerLine = ui.feedback(header);
 	if (logs)
 		header.append(
 			ui.button('导出诊断', async () => {
@@ -361,5 +370,5 @@ export async function records(ui) {
 	ui.poll(async () => {
 		if (state.follow && !display.querySelector('details[open]')) await update();
 	});
-	return h('div', { class: 'ow-records-page' }, header, card(null, toolbar, display, footer));
+	return h('div', { class: 'ow-records-page' }, header, headerLine, card(null, toolbar, line, display, footer));
 }
