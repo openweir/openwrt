@@ -210,6 +210,26 @@ func ipv6Uplink(ctx context.Context) bool {
 // proxies everything, as its name says, so the shortcut only applies in smart mode.
 func chinaShortcut(i Intent, n Network) bool { return n.ChinaDirect && i.Mode == "smart" }
 
+// applyArgs are the network helper's apply arguments. The firewall takes over IPv6 exactly when
+// the core was configured for it, and lets out the sockets of gid, the group the core runs in
+// (coregroup): the helper never resolves a group of its own.
+func applyArgs(i Intent, n Network, gid int) []string {
+	family := "ipv4"
+	if n.Family6 {
+		family = "ipv6"
+	}
+	args := []string{"apply", family}
+	if chinaShortcut(i, n) {
+		args = append(args, "china")
+	}
+	if n.SideRouter {
+		args = append(args, "side-router")
+	} else {
+		args = append(args, "main-router")
+	}
+	return append(args, "gid="+strconv.Itoa(gid))
+}
+
 // fw4Active matches the network helper, which captures the router's own traffic only on fw4.
 func fw4Active(ctx context.Context) bool {
 	return heldOnFW4(RunDir+"/network", nftTableGone) ||

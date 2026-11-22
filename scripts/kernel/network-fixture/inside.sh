@@ -94,6 +94,9 @@ table inet fw4 {
 }
 NFT
 helper=/usr/libexec/openweir/network
+# As the manager does (internal/coregroup): the core runs as root in base-files' nogroup, and
+# every apply is told that group (applyArgs in network.go).
+core_gid=$(awk -F: '$1 == "nogroup" { print $3 }' /etc/group)
 if [ "${TEST_FIREWALL:-fw4}" = fw3 ]; then
  uci set 'firewall.@defaults[0].input=ACCEPT'
  uci set 'firewall.@defaults[0].forward=ACCEPT'
@@ -158,6 +161,12 @@ for item in 'server=/#/10.0.0.53:dns_default_upstream' 'servers-file=/tmp/server
 done
 rm -f /tmp/instance-lan/nested/test.conf
 echo 'Selected-mode prerequisites passed for TProxy without TUN, DNS off without dnsmasq, and detection of incomplete BusyBox ip'
+# The helper looks up no group of its own: without the core's, or given root's, it takes nothing over.
+for gid in '' 0 065534 nogroup; do
+ if "$helper" apply "gid=$gid"; then echo "apply accepted core group '$gid'"; exit 1; fi
+done
+if "$helper" apply ipv4; then echo 'apply took over without the core group'; exit 1; fi
+[ ! -e /var/run/openweir/network/owned ]
 reload_firewall() {
  if [ "${TEST_FIREWALL:-fw4}" = fw3 ]; then fw3 reload >/tmp/fw3.log 2>&1
  else
@@ -208,8 +217,8 @@ dns_wire() {
 }
 start_core() {
  mkdir -p -m 0700 /tmp/mihomo-test
- # As the plugin does: root in base-files' nogroup group alone, with every capability.
- /tmp/peer core "$(awk -F: '$1 == "nogroup" { print $3 }' /etc/group)" /tmp/core -d /tmp/mihomo-test -f /tmp/core.yaml >/tmp/core.log 2>&1 &
+ # As the plugin does: root in the group every apply exempts alone, with every capability.
+ /tmp/peer core "$core_gid" /tmp/core -d /tmp/mihomo-test -f /tmp/core.yaml >/tmp/core.log 2>&1 &
  core_pid=$!
  sleep 1
  for attempt in 1 2 3 4 5; do
@@ -281,7 +290,7 @@ CFG
   done
  ) &
  reloader=$!
- "$helper" apply || { sh -x "$helper" apply; exit 1; }
+ "$helper" apply "gid=$core_gid" || { sh -x "$helper" apply "gid=$core_gid"; exit 1; }
  rm -f /tmp/reload-fw4; wait "$reloader"
  wire proxy
  grep -q '192.168.50.1:80' /var/run/openweir/network/management.json
@@ -297,11 +306,11 @@ CFG
  wire direct
  dns_wire direct
  uci set openweir.main.dns_intercept=0
- "$helper" apply
+ "$helper" apply "gid=$core_gid"
  dns_wire upstream
  "$helper" release
  uci set openweir.main.dns_intercept=1
- "$helper" apply
+ "$helper" apply "gid=$core_gid"
  # Isolate a DNS-only failure. The API and heartbeat keep answering while both
  # transports to Mihomo DNS are blocked. Measure from fault to an uncached WAN
  # answer on the LAN, independently of when the ownership marker disappears.
@@ -341,7 +350,7 @@ NFT
  kill "$dns_guard" "$dns_writer"; wait "$dns_guard" || :; wait "$dns_writer" || :
  wire direct
  dns_wire direct
- "$helper" apply
+ "$helper" apply "gid=$core_gid"
  # Kill one side at a time. A live heartbeat writer cannot mask a dead core.
  (while :; do echo ok >/var/run/openweir/new-pulse; mv -f /var/run/openweir/new-pulse /var/run/openweir/pulse; sleep 1; done) &
  writer=$!
@@ -379,12 +388,12 @@ table inet flow_fixture {
  chain test_forward { type filter hook forward priority filter; policy accept; meta l4proto udp flow add @test_ft; }
 }
 NFT
- if "$helper" apply; then echo 'active offload was accepted for fault protection'; exit 1; fi
+ if "$helper" apply "gid=$core_gid"; then echo 'active offload was accepted for fault protection'; exit 1; fi
  [ "$(cat /var/run/openweir/network/error)" = fault_flow_offload ]
  [ ! -e /var/run/openweir/network/owned ]
  nft delete table inet flow_fixture
  start_core
- "$helper" apply
+ "$helper" apply "gid=$core_gid"
  wire proxy
  (while :; do echo ok >/var/run/openweir/new-pulse; mv -f /var/run/openweir/new-pulse /var/run/openweir/pulse; sleep 1; done) &
  writer=$!
@@ -418,14 +427,14 @@ NFT
  ip netns exec lan wget -q -O /dev/null http://192.168.50.1/health.txt
  # A failed candidate retains the protection until a healthy takeover or stop.
  uci set openweir.main.method=invalid
- if "$helper" apply; then echo 'invalid candidate was accepted'; exit 1; fi
+ if "$helper" apply "gid=$core_gid"; then echo 'invalid candidate was accepted'; exit 1; fi
  [ -f /var/run/openweir/network/held ]
  uci set openweir.main.method="$method"
  # Smart default-direct with explicit proxy exceptions replaces the old MAC
  # exemption only upon this next confirmed takeover.
  printf '4 192.168.50.10/32 block\n6 fd00:50::10/128 block\ndefault direct\n' >/var/run/openweir/device-guard.policy
  if [ "$method" = tun ]; then start_core; fi
- "$helper" apply
+ "$helper" apply "gid=$core_gid"
  [ ! -f /var/run/openweir/network/held ]
  wire proxy
  [ "$("$helper" fault)" = protected ]
@@ -435,13 +444,13 @@ NFT
  [ ! -e /var/run/openweir/network/held ]
  # Simulate init stop while the guard has already noticed a missing pulse
  # and serve has queued a retry. Both share the network lock with release.
- "$helper" apply
+ "$helper" apply "gid=$core_gid"
  touch /var/run/openweir/stopping
  "$helper" fault >/tmp/stopping-disposition &
  stopping_fault=$!
  "$helper" release &
  stopping_release=$!
- if "$helper" apply; then echo 'queued apply retook LAN during stop'; exit 1; fi
+ if "$helper" apply "gid=$core_gid"; then echo 'queued apply retook LAN during stop'; exit 1; fi
  wait "$stopping_release"; wait "$stopping_fault"
  [ "$(cat /tmp/stopping-disposition)" = direct ]
  [ ! -f /var/run/openweir/network/owned ] && [ ! -e /var/run/openweir/network/held ]

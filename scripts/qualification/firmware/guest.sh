@@ -33,6 +33,8 @@ for i in $(seq 1 6); do nslookup -timeout=1 -retry=1 localhost 192.168.41.1 >/tm
 cat /tmp/baseline-dns; ps w | grep '[d]nsmasq'; netstat -ln | grep ':53 ';logread -e dnsmasq | tail -20
 for c in /var/etc/dnsmasq.conf.*;do echo "Guest dnsmasq settings";grep -E 'interface=|port=|conf-dir|no-resolv|server=|bind-' "$c";done
 net=/usr/libexec/openweir/network
+# The manager passes the core's group to every apply (applyArgs in network.go): base-files' nogroup.
+core_gid=$(awk -F: '$1 == "nogroup" { print $3 }' /etc/group)
 check_clean() {
  if [ "$fw" = fw4 ]; then
   ! nft list table inet openweir >/dev/null 2>&1 && nft list table inet unrelated >/dev/null
@@ -53,7 +55,7 @@ for method in tproxy tun; do
  uci set openweir.main.method="$method";uci set openweir.main.ipv6=1;uci set openweir.main.dns=1;uci commit openweir
  if [ "$method" = tun ]; then uci set openweir.main.dns_intercept=1; else uci set openweir.main.dns_intercept=0; fi
  uci commit openweir
- if /bin/sh -x "$net" apply > /tmp/qual-apply 2>&1; then
+ if /bin/sh -x "$net" apply "gid=$core_gid" > /tmp/qual-apply 2>&1; then
   report "${method}_apply" pass
   check_dns 93.184.216.35 && [ "$(uci -q get 'dhcp.@dnsmasq[0].server')" = 198.18.0.53 ] && ! grep -qx 'server=198.18.0.53' /var/etc/dnsmasq.conf.* && report "${method}_dns_takeover" pass || report "${method}_dns_takeover" failed
   "$net" verify && report "${method}_verify" pass || report "${method}_verify" failed

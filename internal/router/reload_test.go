@@ -2,6 +2,7 @@ package router
 
 import (
 	"net/netip"
+	"strings"
 	"testing"
 
 	"github.com/openweir/openwrt/internal/subscription"
@@ -76,6 +77,27 @@ func TestGlobalModeTakesOverMainlandAddressesToo(t *testing.T) {
 	failOpen.FailOpen = true
 	if networkKey(smart, n) == networkKey(smart, failOpen) {
 		t.Fatal("fault fallback change kept the old takeover")
+	}
+}
+
+// The network helper is told the family, the China shortcut, the router's role and the core's
+// group: it exempts the group the manager launches the core in and resolves none of its own.
+func TestApplyPassesTheCoreGroupToTheNetworkHelper(t *testing.T) {
+	smart, global := Intent{Mode: "smart"}, Intent{Mode: "global"}
+	for _, c := range []struct {
+		i    Intent
+		n    Network
+		gid  int
+		want string
+	}{
+		{smart, Network{}, 65534, "apply ipv4 main-router gid=65534"},
+		{smart, Network{Family6: true, ChinaDirect: true}, 65534, "apply ipv6 china main-router gid=65534"},
+		{global, Network{ChinaDirect: true, SideRouter: true}, 4242, "apply ipv4 side-router gid=4242"},
+		{smart, Network{Family6: true, SideRouter: true}, 99, "apply ipv6 side-router gid=99"},
+	} {
+		if got := strings.Join(applyArgs(c.i, c.n, c.gid), " "); got != c.want {
+			t.Errorf("%+v %+v %d: %q, want %q", c.i, c.n, c.gid, got, c.want)
+		}
 	}
 }
 

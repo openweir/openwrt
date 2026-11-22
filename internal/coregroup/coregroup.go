@@ -10,12 +10,14 @@ import (
 // Name is the core's group: OpenWeir runs the core as root:nogroup, as OpenClash runs its own.
 // The firewall lets sockets of this group out before it captures the router's own traffic
 // (meta skgid in the network helper), so that the core's connections do not loop back into
-// it. The trade-off is OpenClash's too: any other process running as nogroup, such as one
-// that dropped to nobody:nogroup, bypasses the capture as well.
+// it. GID is the only lookup: the manager passes its result to the helper (gid= on apply), so
+// the group the core runs in and the group the firewall exempts are the same. The trade-off is
+// OpenClash's too: any other process running as nogroup, such as one that dropped to
+// nobody:nogroup, bypasses the capture as well.
 const Name = "nogroup"
 
 // Fallback is nogroup's ID in OpenWrt's base-files (/etc/group), used only when no group has
-// that name. The network helper falls back to the same ID.
+// that name.
 const Fallback = 65534
 
 var lookup = user.LookupGroup
