@@ -51,7 +51,7 @@ If the start is refused, **检查运行环境** (Check environment) tells you wh
 
 **My subscription has no rules, or some don't work.** Each subscription's **分流规则** (Routing rules) setting defaults to the subscription's own rules and switches to the built-in rules when it has none, has no final MATCH, or more than 10% can't be used. You can also always use the built-in rules.
 
-**Something is wrong.** The **记录** (Records) page has connections and logs, and **导出诊断** (Export diagnostics) saves a redacted report for an issue.
+**Something is wrong.** Check the **日志** (Logs) and **连接记录** (Connections) pages; **导出诊断** (Export diagnostics) saves a redacted report for an issue.
 
 ## Building
 
