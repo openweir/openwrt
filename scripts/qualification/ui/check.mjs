@@ -131,6 +131,63 @@ async function checkKernelPreparation(browser, base, viewport) {
 		await kernelRow(page).getByText('当前 v0.1.5', {exact:true}).waitFor();
 	} finally { await page.close(); }
 }
+// Outcomes stay where they can be seen: a dialog shows an import failure once and clears its
+// status on the next attempt, a confirmation outlives the overview's next re-render, and a card's
+// failure that ends after the page changed reaches the alert above the page.
+async function checkNotices(browser, base, viewport) {
+	const page = await browser.newPage({viewport});
+	const errors = [];
+	page.on('pageerror', (e) => errors.push(e.message));
+	try {
+		await page.goto(base + '/?scenario=notice-dialog#subscriptions');
+		await page.getByRole('button', {name:'＋ 添加订阅'}).click();
+		const login = page.getByRole('dialog', {name:'添加订阅'});
+		const status = login.locator('.ow-modal-status');
+		await login.getByRole('button', {name:'服务商登录'}).click();
+		await login.getByLabel('服务商地址').fill('https://platform.example');
+		await page.evaluate(() => { window.model.controls.fail = { subscription_write: 'context deadline exceeded' }; });
+		await login.getByRole('button', {name:'验证服务商'}).click();
+		await status.filter({hasText:'操作超时'}).waitFor();
+		await page.evaluate(() => { delete window.model.controls.fail; });
+		await login.getByRole('button', {name:'验证服务商'}).click();
+		await login.getByLabel('邮箱').waitFor();
+		assert.ok(await status.isHidden(), 'the next attempt clears the dialog status');
+		await login.getByLabel('邮箱').fill('qa@example.invalid');
+		await login.getByLabel('密码', {exact:true}).fill('fixture');
+		await login.getByRole('button', {name:'登录',exact:true}).click();
+		await login.getByRole('heading', {name:'选择套餐'}).waitFor();
+		await page.evaluate(() => { window.model.controls.failRefresh = true; });
+		await login.getByRole('button', {name:'使用',exact:true}).click();
+		await login.getByText(/更新失败/).waitFor();
+		await page.waitForFunction(() => !document.querySelector('dialog[open] button[aria-busy]'));
+		assert.ok(await status.isHidden(), 'the import failure shows once, under the plans');
+		await page.keyboard.press('Escape');
+		await login.waitFor({state:'detached'});
+
+		await page.goto(base + '/?scenario=notice-overview');
+		await page.getByRole('button', {name:'恢复默认',exact:true}).click();
+		const restore = page.getByRole('dialog', {name:'恢复默认设置'});
+		await restore.getByRole('button', {name:'恢复默认',exact:true}).click();
+		await restore.waitFor({state:'detached'});
+		const restored = page.locator('.ow-feedback').filter({hasText:'已恢复默认设置'});
+		const first = await restored.elementHandle();
+		// A change from elsewhere re-renders the overview at its next poll, as a phase change does.
+		await page.evaluate(() => { window.model.saved.revision++; });
+		await page.waitForFunction(line => !line.isConnected, first);
+		assert.equal(await restored.getAttribute('data-tone'), 'done', 'the confirmation outlives the re-render');
+		assert.ok(await page.locator('.ow-alert').isHidden(), 'no alert above the page');
+
+		await page.goto(base + '/?scenario=notice-card#subscriptions');
+		await page.evaluate(() => { window.model.controls.holdRefresh = true; });
+		await page.locator('.ow-source-card').filter({hasText:'外部订阅'}).getByRole('button', {name:'更新',exact:true}).click();
+		await page.waitForFunction(() => !!window.model.controls.release);
+		await page.getByRole('link', {name:'概览',exact:true}).click();
+		await page.getByRole('heading', {name:'故障与恢复',exact:true}).waitFor();
+		await page.evaluate(() => { window.model.controls.release('subscription_empty'); });
+		await page.locator('.ow-alert').filter({hasText:'订阅内容为空'}).waitFor();
+		assert.deepEqual(errors, []);
+	} finally { await page.close(); }
+}
 // Advance the browser clock through ten minutes of normal overview polling.
 // Measuring document and chart bounds catches cumulative layout growth that
 // a screenshot taken immediately after mount does not show.
@@ -594,9 +651,10 @@ try {
 		assert.equal(await page.locator('vite-error-overlay, nextjs-portal, #webpack-dev-server-client-overlay').count(), 0);
 		await checkOverviewPolling(page, base, width);
 		await checkKernelPreparation(browser, base, {width,height});
+		await checkNotices(browser, base, {width,height});
 		assert.deepEqual(errors, []);
 		console.log(
-			width + '×' + height + ' six views, fail-open preference and four status transitions, 10 minutes of stable overview polling, dialogs, URL/TCP probes, kernel install and isolated clear passed',
+			width + '×' + height + ' six views, fail-open preference and four status transitions, 10 minutes of stable overview polling, dialogs, URL/TCP probes, kernel install, notices that outlive their page and isolated clear passed',
 		);
 		await page.close();
 	}

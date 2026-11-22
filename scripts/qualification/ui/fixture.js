@@ -161,6 +161,14 @@ export function fixture(empty = false, preparing = false) {
 						tasks.set(failed.task,{stage:'failed',error:provider.code,result:{ok:false,error:provider.code,provider}});
 						return failed;
 					}
+					// controls.holdRefresh keeps the next refresh running until controls.release(code) fails it.
+					if (controls.holdRefresh) {
+						controls.holdRefresh = false;
+						const held = job({});
+						tasks.set(held.task, {stage:'running'});
+						controls.release = (code) => { tasks.set(held.task, {stage:'failed', error:code}); };
+						return held;
+					}
 					if(controls.failRefresh) {
 						controls.failRefresh = false;
 						const failed = job({});
