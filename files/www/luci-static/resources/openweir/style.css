@@ -14,6 +14,8 @@
 	--ow-tint: #e3f7f5;
 	--ow-violet: #7756e8;
 	--ow-danger: #ad2d25;
+	--ow-warning: #7b420a;
+	--ow-warning-tint: #fff0d9;
 	color: var(--ow-text);
 	background: var(--ow-bg);
 	font:
@@ -43,6 +45,8 @@
 		--ow-tint: #103a36;
 		--ow-violet: #ad96ff;
 		--ow-danger: #ff8c82;
+		--ow-warning: #edbf66;
+		--ow-warning-tint: #36280f;
 		color-scheme: dark;
 	}
 }
@@ -777,8 +781,8 @@
 	margin-bottom: 12px;
 }
 .ow .ow-warning {
-	background: #fff0d9;
-	color: #7b420a;
+	background: var(--ow-warning-tint);
+	color: var(--ow-warning);
 }
 .ow dialog.ow-modal {
 	position: fixed;

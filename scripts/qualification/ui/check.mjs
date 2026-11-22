@@ -455,6 +455,11 @@ try {
 				const partial = page.getByRole('dialog',{name:'确认订阅变更'});
 				await partial.getByText(/跳过这些条目，保留其余分流/).waitFor();
 				await partial.getByText(/此次变更会跳过拦截规则.*继续匹配其余规则和兜底出口/).waitFor();
+				const warningTint = () => partial.locator('.ow-warning').evaluate(el => getComputedStyle(el).backgroundColor);
+				const lightTint = await warningTint();
+				await page.emulateMedia({ colorScheme: 'dark' });
+				assert.notEqual(await warningTint(), lightTint, 'the review warning takes dark colours');
+				await page.emulateMedia({ colorScheme: 'light' });
 				await partial.getByText(/Streaming · SRS.*无法被内核直接使用/).waitFor();
                 await partial.getByText(/rule 1 · Streaming.*此拦截规则引用的规则集未载入/).waitFor();
                 assert.equal(await partial.getByRole('checkbox').count(), 0);
