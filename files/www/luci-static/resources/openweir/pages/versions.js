@@ -1,29 +1,10 @@
-import { h, tlsMessage } from '../dom.js';
+import { h, diagnosticMessage } from '../dom.js';
 
 // The kernel row: 检查更新, then 更新到 vX only when a newer stable release exists. The
 // router picks a reachable download address on its own and checks every download against
-// the original release's SHA-256.
+// the original release's SHA-256. Its errors read in Chinese through diagnosticMessage, as
+// in the log.
 const noStable = 'publisher has no stable release';
-const kernelErrors = new Map([
-	['release checksum mismatch', '下载的文件未通过校验，请稍后重试'],
-	['upstream release checksum unavailable', '暂时无法取得官方校验值，请稍后重试'],
-	['release archive incompatible with this router', '这个版本不支持此路由器'],
-	['release executable failed version validation', '内核未能在此路由器上运行'],
-	['insufficient resources for this storage mode', '存储空间或内存不足'],
-	['release source unreachable', '无法连接下载地址，请检查网络后重试'],
-	['release source temporarily unreachable', '下载地址暂时不可用，请稍后重试'],
-	['GitHub release API rate limit reached', 'GitHub 查询次数已达上限，请稍后重试'],
-	['latest stable release unreachable', '无法获取最新版本，请检查网络后重试'],
-	[noStable, '暂时没有可用的正式版'],
-	['invalid latest stable release identity', '最新版本信息未通过校验'],
-	['latest stable release lacks a verified archive for this router', '最新版本没有适用于此路由器的文件'],
-]);
-export function kernelMessage(message) {
-	if (message?.startsWith('release_tls ')) {
-		try { return tlsMessage(JSON.parse(message.slice('release_tls '.length))); } catch { /* legacy task */ }
-	}
-	return kernelErrors.get(message) || message;
-}
 
 export function bootstrapState(status) {
 	if (status.selected || !status.bootstrap) return '';
@@ -78,7 +59,7 @@ export function kernelStorage(ui, status, updates, segment) {
 			status = await refresh(ui, updates);
 			describe(storageOf(status));
 		} catch (error) {
-			note.textContent = kernelMessage(error.message);
+			note.textContent = diagnosticMessage(error.message);
 			note.dataset.tone = 'error';
 		}
 	});
@@ -100,7 +81,7 @@ export function kernelSummary(ui, status, updates, setup = false) {
 			await work();
 		} catch (error) {
 			if (error.name !== 'AbortError') {
-				note.textContent = kernelMessage(error.message);
+				note.textContent = diagnosticMessage(error.message);
 				note.dataset.tone = 'error';
 			}
 		} finally {
@@ -141,7 +122,7 @@ export function kernelSummary(ui, status, updates, setup = false) {
 		if (status.pending && !note.textContent) note.textContent = '新内核正在确认运行正常';
 		const failure = state === '下载失败' && (status.bootstrap.result?.error || status.bootstrap.error);
 		if (failure && !busy && !note.textContent) {
-			note.textContent = kernelMessage(failure);
+			note.textContent = diagnosticMessage(failure);
 			note.dataset.tone = 'error';
 		}
 		if (!setup && (!note.textContent || note.dataset.version)) {

@@ -215,7 +215,6 @@ const diagnosticText = {
     kernel_not_installed: '请先在内核管理中安装并选择一个版本',
     kernel_restore_unavailable: '无法从下载源恢复临时内核',
     kernel_preparation_failed: '内核准备失败，未取得更具体的错误分类',
-    'openweir-kernel begin failed': '内核准备启动失败，旧版日志未记录具体原因',
     // Why a subscription operation failed (openweir-subscription's error codes), on the
     // subscriptions page and in the log.
     subscription_request_failed: '无法连接订阅服务器，请检查网络后重试',
@@ -411,9 +410,11 @@ const errorText = {
     'context deadline exceeded': '操作超时',
     'context canceled': '操作已取消',
     'operation already in progress': '已有相同的操作正在进行，请稍后重试',
+    'manager restarted before completion': '任务完成前服务已重启',
+    'operation failed': '操作失败',
+    'response too large': '辅助程序返回的内容过大',
+    'invalid helper response': '辅助程序返回了无效结果',
     'core is not running': '代理未运行',
-    'kernel operation failed': '内核操作失败',
-    'kernel selection revision changed': '内核版本已被其他操作切换，请刷新后重试',
     'candidate core rejected the configuration': '内核拒绝了此配置',
     'no compatible members on this device': '没有当前内核可用的成员',
     'saved member unavailable on this device': '保存的节点在当前内核中不可用',
@@ -429,6 +430,40 @@ export const providerErrors = {
     provider_cancelled: '下载已取消', provider_download_failed: '引用文件下载失败',
     invalid_proxy_provider: '节点文件格式无效', invalid_rule_provider: '规则文件格式无效',
     node_limit: '节点数量超过上限', rule_limit: '规则数量超过上限',
+};
+// The kernel's errors, read alike on the kernel page and in the log: what the kernel helper
+// reports through openweird (publicKernelError), what the kernel's jobs fail with, and a helper
+// command the router ran that failed without a reason.
+const kernelErrors = {
+    'release checksum mismatch': '下载的文件未通过校验，请稍后重试',
+    'upstream release checksum unavailable': '暂时无法取得官方校验值，请稍后重试',
+    'release archive incompatible with this router': '这个版本不支持此路由器',
+    'release executable failed version validation': '内核未能在此路由器上运行',
+    'insufficient resources for this storage mode': '存储空间或内存不足',
+    'release source unreachable': '无法连接下载地址，请检查网络后重试',
+    'release source temporarily unreachable': '下载地址暂时不可用，请稍后重试',
+    'GitHub release API rate limit reached': 'GitHub 查询次数已达上限，请稍后重试',
+    'latest stable release unreachable': '无法获取最新版本，请检查网络后重试',
+    'publisher has no stable release': '暂时没有可用的正式版',
+    'invalid latest stable release identity': '最新版本信息未通过校验',
+    'latest stable release lacks a verified archive for this router': '最新版本没有适用于此路由器的文件',
+    'kernel operation failed': '内核操作失败',
+    'kernel selection revision changed': '内核版本已被其他操作切换，请刷新后重试',
+    'router intent changed; version was not selected': '配置在此期间已变更，未切换内核版本，请重试',
+    'no retained version available': '没有可回退的内核版本',
+    'missing primary source for candidate validation': '缺少主订阅，无法校验新内核',
+    'service stopped before the kernel change was confirmed': '内核切换确认前代理已停止',
+    'invalid initial kernel marker': '首次内核准备标记无效',
+    'openweir-kernel status failed': '读取内核状态失败',
+    'openweir-kernel capabilities failed': '读取内核能力信息失败',
+    'openweir-kernel recover failed': '恢复内核失败',
+    'openweir-kernel closed failed': '内核退出后的清理失败',
+    'openweir-kernel reject failed': '退回上次确认的内核版本失败',
+    'openweir-kernel begin failed': '准备启动内核失败，未取得具体原因',
+    'openweir-kernel confirm failed': '确认新内核失败',
+    'openweir-kernel abort failed': '结束内核试运行失败',
+    'openweir-kernel cancel failed': '结束内核试运行失败',
+    'openweir-kernel check failed': '内核校验配置失败，未取得具体原因',
 };
 // The name of a node or group by its ID, when the page has read the subscription (app.js).
 let memberName = () => '';
@@ -477,11 +512,19 @@ const errorPatterns = [
     [/^subscription_http_([1-5][0-9]{2})$/, (m) => '订阅服务器返回 HTTP ' + m[1]],
     [/^provider_http_([1-5][0-9]{2})$/, (m) => '节点或规则提供方返回 HTTP ' + m[1]],
     [/^(?:subscription|provider)_tls_([a-z_]+)$/, (m) => tlsMessage({ reason: m[1] }) || 'HTTPS 证书校验失败'],
+    // The certificate check a kernel download failed, with its validity dates (tlsdiag Wire).
+    [/^release_tls (\{.*\})$/, (m) => {
+        try { return tlsMessage(JSON.parse(m[1])) || 'HTTPS 证书校验失败'; } catch { return 'HTTPS 证书校验失败'; }
+    }],
+    // A kernel change the service did not confirm (waitForKernel).
+    [/^candidate failed startup or health checks; previous kernel (\S+) is running$/, (m) => '新内核未通过启动或健康检查，已恢复上一版 ' + m[1]],
+    [/^kernel change unconfirmed: (.*)$/s, (m) => '未能确认内核切换' + (m[1] ? ' · ' + diagnosticMessage(m[1]) : '')],
 ];
 function errorMessage(text) {
     if (diagnosticText[text]) return diagnosticText[text];
     if (errorText[text]) return errorText[text];
     if (providerErrors[text]) return providerErrors[text];
+    if (kernelErrors[text]) return kernelErrors[text];
     for (const [re, fn] of errorPatterns) {
         const m = re.exec(text);
         if (m) return fn(m);

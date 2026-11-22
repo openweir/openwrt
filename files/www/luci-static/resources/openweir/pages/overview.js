@@ -1,6 +1,6 @@
 import { diagnosticMessage, day, pluginName, conflictItem } from '../dom.js';
 import { h, card, bytes, field, empty, segment, modeNames, clock, resultName, say, hush, attach } from '../dom.js';
-import { installLatest, kernelMessage, kernelStorage, kernelSummary } from './versions.js';
+import { installLatest, kernelStorage, kernelSummary } from './versions.js';
 
 const states = {
 	running: '已连接',
@@ -484,7 +484,7 @@ export async function overview(ui) {
 				preparing = false;
 				show('off');
 				if (error.name === 'AbortError') return;
-				throw Error(kernelMessage(error.message));
+				throw error;
 			}
 			preparing = false;
 		}
