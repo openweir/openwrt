@@ -345,6 +345,30 @@
 .ow button.ow-power {
 	transition: background-color 0.15s, box-shadow 0.15s, color 0.15s;
 }
+/* Starting: the red disconnect control pulses its ring until the core runs, then settles once. */
+.ow button.ow-power.on.starting {
+	animation: ow-power-pulse 1.4s ease-in-out infinite;
+}
+.ow button.ow-power.on.settled {
+	animation: ow-power-settle 0.6s ease-out;
+}
+@keyframes ow-power-pulse {
+	0%,
+	100% {
+		box-shadow: 0 0 0 7px color-mix(in srgb, var(--ow-danger) 22%, transparent);
+	}
+	50% {
+		box-shadow: 0 0 0 15px color-mix(in srgb, var(--ow-danger) 6%, transparent);
+	}
+}
+@keyframes ow-power-settle {
+	from {
+		box-shadow: 0 0 0 18px color-mix(in srgb, var(--ow-danger) 0%, transparent);
+	}
+	to {
+		box-shadow: 0 0 0 7px color-mix(in srgb, var(--ow-danger) 22%, transparent);
+	}
+}
 .ow .ow-power span {
 	font-size: 12px;
 }
@@ -1080,6 +1104,7 @@
 	.ow * {
 		scroll-behavior: auto !important;
 		transition: none !important;
+		animation: none !important;
 	}
 }
 .ow .ow-environment {

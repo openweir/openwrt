@@ -344,19 +344,24 @@ export async function overview(ui) {
 				return;
 			}
 		}
-		// Show the connected (red) state at once; the refresh confirms it or rolls it back.
-		power.classList.add('on');
+		// Show the disconnect (red) control at once, pulsing until the core is up; the refresh
+		// confirms it or rolls it back.
+		power.classList.add('on', 'starting');
 		power.lastChild.textContent = '点按断开';
 		try {
 			await ui.run('start', { revision: intent.revision });
 		} catch (error) {
-			power.classList.remove('on');
+			power.classList.remove('on', 'starting');
 			power.lastChild.textContent = '点按连接';
 			throw error;
 		}
 		await ui.refresh();
 	};
-	const power = ui.button('', start, 'ow-power' + (running ? ' on' : ''));
+	// Whenever the button offers to disconnect it is red; until the core runs it pulses, and the
+	// first render after it comes up settles the ring once.
+	const starting = intent.enabled && !running;
+	const power = ui.button('', start, 'ow-power' + (intent.enabled ? ' on' : '') + (starting ? ' starting' : running && ui.memory.powerStarting ? ' settled' : ''));
+	ui.memory.powerStarting = starting;
 	const powerLabel = intent.enabled
 		? '点按断开'
 		: !cat.primary
