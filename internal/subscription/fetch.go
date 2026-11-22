@@ -784,13 +784,10 @@ func (f Fetcher) Refresh(ctx context.Context, store *Store, id string, file []by
 			return
 		case failure != nil:
 			reason = failure.Error()
-		case candidate.Decision == "blocked":
-			reason = candidate.Profile.credentialIssue()
-			if reason == "" && !reviewed {
-				return
-			}
 		case !reviewed:
 			return
+		case candidate.Decision == "blocked":
+			reason = candidate.Profile.credentialIssue()
 		}
 		if len(reason) > 60 || (reason == "" && failure != nil) || strings.Trim(reason, "abcdefghijklmnopqrstuvwxyz_0123456789") != "" {
 			reason = "update_failed"

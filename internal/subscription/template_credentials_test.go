@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
 	"reflect"
 	"strings"
 	"testing"
@@ -92,6 +94,56 @@ func TestBadCredentialUpdateRetainsSnapshot(t *testing.T) {
 	}
 	if _, err := Parse("test", []byte("not a subscription")); !errors.Is(err, errMessage) {
 		t.Fatal("unrelated parse error was swallowed", err)
+	}
+}
+
+// An update with credential trouble read with a replacement link or another routing choice is
+// not the source's: blocked, it leaves the source's status as it was. Read from the source's own
+// link with its own choice, it is recorded.
+func TestBlockedUpdateOfAnotherLinkOrChoiceLeavesTheSource(t *testing.T) {
+	const good = "[Proxy]\nFirst = snell, node.example, 443, version=6, psk=valid-test-psk"
+	malformed := strings.ReplaceAll(good, "psk=", "password=") + "\nSecond = http, new.example, 8080"
+	store := OpenStore(t.TempDir())
+	src := Source{ID: "sub", Name: "sub", Kind: "external", URL: "https://example.com/feed"}
+	if err := store.Configure(src); err != nil {
+		t.Fatal(err)
+	}
+	body := good
+	f := Fetcher{Client: &http.Client{Transport: setFixtureTransport(func(r *http.Request) (*http.Response, error) {
+		answer := body
+		if r.URL.Path == "/other" {
+			answer = malformed
+		}
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(answer))}, nil
+	})}}
+	if c, err := f.Refresh(t.Context(), store, src.ID, nil, Policy{}); err != nil || c.Decision != "ready" {
+		t.Fatal(err, c.Decision)
+	}
+	template := RoutingTemplate
+	other, choice := f, f
+	other.ReplacementURL = "https://example.com/other"
+	body = malformed
+	choice.Routing = &template
+	for name, f := range map[string]Fetcher{"replacement link": other, "routing choice": choice} {
+		for _, scheduled := range []bool{false, true} {
+			c, err := f.Refresh(t.Context(), store, src.ID, nil, Policy{Scheduled: scheduled})
+			if err != nil || c.Decision != "blocked" || c.Profile.credentialIssue() != "nonstandard_snell_credential" {
+				t.Fatal(name, err, c.Decision, c.Notices)
+			}
+			st, err := store.Status(src.ID)
+			if err != nil || st.LastFailure != "" || st.PendingUpdate != nil || !st.Ready || st.Rules != RoutingOwn {
+				t.Fatalf("%s recorded on the source: %+v %v", name, st, err)
+			}
+			if url, _ := store.SourceURL(src.ID); url != src.URL {
+				t.Fatal(name, url)
+			}
+		}
+	}
+	if _, err := f.Refresh(t.Context(), store, src.ID, nil, Policy{Scheduled: true}); err != nil {
+		t.Fatal(err)
+	}
+	if st, _ := store.Status(src.ID); st.LastFailure != "nonstandard_snell_credential" || st.PendingUpdate == nil || st.PendingUpdate.Code != PendingBlocked {
+		t.Fatal("the source's own blocked update not recorded", st.LastFailure, st.PendingUpdate)
 	}
 }
 
