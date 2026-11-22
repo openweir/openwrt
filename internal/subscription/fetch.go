@@ -878,6 +878,26 @@ func (f Fetcher) Refresh(ctx context.Context, store *Store, id string, file []by
 	}
 	policy.AllowLocalFallback = src.AllowLocalFallback
 	c := Assess(p, r.Current, policy)
+	if c.Decision == "confirmation_required" && r.Current != nil {
+		// An update that needs confirmation yet routes as the current profile (Profile.routing)
+		// asks nothing new: its notices repeat those of the routing the router already runs,
+		// which the administrator confirmed, or which needed no confirmation then. It goes on as
+		// confirmed, so that a subscription whose every download drops a rule the router cannot
+		// carry out, a REJECT one say, is found unchanged by its scheduled refreshes instead of
+		// held for the administrator again each time. The profile compared is the one the
+		// confirmation would commit: one falling back to local routing is committed without its
+		// rules. A blocked update stays blocked even then, as nobody confirms it: credential
+		// trouble blocks only an update that loses nodes, which cannot route the same, and an
+		// active target it lacks (Policy) is a reference of the router's that the current
+		// profile lacks too, which the administrator has to change.
+		confirmed := policy
+		confirmed.Confirm = c.ConfirmationID
+		// Assess appends to the notices: keep its second reading's apart from the first's.
+		p.Notices = slices.Clip(p.Notices)
+		if same := Assess(p, r.Current, confirmed); same.Decision == "ready" && digest(same.Profile.routing()) == digest(r.Current.routing()) {
+			c = same
+		}
+	}
 	c.Usage = usage
 	if !receipt.Expires.IsZero() && !c.Profile.Local && len(c.Notices) == 0 {
 		c.receipt = &receipt

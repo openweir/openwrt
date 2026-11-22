@@ -109,3 +109,84 @@ func TestPendingUpdateKeepsNoticeCodes(t *testing.T) {
 		t.Fatal(len(p.Notices))
 	}
 }
+
+// A subscription whose every download needs confirmation, as one with a REJECT rule the router
+// cannot carry out, is confirmed once. Its scheduled refreshes of the same content then find it
+// unchanged: nothing pending, the update date advancing and the back-off over, so the scheduler
+// keeps the update interval. Content that routes otherwise still waits for the administrator,
+// and an update blocked by a target the router refers to stays blocked.
+func TestConfirmedUpdateIsNotHeldAgain(t *testing.T) {
+	const proxies = "proxies: [{name: Edge, type: http, server: edge.example, port: 8080}]\n"
+	const routes = "'DOMAIN,a.example,Edge', 'DOMAIN,b.example,Edge', 'DOMAIN,c.example,Edge', 'DOMAIN,d.example,Edge', 'DOMAIN,e.example,Edge', 'DOMAIN,f.example,Edge', 'DOMAIN,g.example,Edge', 'DOMAIN,h.example,Edge', 'MATCH,DIRECT'"
+	for name, feed := range map[string]string{
+		"script rule":      proxies + "rules: ['SCRIPT,quic,REJECT', " + routes + "]",
+		"sub-rule":         proxies + "rules: ['SUB-RULE,(NETWORK,tcp),REJECT', " + routes + "]",
+		"missing rule set": proxies + "rules: ['RULE-SET,missing,REJECT', " + routes + "]",
+		"process name":     proxies + "rules: ['PROCESS-NAME,ads,REJECT', " + routes + "]",
+		"local routing":    proxies + "script: {code: 'def main(ctx, md): return \"DIRECT\"'}\nrules: [" + routes + "]",
+	} {
+		t.Run(name, func(t *testing.T) {
+			store := OpenStore(t.TempDir())
+			src := Source{ID: "sub", Name: "sub", Kind: "external", URL: "https://example.com/feed"}
+			if err := store.Configure(src); err != nil {
+				t.Fatal(err)
+			}
+			body := feed
+			f := Fetcher{Client: &http.Client{Transport: setFixtureTransport(func(*http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body))}, nil
+			})}}
+			c, err := f.Refresh(t.Context(), store, src.ID, nil, Policy{})
+			if err != nil || c.Decision != "confirmation_required" {
+				t.Fatal(err, c.Decision, c.Notices)
+			}
+			if c, err = f.Refresh(t.Context(), store, src.ID, nil, Policy{Confirm: c.ConfirmationID}); err != nil || c.Decision != "ready" || c.Unchanged() {
+				t.Fatal(err, c.Decision)
+			}
+			confirmed, err := store.Load(src.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for range 2 {
+				// Long since updated, and held by a scheduled refresh before this one.
+				if err := store.update(src.ID, func(r *record) error {
+					r.UpdatedAt, r.PendingUpdate = "2000-01-01T00:00:00Z", &PendingUpdate{Code: PendingConfirmation}
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+				c, err := f.Refresh(t.Context(), store, src.ID, nil, Policy{Scheduled: true})
+				if err != nil || c.Decision != "ready" || !c.Unchanged() || len(c.Notices) == 0 {
+					t.Fatal(err, c.Decision, c.Unchanged(), c.Notices)
+				}
+				st, err := store.Status(src.ID)
+				if err != nil || st.PendingUpdate != nil || st.UpdatedAt == "2000-01-01T00:00:00Z" || st.Attempts != 0 || st.AttemptedAt != "" || st.LastFailure != "" || st.HasHistory {
+					t.Fatalf("%+v %v", st, err)
+				}
+				if current, _ := store.Load(src.ID); digest(current.routing()) != digest(confirmed.routing()) {
+					t.Fatal("the confirmed routing changed")
+				}
+			}
+
+			if _, st := scheduledRefresh(t, f, store, src.ID, Policy{Scheduled: true, ActiveIDs: []string{"node:gone"}}, "blocked"); st.PendingUpdate == nil || st.PendingUpdate.Code != PendingBlocked {
+				t.Fatal("identical update with a missing target not blocked", st.PendingUpdate)
+			}
+			body = strings.Replace(feed, "edge.example", "edge2.example", 1)
+			if _, st := scheduledRefresh(t, f, store, src.ID, Policy{Scheduled: true}, "confirmation_required"); st.PendingUpdate == nil || st.PendingUpdate.Code != PendingConfirmation || st.Attempts != 2 {
+				t.Fatal("changed update not held", st.PendingUpdate, st.Attempts)
+			}
+		})
+	}
+}
+
+func scheduledRefresh(t *testing.T, f Fetcher, store *Store, id string, policy Policy, decision string) (Candidate, Status) {
+	t.Helper()
+	c, err := f.Refresh(t.Context(), store, id, nil, policy)
+	if err != nil || c.Decision != decision {
+		t.Fatal(err, c.Decision, c.Notices)
+	}
+	st, err := store.Status(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c, st
+}
