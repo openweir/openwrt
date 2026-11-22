@@ -496,7 +496,8 @@ function errorMessage(text) {
 export function diagnosticMessage(text) {
     if (!text) return '';
     if (diagnosticText[text]) return diagnosticText[text];
-    const task = /^(\S+) (done|failed|held) ([A-Za-z0-9_-]+)(?: (.*))?$/s.exec(text);
+    // A task's ID is 24 hex digits (runJob), so an error that reads "x failed y" is not one.
+    const task = /^(\S+) (done|failed|held) ([0-9a-f]{24})(?: (.*))?$/s.exec(text);
     if (task) {
         const extra = task[4] && task[4][0] !== '{' ? diagnosticMessage(task[4]) : '';
         return taskName(task[1]) + ' · ' + taskStage[task[2]] + (extra ? ' · ' + extra : '');
