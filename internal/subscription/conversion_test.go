@@ -261,8 +261,8 @@ rules:
 	if s := byTag["sing"]; s.Format != "text" || s.Behavior != "domain" || string(s.Data) != "+.sing.example\n" {
 		t.Fatalf("sing-box source: %+v %q", s, s.Data)
 	}
-	// An empty set goes like one the router lacks: its rule is skipped, and confirmed as it rejects.
-	if _, ok := byTag["empty"]; ok || len(p.Rules) != 2 || !slices.Contains(p.Notices, Notice{Code: "rule_provider_reference_unavailable", At: "rule 3 · empty", Dangerous: true}) {
-		t.Fatal(p.Rules, p.Notices)
+	// An empty set matches nothing, as its provider meant: it and its rule stay, without a word.
+	if s, ok := byTag["empty"]; !ok || s.Entries != 0 || len(s.Data) != 0 || len(p.Rules) != 3 || len(p.Notices) != 0 {
+		t.Fatal(byTag["empty"], p.Rules, p.Notices)
 	}
 }

@@ -381,10 +381,6 @@ func (s *providers) clash(m map[string]any) error {
 			return errRulePayload
 		}
 		set, err := ruleSet(name, field(v, "format"), field(v, "behavior"), raw)
-		if errors.Is(err, subconv.ErrNoRules) {
-			// Nothing to match: the rules that use it go, as for any set the router lacks.
-			continue
-		}
 		if err != nil {
 			return providerFailure("rule", field(v, "url"), err)
 		}

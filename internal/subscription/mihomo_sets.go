@@ -73,7 +73,7 @@ func MRSEntries(data []byte, behavior string) (int, error) {
 
 // ruleSet converts a rule provider's content into what the core reads: subconv turns lists of
 // any client into mihomo's text, and the behavior the entries need may differ from the declared
-// one. MRS passes through after MRSEntries checks it. subconv.ErrNoRules means nothing usable.
+// one. MRS passes through after MRSEntries checks it.
 func ruleSet(tag, format, behavior string, data []byte) (BinarySet, error) {
 	if !safeLabel(tag) || len(data) == 0 || len(data) > MaxBody {
 		return BinarySet{}, errRulePayload
@@ -81,7 +81,12 @@ func ruleSet(tag, format, behavior string, data []byte) (BinarySet, error) {
 	content, err := subconv.ConvertRuleSet(data, behavior, format)
 	switch {
 	case errors.Is(err, subconv.ErrNoRules):
-		return BinarySet{}, err
+		// An empty list, or one of comments only, matches nothing, as its provider meant: the
+		// rules that use it stay.
+		if behavior != "domain" && behavior != "ipcidr" {
+			behavior = "classical"
+		}
+		content = &subconv.RuleSet{Behavior: behavior, Format: "text", Body: []byte{}}
 	case errors.Is(err, subconv.ErrRuleSetTooLarge):
 		return BinarySet{}, errors.New("provider_size_limit")
 	case err != nil:
