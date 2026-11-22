@@ -7,9 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
-	"os/user"
 	"slices"
-	"strconv"
 
 	"github.com/openweir/openwrt/internal/control"
 	"github.com/openweir/openwrt/internal/kernel"
@@ -120,19 +118,11 @@ func (s *System) Reload(ctx context.Context, i Intent) error {
 	if e != nil {
 		return errors.New("active subscription unavailable")
 	}
-	account, e := user.Lookup("openweir-core")
+	gid, e := coreGID()
 	if e != nil {
-		return errors.New("core account missing")
+		return e
 	}
-	gid, e := strconv.Atoi(account.Gid)
-	if e != nil || gid == 0 {
-		return errors.New("invalid core group")
-	}
-	uid, e := strconv.Atoi(account.Uid)
-	if e != nil || uid < 1 {
-		return errors.New("invalid core user")
-	}
-	if e = prepareMihomo(profile, uid, gid); e != nil {
+	if e = prepareMihomo(profile, gid); e != nil {
 		return errors.New("cannot prepare authorized rule sets")
 	}
 	if _, e = syncDevices(ctx, policyMACs(i), n, gid); e != nil {

@@ -34,7 +34,7 @@ func privateDir(path string, gid int) error {
 	return os.Chmod(path, 0750)
 }
 
-func prepareMihomo(p subscription.Profile, uid, gid int) error {
+func prepareMihomo(p subscription.Profile, gid int) error {
 	if err := privateDir(coreHome, gid); err != nil {
 		return err
 	}
@@ -52,19 +52,13 @@ func prepareMihomo(p subscription.Profile, uid, gid int) error {
 			}
 		}
 	}
-	// The core may update its Bolt database, but cannot replace the provider
-	// directory, the geodata links or the database file itself.
+	// The core keeps its Bolt database here; create it private rather than with the core's umask.
 	f, err := os.OpenFile(coreHome+"/cache.db", os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0600)
 	if err != nil {
 		return err
 	}
-	err = f.Chown(uid, gid)
-	closeErr := f.Close()
-	if err != nil {
+	if err = f.Close(); err != nil {
 		return err
-	}
-	if closeErr != nil {
-		return closeErr
 	}
 	return subscription.MaterializeSets(p, Root+"/rulesets", gid)
 }

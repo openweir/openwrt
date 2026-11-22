@@ -313,19 +313,11 @@ func (s *System) Start(ctx context.Context, i Intent) (err error) {
 	if e != nil {
 		return errors.New("active subscription unavailable")
 	}
-	account, e := user.Lookup("openweir-core")
+	gid, e := coreGID()
 	if e != nil {
-		return errors.New("core account missing")
+		return e
 	}
-	gid, e := strconv.Atoi(account.Gid)
-	if e != nil || gid == 0 {
-		return errors.New("invalid core group")
-	}
-	uid, e := strconv.Atoi(account.Uid)
-	if e != nil || uid < 1 {
-		return errors.New("invalid core user")
-	}
-	if e = prepareMihomo(profile, uid, gid); e != nil {
+	if e = prepareMihomo(profile, gid); e != nil {
 		return errors.New("cannot prepare authorized rule sets")
 	}
 	if _, e = syncDevices(ctx, policyMACs(i), n, gid); e != nil {
@@ -378,18 +370,7 @@ func (s *System) Start(ctx context.Context, i Intent) (err error) {
 	if e != nil || !info.IsDir() || info.Mode().Perm() != 0700 {
 		return errors.New("invalid private core work directory")
 	}
-	if e = os.Chown(work, uid, gid); e != nil {
-		return e
-	}
-	capfile := "/etc/openweir/core-capabilities.json"
-	launcher := "/sbin/ujail"
-	if n.Method == "tun" {
-		launcher = "/usr/libexec/openweir/tun-jail"
-	}
-	cmd := exec.Command(launcher, "-U", "openweir-core", "-G", "openweir-core", "-C", capfile, "-c", "-e", "TMPDIR", "-e", "HOME", "--", launch.Path, "-d", coreHome, "-f", launch.Config)
-	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "TMPDIR=" + work, "HOME=" + work}
-	cmd.Dir = work
-	processDeath(cmd, n.Method == "tun")
+	cmd := coreCommand(n.Method, launch, work)
 	// No raw node config or free-form core error can enter diagnostics.
 	coreLog := &logSink{r: s.records}
 	s.records.CoreStarted(i.Source)
@@ -536,6 +517,44 @@ applyLoop:
 	s.remember(i, n, caps.Tag, config)
 	s.startMonitor(i, n, gid, key)
 	return nil
+}
+
+// The core runs as root in this group. The firewall lets the group's sockets out uncaptured
+// (meta skgid), so the group must not be root's.
+const coreGroup = "openweir-core"
+
+// coreCapabilities bounds every capability set of the core to CAP_NET_ADMIN (TProxy sockets,
+// SO_MARK, the TUN device) and CAP_NET_BIND_SERVICE (TProxy UDP replies from ports below 1024).
+// No CAP_NET_RAW: TUN mode routes only TCP and UDP to the core, so ICMP never needs a raw socket.
+const coreCapabilities = "/etc/openweir/core-capabilities.json"
+
+func coreGID() (int, error) {
+	g, e := user.LookupGroup(coreGroup)
+	if e != nil {
+		return 0, errors.New("core group missing")
+	}
+	gid, e := strconv.Atoi(g.Gid)
+	if e != nil || gid < 1 {
+		return 0, errors.New("invalid core group")
+	}
+	return gid, nil
+}
+
+// coreCommand starts the core in ujail. Without -U ujail keeps root's user ID; -G sets the
+// real, effective, saved and file-system group, which new sockets carry. ujail drops every
+// capability outside coreCapabilities, the bounding set included, before execve, and -c sets
+// no_new_privs, so root's execve gives back no other capability. coreProcess starts ujail
+// without supplementary groups.
+func coreCommand(method string, launch kernel.Launch, work string) *exec.Cmd {
+	launcher := "/sbin/ujail"
+	if method == "tun" {
+		launcher = "/usr/libexec/openweir/tun-jail"
+	}
+	cmd := exec.Command(launcher, "-G", coreGroup, "-C", coreCapabilities, "-c", "-e", "TMPDIR", "-e", "HOME", "--", launch.Path, "-d", coreHome, "-f", launch.Config)
+	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "TMPDIR=" + work, "HOME=" + work}
+	cmd.Dir = work
+	coreProcess(cmd, method == "tun")
+	return cmd
 }
 
 func (s *System) startMonitor(i Intent, n Network, gid int, key string) {

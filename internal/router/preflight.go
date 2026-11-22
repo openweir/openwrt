@@ -7,8 +7,6 @@ import (
 	"github.com/openweir/openwrt/internal/kernel"
 	"github.com/openweir/openwrt/internal/subscription"
 	"os"
-	"os/user"
-	"strconv"
 	"time"
 )
 
@@ -55,19 +53,11 @@ func (s *System) Preflight(ctx context.Context, i Intent, candidate *subscriptio
 
 func checkProfile(ctx context.Context, i Intent, p subscription.Profile, cap kernel.TargetCapabilities, n Network, version string) error {
 	{
-		acct, e := user.Lookup("openweir-core")
+		gid, e := coreGID()
 		if e != nil {
-			return errors.New("missing core user")
+			return e
 		}
-		gid, e := strconv.Atoi(acct.Gid)
-		if e != nil || gid < 1 {
-			return errors.New("invalid core group")
-		}
-		uid, e := strconv.Atoi(acct.Uid)
-		if e != nil || uid < 1 {
-			return errors.New("invalid core user")
-		}
-		if e = prepareMihomo(p, uid, gid); e != nil {
+		if e = prepareMihomo(p, gid); e != nil {
 			return e
 		}
 		if e = ensureDeviceFiles(coreHome+"/devices", policyMACs(i), gid); e != nil {

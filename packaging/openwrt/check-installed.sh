@@ -142,7 +142,9 @@ FETCH
   test -s /usr/share/licenses/luci-app-openweir/LICENSE
   for cli in openweird openweir-net openweir-kernel openweir-subscription; do test -x "/usr/sbin/$cli"; done
   test -x /etc/init.d/openweir && test -x /usr/libexec/openweir/network
-  test "$(id -u openweir-core)" != 0
+  core_gid=$(awk -F: '$1 == "openweir-core" { print $3 }' /etc/group)
+  test -n "$core_gid"
+  test "$core_gid" != 0
   test ! -e /usr/sbin/mihomo
   ;;
  reject-downgrade)

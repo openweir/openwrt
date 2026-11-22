@@ -209,9 +209,9 @@ dns_wire() {
  echo "DNS $phase passed on LAN, guest and unmanaged networks (IPv4/IPv6, TCP/UDP, gateway/public/private)"
 }
 start_core() {
- mkdir -p /tmp/mihomo-test
- chown openweir-core:openweir-core /tmp/mihomo-test
- /sbin/ujail -U openweir-core -G openweir-core -C /etc/openweir/core-capabilities.json -c -- /tmp/core -d /tmp/mihomo-test -f /tmp/core.yaml >/tmp/core.log 2>&1 &
+ mkdir -p -m 0700 /tmp/mihomo-test
+ # As the plugin does: root in the core group, with only the packaged capabilities.
+ /sbin/ujail -G openweir-core -C /etc/openweir/core-capabilities.json -c -- /tmp/core -d /tmp/mihomo-test -f /tmp/core.yaml >/tmp/core.log 2>&1 &
  jail=$!
  sleep 1
  for attempt in 1 2 3 4 5; do
