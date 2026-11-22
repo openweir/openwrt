@@ -1,14 +1,17 @@
 package subscription
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"maps"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"slices"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -414,5 +417,103 @@ func TestTemplateCopyReadWithoutWriting(t *testing.T) {
 				t.Fatal(got, before)
 			}
 		})
+	}
+}
+
+// A refresh waits for the lock no longer than it has: then it reads the copy without the lock,
+// and leaves it as it is.
+func TestTemplateLockWaitEndsWithTheRefresh(t *testing.T) {
+	root := t.TempDir()
+	s := &templateStage{root: root}
+	stageVersion(t, s, 1, version1)
+	s.promote()
+	s.close()
+	gen1 := current(t, root)
+	// Another helper holds the lock and does not let go.
+	other, err := os.Open(filepath.Join(root, templateLock))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	if err := syscall.Flock(int(other.Fd()), syscall.LOCK_EX); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	s = &templateStage{root: root, ctx: ctx}
+	if v := manifestVersion(t, s); v != 1 {
+		t.Fatal("the copy was not read:", v)
+	}
+	stageVersion(t, s, 2, map[string]string{rules.TemplatePath: "t2", "providers/a.txt": "a"})
+	s.promote()
+	s.close()
+	if waited := time.Since(start); waited > 5*time.Second {
+		t.Fatal("waited past the refresh:", waited)
+	}
+	if current(t, root) != gen1 {
+		t.Fatal("promoted without the lock")
+	}
+}
+
+// Refreshes promote and read at once: the link always names a whole generation, and a sweep
+// leaves only it.
+func TestTemplateConcurrentRefreshes(t *testing.T) {
+	root := t.TempDir()
+	files := func(v int64) map[string]string {
+		return map[string]string{rules.TemplatePath: fmt.Sprint("t", v), "providers/a.txt": "a", fmt.Sprintf("providers/v%d.txt", v%3): fmt.Sprint("x", v)}
+	}
+	var wg sync.WaitGroup
+	for i := range 40 {
+		wg.Go(func() {
+			s := &templateStage{root: root, ctx: t.Context()}
+			s.Get(rules.FloorKey)
+			v := int64(1 + rand.IntN(10))
+			stageVersion(t, s, v, files(v))
+			s.promote()
+			s.close()
+		})
+		if i%3 == 0 {
+			wg.Go(func() {
+				r := &templateStage{root: root, ctx: t.Context()}
+				defer r.close()
+				raw, ok := r.Get(rules.ManifestPath)
+				if !ok {
+					return
+				}
+				m, err := rules.ParseManifest(raw)
+				if err != nil {
+					t.Error("torn manifest")
+					return
+				}
+				for _, f := range m.Files {
+					if b, ok := r.Get(f.Path); !ok || !f.Matches(b) {
+						t.Errorf("version %d: %s missing or unlike the manifest", m.Version, f.Path)
+					}
+				}
+			})
+		}
+	}
+	wg.Wait()
+	gen := current(t, root)
+	raw, err := os.ReadFile(filepath.Join(gen, rules.ManifestPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := rules.ParseManifest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range m.Files {
+		if b, err := os.ReadFile(filepath.Join(gen, f.Path)); err != nil || !f.Matches(b) {
+			t.Fatal("the current generation lacks", f.Path)
+		}
+	}
+	n := &templateStage{root: root}
+	n.Get(rules.FloorKey)
+	n.close()
+	if got := dirNames(t, root); !slices.Equal(got, []string{templateCurrent, filepath.Base(gen), templateLock}) {
+		t.Fatal("after a sweep:", got)
 	}
 }

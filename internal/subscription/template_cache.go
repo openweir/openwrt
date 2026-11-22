@@ -2,6 +2,7 @@ package subscription
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io/fs"
 	"os"
@@ -35,6 +36,10 @@ const (
 	// A helper of that version may still be writing one during an upgrade: only old ones go.
 	templateTemp      = ".new-"
 	templateTempStale = 10 * time.Minute
+	// How long a refresh waits, at most, for another's promotion or sweep to let go of the lock,
+	// and how often it looks. Past it, it reads the copy without the lock, and does not promote.
+	templateLockWait = 10 * time.Second
+	templateLockPoll = 20 * time.Millisecond
 )
 
 // templateStage is the rules client's cache in one refresh: the generation current when the
@@ -42,6 +47,8 @@ const (
 // the refresh got that differs from it, in memory.
 type templateStage struct {
 	root string
+	// ctx is the refresh's, which no wait for the lock outlasts (nil: none).
+	ctx context.Context
 
 	mu     sync.Mutex
 	pinned bool
@@ -88,7 +95,7 @@ func (s *templateStage) Put(key string, value []byte) {
 func (s *templateStage) pin() string {
 	if !s.pinned {
 		s.pinned = true
-		lock, writable, err := lockTemplate(s.root)
+		lock, writable, err := lockTemplate(s.ctx, s.root)
 		var current string
 		if err == nil && writable {
 			current, _ = sweepTemplate(s.root)
@@ -149,7 +156,7 @@ func (s *templateStage) promote() {
 	if err != nil {
 		return
 	}
-	lock, _, err := lockTemplate(s.root)
+	lock, _, err := lockTemplate(s.ctx, s.root)
 	if err != nil {
 		return
 	}
@@ -292,11 +299,11 @@ func floorVersion(b []byte) int64 {
 	return v
 }
 
-// lockTemplate takes the copy's lock, exclusively. On a copy it cannot write, such as a file
-// system remounted read-only, the lock file is opened for reading, which flock needs no more:
-// writable is false then. Without the lock file, as on a full file system before one was ever
-// created, there is no lock.
-func lockTemplate(root string) (lock *os.File, writable bool, err error) {
+// lockTemplate takes the copy's lock, exclusively, waiting for it at most templateLockWait and
+// not past ctx. On a copy it cannot write, such as a file system remounted read-only, the lock
+// file is opened for reading, which flock needs no more: writable is false then. Without the
+// lock file, as on a full file system before one was ever created, there is no lock.
+func lockTemplate(ctx context.Context, root string) (lock *os.File, writable bool, err error) {
 	path := filepath.Join(root, templateLock)
 	if err = os.MkdirAll(root, 0700); err == nil {
 		lock, err = os.OpenFile(path, os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0600)
@@ -306,11 +313,34 @@ func lockTemplate(root string) (lock *os.File, writable bool, err error) {
 			return nil, false, err
 		}
 	}
-	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+	if err = flockWithin(ctx, lock); err != nil {
 		lock.Close()
 		return nil, false, err
 	}
 	return lock, writable, nil
+}
+
+// flockWithin takes an exclusive flock of f, which another process may hold: it tries again
+// every templateLockPoll, for templateLockWait at most and not past ctx.
+func flockWithin(ctx context.Context, f *os.File) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, templateLockWait)
+	defer cancel()
+	poll := time.NewTicker(templateLockPoll)
+	defer poll.Stop()
+	for {
+		err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if !errors.Is(err, syscall.EWOULDBLOCK) && !errors.Is(err, syscall.EINTR) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-poll.C:
+		}
+	}
 }
 
 // currentGeneration is the generation the link names, or "" for root: the copy before

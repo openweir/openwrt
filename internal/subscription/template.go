@@ -57,7 +57,7 @@ func (f Fetcher) branch(ctx context.Context) *templateBranch {
 		return &templateBranch{done: func() {}}
 	}
 	e, done := f.embeddedFetcher()
-	b := &templateBranch{stage: &templateStage{root: TemplateDir}, done: done}
+	b := &templateBranch{stage: &templateStage{root: TemplateDir, ctx: ctx}, done: done}
 	b.transport = &branchTransport{f: e, seen: map[string]branchAnswer{}}
 	if end, ok := ctx.Deadline(); ok {
 		b.transport.latest = end.Add(-templateReserve)
