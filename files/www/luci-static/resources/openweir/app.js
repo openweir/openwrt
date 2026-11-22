@@ -197,11 +197,21 @@ export function mount(root, invoke) {
 		root.append(d);
 		d.addEventListener('close', () => d.remove(), { once: true });
 		d.showModal();
-		d.addEventListener('click', (e) => {
-			if (e.target === d) {
+		// A press on the backdrop closes the dialog: one that starts and ends outside it, not a
+		// selection dragged out of it, and not the second click of a double click that opened it.
+		const opened = performance.now(),
+			outside = (e) => {
+				if (e.target !== d) return false;
 				const r = d.getBoundingClientRect();
-				if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) d.close();
-			}
+				return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
+			};
+		let pressed = false;
+		d.addEventListener('pointerdown', (e) => {
+			pressed = outside(e) && performance.now() - opened > 400;
+		});
+		d.addEventListener('click', (e) => {
+			if (pressed && outside(e)) d.close();
+			pressed = false;
 		});
 		return d;
 	}
