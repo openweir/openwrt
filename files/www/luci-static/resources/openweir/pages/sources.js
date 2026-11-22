@@ -104,7 +104,7 @@ const notices = {
     subconv_unsupported_provider: '该节点提供方无法使用，已跳过',
     subconv_local_provider: '该提供方读取本机文件，只能使用已导入路由器的规则文件',
     subconv_unsupported_group: '该策略组类型无法使用，已跳过',
-    subconv_template_unavailable: '暂时取不到内置分流规则，已按默认分流：大陆直连，其余走代理。下次更新会重试',
+    subconv_template_unavailable: '暂时取不到内置分流规则，已按默认分流：大陆直连，其余走代理。订阅会在下次更新时重试；本地文件不会自动更新，请稍后重新导入',
     subconv_cyclic_reference: '策略组或前置代理形成循环，已移除其中一处引用',
     node_missing_credential: '节点缺少认证信息，已跳过',
     script: '订阅依赖脚本分流，路由器无法执行',
