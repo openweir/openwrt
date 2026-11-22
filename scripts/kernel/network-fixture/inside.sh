@@ -1,8 +1,6 @@
 #!/bin/sh
 set -eu
 mkdir -p /tmp/bin /var/run/ubus /var/etc /var/run/openweir /var/run/netns
-echo 'openweir-core:x:2701:' >>/etc/group
-echo 'openweir-core:x:2701:2701:Core:/var/empty:/bin/false' >>/etc/passwd
 /sbin/ubusd &
 sleep 1
 for pair in lan:50 guest:51 wan:18 unmanaged:52; do
@@ -210,8 +208,8 @@ dns_wire() {
 }
 start_core() {
  mkdir -p -m 0700 /tmp/mihomo-test
- # As the plugin does: root in the core group alone, with every capability.
- /tmp/peer core "$(awk -F: '$1 == "openweir-core" { print $3 }' /etc/group)" /tmp/core -d /tmp/mihomo-test -f /tmp/core.yaml >/tmp/core.log 2>&1 &
+ # As the plugin does: root in base-files' nogroup group alone, with every capability.
+ /tmp/peer core "$(awk -F: '$1 == "nogroup" { print $3 }' /etc/group)" /tmp/core -d /tmp/mihomo-test -f /tmp/core.yaml >/tmp/core.log 2>&1 &
  core_pid=$!
  sleep 1
  for attempt in 1 2 3 4 5; do

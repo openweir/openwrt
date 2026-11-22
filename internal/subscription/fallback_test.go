@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -272,15 +273,14 @@ func TestRouterFallbackFollowsTakeover(t *testing.T) {
 	if err != nil {
 		t.Skip(err)
 	}
-	if _, err := user.LookupGroup(u.Username); err != nil {
-		t.Skip("no group named after the user")
-	}
 	dir := t.TempDir()
-	previous := []string{coreGroup, coreOwner, takeoverState, procTCP}
+	previous := []string{coreOwner, takeoverState, procTCP}
+	previousGID := coreGID
 	defer func() {
-		coreGroup, coreOwner, takeoverState, procTCP = previous[0], previous[1], previous[2], previous[3]
+		coreOwner, takeoverState, procTCP = previous[0], previous[1], previous[2]
+		coreGID = previousGID
 	}()
-	coreGroup, coreOwner, takeoverState, procTCP = u.Username, u.Uid, dir, filepath.Join(dir, "tcp")
+	coreOwner, takeoverState, procTCP = u.Uid, dir, filepath.Join(dir, "tcp")
 	write := func(name, content string) {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0600); err != nil {
 			t.Fatal(err)
@@ -288,6 +288,11 @@ func TestRouterFallbackFollowsTakeover(t *testing.T) {
 	}
 	write("backend", "fw4\n")
 	write("owned", "")
+	coreGID = func() (int, error) { return 0, errors.New("invalid core group") }
+	if routerFallback() != nil {
+		t.Fatal("captured router traffic retried direct without the core's group")
+	}
+	coreGID = func() (int, error) { return os.Getgid(), nil }
 	if r := routerFallback(); r == nil || r.byName {
 		t.Fatal("captured router traffic must retry direct")
 	}

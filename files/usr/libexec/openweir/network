@@ -543,9 +543,13 @@ apply() {
  if [ "$v6" = 1 ]; then touch "$state/ipv6"; families='ipv4, ipv6';else rm -f "$state/ipv6"; families=ipv4;fi
  # Proxying the router itself needs nftables and the core's group id. Fake-ip is used only
  # then (FakeIP in network.go), since the router's own lookups also get fake addresses.
+ # The core runs as root:nogroup, like OpenClash's (internal/coregroup): nogroup's id, or
+ # base-files' 65534 when /etc/group does not name it; root's group is never exempt.
  local_proxy=1
- core_gid=$(awk -F: '$1 == "openweir-core" { print $3 }' /etc/group)
- if [ "$backend" != fw4 ] || [ -z "$core_gid" ] || [ "$core_gid" = 0 ]; then local_proxy=0; fi
+ core_gid=$(awk -F: '$1 == "nogroup" { print $3; exit }' /etc/group 2>/dev/null)
+ [ -n "$core_gid" ] || core_gid=65534
+ case "$core_gid" in *[!0-9]*) core_gid=0 ;; esac
+ if [ "$backend" != fw4 ] || [ "$core_gid" -eq 0 ]; then local_proxy=0; fi
  fake_ip=0
  if [ "$dns" = 1 ] && [ "$local_proxy" = 1 ]; then fake_ip=1; fi
  # The China IP shortcut needs nftables sets; on fw3 the core still routes these itself. The
@@ -625,7 +629,8 @@ EOF
 EOF
  fi
  if [ "$local_proxy" = 1 ]; then
-  # The core's own group is excluded so its outbound traffic never loops.
+  # The core's own group is excluded so its outbound traffic never loops. As with OpenClash,
+  # every other process running as nogroup leaves uncaptured too.
   cat >>"$batch" <<EOF
  chain local {
   type route hook output priority mangle - 1; policy accept;

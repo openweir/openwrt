@@ -26,9 +26,9 @@ case "$(basename "$archive")" in
 esac
 chmod 755 "$work/mihomo"
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o "$work/manager" ./cmd/openweir-kernel
-# The running core is root in the openweir-core group (2701) alone with every capability, as
-# openweird starts it: router.test runs that launch code on this userland. The restricted checks
-# (exec-restricted) keep the same identity but hold no capability, under no_new_privs.
+# The running core is root in base-files' nogroup group (65534) alone with every capability,
+# as openweird starts it: router.test runs that launch code on this userland. The restricted
+# checks (exec-restricted) keep the same identity but hold no capability, under no_new_privs.
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go test -c -trimpath -o "$work/router.test" ./internal/router
 cat > "$work/probe.go" <<'PROBE'
 package main
@@ -39,7 +39,7 @@ func main() {
  for _,s:=range strings.Split(string(b),"\n"){f:=strings.Fields(s);if len(f)<1{continue}
  switch f[0] {
  case "Uid:": for _,n:=range f[1:]{if n!="0"{panic(s)}};found++
- case "Gid:": for _,n:=range f[1:]{if n!="2701"{panic(s)}};found++
+ case "Gid:": for _,n:=range f[1:]{if n!="65534"{panic(s)}};found++
  case "Groups:":if len(f)!=1{panic(s)};found++
  case "CapBnd:","CapEff:","CapPrm:","CapAmb:","CapInh:":if len(f)<2||f[1]!="0000000000000000"{panic(s)};found++
  case "NoNewPrivs:":if len(f)<2||f[1]!="1"{panic(s)};found++
@@ -56,9 +56,8 @@ PROBE
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o "$work/probe" "$work/probe.go"
 for release in 23.05.6 24.10.8 25.12.6; do
     cid=$(docker create --env CORE_TAG="$version" --cap-add NET_ADMIN --network none --platform linux/arm64 "openweir-test/openwrt:$release-arm64" sh -ec '
-        echo "openweir-core:x:2701:" >>/etc/group
-        echo "openweir-core:x:2701:2701:OpenWeir:/var/empty:/bin/false" >>/etc/passwd
-        echo private >/tmp/foreign && chown 65534:65534 /tmp/foreign && chmod 0600 /tmp/foreign
+        test "$(awk -F: "\$1 == \"nogroup\" { print \$3 }" /etc/group)" = 65534
+        echo private >/tmp/foreign && chown 4242:4242 /tmp/foreign && chmod 0600 /tmp/foreign
         mkdir -p /etc/config
         mkdir -p /var/run/openweir/mihomo
         echo "mode: direct" >/tmp/config.yaml

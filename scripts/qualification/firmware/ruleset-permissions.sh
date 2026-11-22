@@ -78,12 +78,11 @@ done
 report ruleset_watch_permissions
 p=$(pidof mihomo)
 [ -n "$p" ]
-# The core runs as root in the openweir-core group alone with every capability, like
-# OpenClash's: its bounding set is procd's, filled into the permitted and effective sets, and
-# no_new_privs stays unset.
-gid=$(awk -F: '$1 == "openweir-core" { print $3 }' /etc/group)
-[ -n "$gid" ]
-[ "$gid" != 0 ]
+# The core runs as root:nogroup alone with every capability, like OpenClash's: nogroup is
+# base-files' 65534, its bounding set is procd's, filled into the permitted and effective
+# sets, and no_new_privs stays unset.
+gid=$(awk -F: '$1 == "nogroup" { print $3 }' /etc/group)
+[ "$gid" = 65534 ]
 bounding=$(awk '$1 == "CapBnd:" { print $2 }' /proc/1/status)
 [ -n "$bounding" ]
 awk -v gid="$gid" -v bnd="$bounding" '

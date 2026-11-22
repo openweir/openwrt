@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/openweir/openwrt/internal/coregroup"
 	"github.com/openweir/openwrt/internal/kernel"
 )
 
@@ -47,7 +48,10 @@ func TestCoreLaunchHoldsEveryCapability(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("only root can start the core as root in another group")
 	}
-	const gid = 65534
+	gid, err := coregroup.GID()
+	if err != nil {
+		t.Fatal(err)
+	}
 	dir := t.TempDir()
 	cmd := coreCommand(kernel.Launch{Path: "/bin/sh", Config: "/dev/null"}, dir, gid)
 	cmd.Args = []string{"sh", "-c", "exec cat /proc/self/status"}

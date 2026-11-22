@@ -106,9 +106,8 @@ cat > "$input/postinst" <<'HOOK'
 #!/bin/sh
 set -e
 root="${IPKG_INSTROOT:-}"
-. "$root/lib/functions.sh"
-pkgname=luci-app-openweir
-add_group_and_user "$pkgname"
+# The core runs as root:nogroup, nogroup coming with OpenWrt's base-files: the package
+# creates no account.
 if [ -z "$root" ] && [ -e /tmp/openweir-recovery/pending ]; then
  echo 'Previous OpenWeir removal is still restoring direct networking' >&2
  exit 1
@@ -171,9 +170,6 @@ case "$RELEASE" in
  25.*)
   apk=staging_dir/host/bin/apk
   mkdir -p "$pkg/lib/apk/packages"
-  # The core runs as root; the firewall knows its sockets by the openweir-core group. The
-  # user of the same name only comes with the group (here and in opkg's Require-User).
-  echo 'openweir-core:openweir-core' > "$pkg/lib/apk/packages/$name.rusers"
   # apk stores protected configuration under /etc; register the package file list for OpenWrt tooling.
   (cd "$pkg" && find . \( -type f -o -type l \) | sed 's,^\.,,') > "$pkg/lib/apk/packages/$name.list"
   "$apk" mkpkg --info "name:$name" --info "version:$VERSION-r$REVISION" --info "arch:${PACKAGE_ARCH:-noarch}" \
@@ -205,7 +201,6 @@ Version: $VERSION-$REVISION
 Architecture: ${PACKAGE_ARCH:-all}
 Depends: $comma_deps
 Recommends: $retained
-Require-User: openweir-core:openweir-core
 Maintainer: OpenWeir
 Description: OpenWeir router management service
 Section: net

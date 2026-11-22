@@ -85,10 +85,6 @@ if [ -f /root/original-boot ]; then
  exit 0
 fi
 . /root/setup-network
-grep -q '^openweir-core:' /etc/passwd || {
- echo 'openweir-core:x:2701:' >>/etc/group
- echo 'openweir-core:x:2701:2701:OpenWeir:/var/empty:/bin/false' >>/etc/passwd
-}
 [ ! -f /root/qualify-tun ] || uci set openweir.main.method=tun
 uci set openweir.main.dns=1
 uci set openweir.main.ipv6=1

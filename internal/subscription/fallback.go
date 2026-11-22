@@ -10,13 +10,12 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
-	"os/user"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/openweir/openwrt/internal/coregroup"
 	"github.com/openweir/openwrt/internal/tlsdiag"
 )
 
@@ -39,10 +38,11 @@ type route struct {
 }
 
 // The group, paths and port are those of the package, the network helper and the core
-// (router.MixedPort). The core runs as root in coreGroup; coreOwner is the account its
-// sockets are listed under in /proc/net/tcp (tests stand in their own).
+// (router.MixedPort). The core runs as root in coreGID's group (coregroup: nogroup);
+// coreOwner is the account its sockets are listed under in /proc/net/tcp (tests stand in
+// their own).
 var (
-	coreGroup     = "openweir-core"
+	coreGID       = coregroup.GID
 	coreOwner     = "0"
 	takeoverState = "/var/run/openweir/network"
 	wanResolvers  = "/tmp/resolv.conf.d/resolv.conf.auto"
@@ -55,12 +55,8 @@ func routerFallback() *route {
 	backend, _ := os.ReadFile(takeoverState + "/backend")
 	if _, err := os.Stat(takeoverState + "/owned"); err == nil && strings.TrimSpace(string(backend)) == "fw4" {
 		// The firewall returns sockets of the core's group (meta skgid) before capturing.
-		g, err := user.LookupGroup(coreGroup)
+		gid, err := coreGID()
 		if err != nil {
-			return nil
-		}
-		gid, err := strconv.Atoi(g.Gid)
-		if err != nil || gid <= 0 {
 			return nil
 		}
 		return directRoute(gid)

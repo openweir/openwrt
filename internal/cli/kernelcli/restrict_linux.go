@@ -5,31 +5,28 @@ package kernelcli
 import (
 	"errors"
 	"os"
-	"os/user"
 	"runtime"
 	"strconv"
 	"strings"
 	"syscall"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/openweir/openwrt/internal/coregroup"
 )
 
 // execRestricted runs a core check or provider fetch in the running core's identity: root, so
-// it reads the root-owned configuration and home, in the core group, whose sockets the
-// firewall exempts. Unlike the running core it holds no capability at all: the bounding set
+// it reads the root-owned configuration and home, in the core group (coregroup: nogroup),
+// whose sockets the firewall exempts. Unlike the running core it holds no capability at all: the bounding set
 // is emptied and no_new_privs set before execve, which then gives root nothing back.
 func execRestricted(args []string) error {
 	path, env, e := restrictedArgs(args)
 	if e != nil {
 		return e
 	}
-	group, e := user.LookupGroup("openweir-core")
+	gid, e := coregroup.GID()
 	if e != nil {
-		return errors.New("core group unavailable")
-	}
-	gid, e := strconv.Atoi(group.Gid)
-	if e != nil || gid < 1 {
-		return errors.New("invalid core GID")
+		return e
 	}
 	b, e := os.ReadFile("/proc/sys/kernel/cap_last_cap")
 	if e != nil {

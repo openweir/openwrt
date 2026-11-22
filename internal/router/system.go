@@ -10,16 +10,15 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"os/user"
 	"path/filepath"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/openweir/openwrt/internal/control"
+	"github.com/openweir/openwrt/internal/coregroup"
 	"github.com/openweir/openwrt/internal/kernel"
 	"github.com/openweir/openwrt/internal/subscription"
 )
@@ -311,7 +310,7 @@ func (s *System) Start(ctx context.Context, i Intent) (err error) {
 	if e != nil {
 		return errors.New("active subscription unavailable")
 	}
-	gid, e := coreGID()
+	gid, e := coregroup.GID()
 	if e != nil {
 		return e
 	}
@@ -522,25 +521,10 @@ applyLoop:
 	return nil
 }
 
-// The core runs as root in this group alone. The firewall lets the group's sockets out
-// uncaptured (meta skgid), so the group must not be root's.
-const coreGroup = "openweir-core"
-
-func coreGID() (int, error) {
-	g, e := user.LookupGroup(coreGroup)
-	if e != nil {
-		return 0, errors.New("core group missing")
-	}
-	gid, e := strconv.Atoi(g.Gid)
-	if e != nil || gid < 1 {
-		return 0, errors.New("invalid core group")
-	}
-	return gid, nil
-}
-
 // coreCommand runs the core as OpenClash runs its own: as root with every capability, and
 // without a sandbox, a capability bound or no_new_privs, so TUN mode opens the router's
-// /dev/net/tun itself. coreProcess sets the group gid and drops supplementary groups.
+// /dev/net/tun itself. coreProcess sets the group gid (coregroup: nogroup, whose sockets the
+// firewall lets out uncaptured) and drops supplementary groups.
 func coreCommand(launch kernel.Launch, work string, gid int) *exec.Cmd {
 	cmd := exec.Command(launch.Path, "-d", coreHome, "-f", launch.Config)
 	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "TMPDIR=" + work, "HOME=" + work}
