@@ -169,6 +169,26 @@ async function checkOverviewPolling(page, base, width) {
 			await page.screenshot({ path: path.join(output, 'fault-protection-' + width + '.png') });
 		}
 	}
+	// The service's problem reads under the status line, with a way to the log, not above the page.
+	await page.evaluate(() => {
+		window.model.controls.phase = 'fail_open';
+		window.model.controls.problem = 'network takeover blocked by: service openclash';
+	});
+	await page.clock.runFor(3500);
+	await page.getByRole('heading', {name: '已回退直连', exact: true}).waitFor();
+	const problem = page.locator('.ow-connection [role=alert]');
+	await problem.filter({hasText: '仍有无法自动处理的冲突：服务 OpenClash'}).waitFor();
+	await problem.getByRole('button', {name: '查看日志'}).waitFor();
+	assert.equal(await page.getByRole('button', {name: '点按断开'}).getAttribute('aria-describedby'), await problem.getAttribute('id'));
+	assert.equal(await page.locator('.ow-main .ow-warning').count(), 0, 'no banner above the overview');
+	await page.screenshot({ path: path.join(output, 'service-problem-' + width + '.png') });
+	await page.evaluate(() => {
+		window.model.controls.phase = null;
+		delete window.model.controls.problem;
+	});
+	await page.clock.runFor(3500);
+	await page.getByRole('heading', {name: '已连接', exact: true}).waitFor();
+	assert.equal(await problem.textContent(), '');
 }
 try {
 	for (const [width, height] of [
@@ -195,6 +215,7 @@ try {
 		await page.locator('dialog[aria-label="启用全屋代理"]').waitFor({ state: 'detached' });
 		const reopen = page.getByRole('button', { name: '打开初始化引导' });
 		assert.ok(await reopen.evaluate(el => el === document.activeElement));
+		assert.ok(await reopen.evaluate(el => !!el.closest('.ow-sources')), 'the setup is offered in the subscription card');
 		await page.reload();
 		await reopen.waitFor();
 		assert.equal(await page.locator('dialog[open]').count(), 0);
@@ -248,6 +269,23 @@ try {
 		await fallback.click();
 		await page.getByRole('switch', {name: fallbackLabel, checked: true}).waitFor();
 		assert.equal((await page.evaluate(() => window.model.rpc('network_preferences'))).fail_open, true);
+		// A setting that fails to save says so on the line under its row, not above the page,
+		// and the next attempt clears it.
+		await page.evaluate(() => { window.model.controls.fail = { save_network: 'could not save network preferences' }; });
+		const bypass = page.getByRole('switch', {name: '大陆 IP 直连'});
+		await bypass.click();
+		await page.waitForFunction(() => document.querySelector('[role=switch][aria-label="大陆 IP 直连"]').hasAttribute('aria-describedby'));
+		const bypassLine = page.locator('#' + await bypass.getAttribute('aria-describedby'));
+		await bypassLine.filter({hasText: '无法保存网络设置'}).waitFor();
+		assert.equal(await bypassLine.getAttribute('role'), 'status');
+		assert.ok(await bypassLine.evaluate(el => el.previousElementSibling.contains(document.querySelector('[role=switch][aria-label="大陆 IP 直连"]'))), 'the line follows the row');
+		assert.ok(await page.locator('.ow-alert').isHidden(), 'no alert above the page');
+		await page.evaluate(() => { delete window.model.controls.fail; });
+		await bypass.click();
+		await page.getByRole('switch', {name: '大陆 IP 直连', checked: true}).waitFor();
+		assert.equal(await page.locator('.ow-feedback', {hasText: '无法保存网络设置'}).count(), 0);
+		await page.getByRole('switch', {name: '大陆 IP 直连'}).click();
+		await page.getByRole('switch', {name: '大陆 IP 直连', checked: false}).waitFor();
 		const hero = page.locator('.ow-connection'),
 			fixed = (await hero.boundingBox()).height;
 		await page.screenshot({ path: path.join(output, 'overview-' + width + '.png'), fullPage: true });
@@ -312,6 +350,16 @@ try {
 		await page.getByRole('dialog').getByRole('button', { name: '断开', exact: true }).click();
 		await page.getByRole('heading', { name: '未连接', exact: true }).waitFor();
 		assert.equal((await hero.boundingBox()).height, fixed);
+		// A start the router refuses says why under the status line, beside the power button.
+		await page.evaluate(() => { window.model.controls.fail = { start: 'no authorized primary source' }; });
+		const connect = page.getByRole('button', { name: '点按连接' });
+		await connect.click();
+		const startLine = page.locator('.ow-connection [role=alert]');
+		await startLine.filter({ hasText: '没有可用的主订阅' }).waitFor();
+		assert.equal(await connect.getAttribute('aria-describedby'), await startLine.getAttribute('id'));
+		assert.ok(await page.locator('.ow-alert').isHidden(), 'no alert above the page');
+		await page.screenshot({ path: path.join(output, 'start-failure-' + width + '.png') });
+		await page.evaluate(() => { delete window.model.controls.fail; });
 		await page.getByRole('button', { name: '全局', exact: true }).click();
 		await page.getByLabel('全局节点').waitFor();
 		await page.getByRole('link', { name: '代理', exact: true }).click();
@@ -374,6 +422,8 @@ try {
 				await page.evaluate(() => {window.model.controls.providerFailure = 'provider_http_404';});
 				await account.getByRole('button',{name:'更新',exact:true}).click();
 				await account.getByText('更新失败 · 规则提供方 · geosite-cn.mrs · 返回 HTTP 404 · 已保留上次配置', {exact:true}).waitFor();
+				await page.waitForFunction(() => !document.querySelector('.ow-source-card button[aria-busy]'));
+				assert.ok(await page.locator('.ow-alert').isHidden(), 'the card failure is not repeated above the page');
 				await page.getByRole('link',{name:'概览',exact:true}).click();
 				await page.getByRole('link',{name:'订阅',exact:true}).click();
 				await account.getByText('上次更新失败 · 规则提供方 · geosite-cn.mrs · 返回 HTTP 404 · 已保留上次配置', {exact:true}).waitFor();
@@ -409,6 +459,11 @@ try {
 				await page.waitForFunction(n => window.model.trace.filter(m => m === 'subscription_write').length === n+4, before);
 				await page.waitForFunction(() => document.querySelector('.ow-main[aria-busy=false]') && ![...document.querySelectorAll('button[aria-busy]')].some(el => el.textContent === '全部更新'));
 				assert.equal(await page.evaluate(() => window.model.maxRefreshTasks), 2);
+				// The subscriptions that failed are named under 全部更新 once the page has re-rendered.
+				await page.evaluate(() => { window.model.controls.failRefresh = true; });
+				await all.click();
+				await page.locator('.ow-toolbar + .ow-feedback').filter({hasText: '更新失败 · 示例服务商 · 标准套餐'}).waitFor();
+				assert.ok(await page.locator('.ow-alert').isHidden(), 'no alert above the page');
 
 				await account.getByText('OpenWeir YAML · 每 6 小时自动更新', { exact: true }).waitFor();
 				assert.equal(await account.getAttribute('data-kind'), 'platform');
@@ -449,6 +504,12 @@ try {
 				assert.equal(await address.inputValue(), 'https://fixture.invalid/replacement');
 				await page.keyboard.press('Escape');
 				await edit.waitFor({state: 'detached'});
+				// Updated from its card, a version the router keeps back opens its review on the card.
+				await page.evaluate(() => { window.model.controls.longRefresh = true; });
+				await external.getByRole('button', { name: '更新', exact: true }).click();
+				await external.locator('details summary').filter({ hasText: '已保留上次配置' }).click();
+				await external.getByText('测试节点 24 · 这条规则无法转换为内核规则').waitFor();
+				assert.equal(await page.locator('dialog[open]').count(), 0, 'the review stays on the card');
 				await page.getByRole('button', { name: '＋ 添加订阅' }).click();
 				const dialog = page.getByRole('dialog');
 				await centered(dialog, { width, height });

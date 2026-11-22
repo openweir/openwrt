@@ -83,9 +83,11 @@ export function fixture(empty = false, preparing = false) {
 	};
 	async function rpc(m, r = {}) {
 		trace.push(m);
+		// controls.fail = { method: 'router error' } makes that call fail as rpcd reports it.
+		if (controls.fail?.[m]) throw Error(controls.fail[m]);
 		switch (m) {
 			case 'status':
-				return { saved, phase: phase(), running_since: activeSince };
+				return { saved, phase: phase(), running_since: activeSince, ...(controls.problem ? { error: controls.problem } : {}) };
 			case 'subscription_read': {
 				const action = r.action;
 				reads.push(action);
