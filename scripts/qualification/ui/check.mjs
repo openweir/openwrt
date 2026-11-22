@@ -527,13 +527,21 @@ try {
 				const [builtIn, custom] = await page.locator('.ow-rules > .ow-side-stack').evaluateAll(els => els.map(el => el.getBoundingClientRect().toJSON()));
 				if (width > 900) assert.ok(builtIn.right <= custom.left && builtIn.width > custom.width, 'built-in rules sit left of custom rules');
 				else assert.ok(builtIn.bottom <= custom.top, 'rule columns stack on a phone');
-				const setRow = tag => page.locator('.ow-rule-sets tr').filter({has:page.getByText(tag,{exact:true})});
-				await setRow('Streaming').getByText('订阅',{exact:true}).waitFor();
-				await setRow('Streaming').getByRole('button',{name:'详情'}).click();
+				// One card per rule set: two a row (left and right) in the built-in column, one a row on a phone.
+				const setCard = tag => page.locator('.ow-set-card').filter({has:page.getByRole('heading',{name:tag,exact:true})});
+				const [streaming, domestic] = await page.locator('.ow-set-card').evaluateAll(els => els.map(el => el.getBoundingClientRect().toJSON()));
+				assert.ok(builtIn.left <= streaming.left && domestic.right <= builtIn.right, 'rule-set cards stay in the built-in column');
+				if (width > 900) assert.ok(Math.abs(streaming.top - domestic.top) < 1 && streaming.right <= domestic.left, 'two rule-set cards a row');
+				else assert.ok(streaming.bottom <= domestic.top, 'one rule-set card a row on a phone');
+				await setCard('Streaming').getByText('订阅',{exact:true}).waitFor();
+				await setCard('Streaming').getByText('二进制',{exact:true}).waitFor();
+				assert.match(await setCard('Streaming').locator('dl').innerText(), /条目\s*1 条\s*命中连接\s*3 次\s*去向\s*直连/);
+				assert.match(await setCard('Domestic').locator('dl').innerText(), /命中连接\s*—/);
+				await setCard('Streaming').getByRole('button',{name:'详情'}).click();
 				const detail = page.getByRole('dialog',{name:'Streaming'});
 				await detail.getByText('引用此规则集的规则').waitFor();
 				await page.keyboard.press('Escape');
-				await setRow('Streaming').getByRole('button',{name:'连接记录'}).click();
+				await setCard('Streaming').getByRole('button',{name:'连接记录'}).click();
 				assert.equal(await page.getByRole('combobox',{name:'命中规则集'}).inputValue(), 'Streaming');
 			}
 			if (name === '日志') {
