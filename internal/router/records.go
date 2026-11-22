@@ -173,18 +173,11 @@ func (s *logSink) flush() {
 // Mihomo may color its log headers even when stderr is a pipe.
 var logColor = regexp.MustCompile("\x1b\\[[0-9;]*m")
 
+// corePermissionReason names what the core was denied. The core runs as root and owns the
+// files OpenWeir prepares for it (its home, work directory, rule sets, configuration and TUN
+// node), so a denial means a missing capability, the firewall or a file of another account.
 func corePermissionReason(line string) string {
 	switch {
-	case strings.Contains(line, "fswatch: watch /etc/openweir/rulesets:"), strings.Contains(line, "fswatch: watch /etc/openweir/cnlists:"), strings.Contains(line, "fswatch: watch /usr/share/openweir/rules:"):
-		return "core_rule_watch_permission"
-	case strings.Contains(line, "/var/run/openweir/mihomo/rulesets/"), strings.Contains(line, "/etc/openweir/rulesets/"), strings.Contains(line, "/etc/openweir/cnlists/"), strings.Contains(line, "/usr/share/openweir/rules/"):
-		return "core_rule_file_permission"
-	case strings.Contains(line, "/etc/openweir/mihomo-kernel/configs/"):
-		return "core_config_file_permission"
-	case strings.Contains(line, "/dev/net/tun"):
-		return "core_tun_device_permission"
-	case strings.Contains(line, "/var/run/openweir/core/"), strings.Contains(line, "/tmp/run/openweir/core/"):
-		return "core_work_file_permission"
 	case strings.Contains(line, "ping_group_range"), strings.Contains(line, "listen ip4:icmp"), strings.Contains(line, "listen ip6:ipv6-icmp"), strings.Contains(line, "icmp socket"):
 		return "core_icmp_socket_permission"
 	case strings.Contains(line, "listenlocalconn"):

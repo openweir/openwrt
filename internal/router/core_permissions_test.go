@@ -8,11 +8,7 @@ import (
 func TestCorePermissionRecordsNameOperationWithoutSensitiveText(t *testing.T) {
 	const secret = "hidden-provider-credential"
 	for _, tc := range []struct{ line, reason string }{
-		{"\x1b[31mERROR\x1b[0m[0000] router: watch rule-set file: fswatch: watch /etc/openweir/rulesets: permission denied", "core_rule_watch_permission"},
-		{"FATAL[0001] start service: initialize rule-set[0]: open /etc/openweir/rulesets/" + secret + ".mrs: permission denied", "core_rule_file_permission"},
-		{"FATAL[0001] open /etc/openweir/mihomo-kernel/configs/" + secret + ".yaml: permission denied", "core_config_file_permission"},
-		{"FATAL[0001] open /var/run/openweir/core/tmp/" + secret + ": permission denied", "core_work_file_permission"},
-		{"FATAL[0001] create interface: open /dev/net/tun: permission denied", "core_tun_device_permission"},
+		{"FATAL[0001] start service: initialize rule-set[0]: open /etc/openweir/rulesets/" + secret + ".mrs: permission denied", "core_file_permission"},
 		{"FATAL[0001] set IP_TRANSPARENT: operation not permitted", "core_tproxy_socket_permission"},
 		{"ERRO[0002] listenLocalConn failed with error: bind: permission denied, packet loss (rAddr=1.2.3.4:443)", "core_tproxy_udp_reply_permission"},
 		{"WARN[0001] listen ip4:icmp 0.0.0.0: socket: permission denied", "core_icmp_socket_permission"},
