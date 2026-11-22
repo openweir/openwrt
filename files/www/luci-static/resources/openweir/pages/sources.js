@@ -1,4 +1,4 @@
-import { bytes, tlsMessage, datetime, day, say, hush, attach } from '../dom.js';
+import { bytes, tlsMessage, datetime, day, say, hush, attach, diagnosticMessage } from '../dom.js';
 // LuCI loads this module on demand. Subscription secrets are submitted directly
 // to rpcd and never enter a route, storage key or display label.
 const formats = {
@@ -265,8 +265,9 @@ async function retryDownload(u, source, group, content, feedback, replacementURL
     return retry && !u.signal.aborted && importSource(u, source, content, feedback, undefined, replacementURL);
 }
 // With a feedback element the outcome is written there, beside the control that started it: a
-// failure is marked shown so the page does not repeat it, and a blocked version opens its review in
-// place. Without one, or while 全部更新 queues reviews (present), the review opens over the page.
+// failure names it as shown so the page does not repeat it while it is on screen, and a blocked
+// version opens its review in place. Without one, or while 全部更新 queues reviews (present), the
+// review opens over the page.
 export async function importSource(u, source, content, feedback, confirmation, replacementURL, present) {
     const previous = (u.sources || []).some((s) => s.source === source && s.ready);
     if (feedback) {
@@ -333,7 +334,7 @@ export async function importSource(u, source, content, feedback, confirmation, r
             return false;
         }
         const failure = description !== err.message ? new Error(description) : err;
-        if (feedback) failure.shown = true;
+        if (feedback) failure.shown = feedback;
         throw failure;
     }
 }
@@ -530,7 +531,7 @@ export function onboarding(u, environment, trigger) {
         try {
             await saveNewSource(u, { id: fileID, kind: 'file', name: name.slice(0, 128) }, await f.text(), close);
         } catch (e) {
-            if (e.name !== 'AbortError') say(fileLine, e.message, { control: picker });
+            if (e.name !== 'AbortError') say(fileLine, diagnosticMessage(e.message), { control: picker });
         } finally {
             picker.disabled = false;
             progress.textContent = '';

@@ -57,6 +57,8 @@ export function mount(root, invoke, upload) {
 	const memory = {};
 	// The mounted page's feedback lines by key, for outcomes reported after it re-rendered.
 	let keyed = new Map();
+	// How long the alert shows a notice, and a keyed line keeps one across re-renders.
+	const linger = 8000;
 	let names = new Map(),
 		catalogKey = '',
 		catalogRequest;
@@ -95,18 +97,40 @@ export function mount(root, invoke, upload) {
 		clearTimeout(noticeTimer);
 		noticeTimer = setTimeout(() => {
 			alert.hidden = true;
-		}, 8000);
+		}, linger);
 	};
+	// What a keyed line shows outlives a re-render of its page, such as the overview's after the
+	// service changed phase, for as long as the alert would show it: the line registered under the
+	// same key takes it over, unless a retry or a newer outcome replaced it before.
+	const told = new Map();
+	function keep(line, text, tone) {
+		for (const [key, held] of keyed) if (held === line) told.set(key, { line, text, tone, until: Date.now() + linger });
+	}
+	function retell() {
+		for (const [key, note] of told) {
+			const line = keyed.get(key);
+			if (note.until < Date.now() || note.line.textContent !== note.text) told.delete(key);
+			else if (line && line !== note.line) {
+				say(line, note.text, { tone: note.tone });
+				note.line = line;
+			}
+		}
+	}
 	// An action's error goes to the line of the row or card its control sits in; the alert at the
-	// top keeps what has no such place. An error the page already wrote beside its control (marked
-	// shown) is not repeated, unless the control is in a dialog, where the page behind is out of view.
+	// top keeps what has no such place. An error the page already wrote beside its control (shown
+	// names the element) is not repeated while that element is on screen: still on the page, and
+	// in the control's dialog when there is one, as the page behind a dialog is out of view.
 	// The router's error codes read in Chinese, as the service's problem does under the power button.
 	function report(control, error) {
-		if (error?.shown && !control?.closest('dialog')) return;
+		const shown = error?.shown,
+			open = control?.closest('dialog[open]');
+		if (shown?.isConnected && (!open || open.contains(shown))) return;
 		const message = diagnosticMessage(error?.message ?? String(error)),
 			line = control && feedbackFor(control);
-		if (line?.isConnected) say(line, message, { control });
-		else notify(message);
+		if (line?.isConnected) {
+			say(line, message, { control });
+			keep(line, message, 'error');
+		} else notify(message);
 	}
 	// After an action re-rendered the page, its outcome goes to the line now registered under the
 	// first key the page has; a key registered as covered means the page already shows it.
@@ -115,7 +139,10 @@ export function mount(root, invoke, upload) {
 			if (!keyed.has(key)) continue;
 			const line = keyed.get(key);
 			if (!line) return;
-			if (line.isConnected) return say(line, text, { tone });
+			if (line.isConnected) {
+				say(line, text, { tone });
+				return keep(line, text, tone);
+			}
 		}
 		notify(text);
 	}
@@ -127,9 +154,15 @@ export function mount(root, invoke, upload) {
 				return;
 			}
 			// A new attempt clears what the last one reported. A line about a blocking condition
-			// (role alert) is cleared by the page once it actually retries.
+			// (role alert) is cleared by the page once it actually retries; a dialog's status line
+			// is cleared by any of its buttons.
 			const line = feedbackFor(el);
 			if (line && !line.contains(el) && line.getAttribute('role') !== 'alert') hush(line);
+			const status = el.closest('dialog')?.querySelector('.ow-modal-status');
+			if (status) {
+				status.hidden = true;
+				status.textContent = '';
+			}
 			// Keep the trigger focusable so native dialogs can restore focus after
 			// an asynchronous action. The view owns the actual disabled state.
 			el.setAttribute('aria-busy', 'true');
@@ -246,7 +279,6 @@ export function mount(root, invoke, upload) {
 				run,
 				go,
 				dialog,
-				notify,
 				report,
 				tell,
 				// A feedback line for the controls inside scope, optionally under a key for tell().
@@ -315,7 +347,7 @@ export function mount(root, invoke, upload) {
 						try {
 							await callback();
 						} catch (e) {
-							if (!controller.signal.aborted) notify(e.message);
+							if (!controller.signal.aborted) notify(diagnosticMessage(e.message));
 						}
 					}
 					if (!controller.signal.aborted) timer = setTimeout(tick, interval);
@@ -327,6 +359,7 @@ export function mount(root, invoke, upload) {
 			if (controller.signal.aborted) return;
 			main.replaceChildren(content);
 			keyed = lines;
+			retell();
 			ui.afterRender?.();
 		} catch (e) {
 			if (!controller.signal.aborted) {
@@ -364,7 +397,7 @@ export function mount(root, invoke, upload) {
 				const task = await rpc('task', { task: id });
 				if (task.stage !== 'running') {
 					track(pending().filter((x) => x !== id));
-					if (task.stage !== 'done') notify(task.error || '上次任务未完成');
+					if (task.stage !== 'done') notify(diagnosticMessage(task.error) || '上次任务未完成');
 					else render();
 				}
 			} catch (_) {

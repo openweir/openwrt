@@ -670,20 +670,17 @@ export async function overview(ui) {
 			h('small', { class: 'ow-muted' }, '订阅、规则、设备设置和管理的局域网不受影响。'),
 			h('div', { class: 'ow-row' },
 				ui.button('取消', () => d.close()),
+				// A failure reads in the dialog's status line.
 				ui.button('恢复默认', async () => {
-					try {
-						await ui.run('policy', { revision: intent.revision, policy: { ...policy, auto_failover: undefined } });
-						await ui.refresh();
-						await ui.run('save_network', { args: {
-							...prefs, dns: true, fail_open: true, bypass_cn: false,
-							dns_domestic: builtinDNS.domestic, dns_foreign: builtinDNS.foreign,
-						} });
-						await ui.refresh();
-						d.close();
-						ui.tell('repair', '已恢复默认设置', 'done');
-					} catch (e) {
-						ui.notify(e.message);
-					}
+					await ui.run('policy', { revision: intent.revision, policy: { ...policy, auto_failover: undefined } });
+					await ui.refresh();
+					await ui.run('save_network', { args: {
+						...prefs, dns: true, fail_open: true, bypass_cn: false,
+						dns_domestic: builtinDNS.domestic, dns_foreign: builtinDNS.foreign,
+					} });
+					await ui.refresh();
+					d.close();
+					ui.tell('repair', '已恢复默认设置', 'done');
 				}, 'ow-danger')),
 		));
 	};
@@ -849,7 +846,7 @@ function updateInterval(ui, hours, saveP) {
 			ui.memory.updateHours = value;
 			await saveP({ update_hours: value });
 		} catch (e) {
-			if (e.name !== 'AbortError') say(line, e.message);
+			if (e.name !== 'AbortError') say(line, diagnosticMessage(e.message));
 			input.value = hours;
 		}
 	});
