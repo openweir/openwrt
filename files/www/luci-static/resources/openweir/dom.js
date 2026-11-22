@@ -195,6 +195,7 @@ const diagnosticText = {
     dial_failed: '内核连接目标失败',
     dns_query_failed: 'DNS 查询失败',
     listen_address_in_use: '内核监听地址已被占用',
+    core_listener_failed: '内核无法在配置的地址上监听',
     disk_full: '可写存储空间已满',
     permission_denied: '内核报告权限不足，展开查看被拒绝的操作',
     core_tproxy_socket_permission: '内核没有权限设置透明代理套接字',
@@ -576,6 +577,9 @@ const detailSentences = {
     // The core's own words, with addresses, host names, links, paths and names taken out
     // (records.go coreDetail).
     core_diagnostic: (d) => '内核报告：' + d,
+    // Which listener, or what in the configuration (redacted alike).
+    core_listener_failed: (d) => diagnosticText.core_listener_failed + '：' + d,
+    invalid_configuration: (d) => diagnosticText.invalid_configuration + '：' + d,
 };
 export function eventMessage(v) {
     const sentence = v.detail && detailSentences[v.message];

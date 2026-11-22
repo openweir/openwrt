@@ -335,7 +335,11 @@ func (s *logSink) recordLine(line string) {
 			{"address already in use", "listen_address_in_use"}, {"connection refused", "connection_refused"}, {"network is unreachable", "network_unreachable"}, {"i/o timeout", "io_timeout"}, {"context deadline exceeded", "deadline_exceeded"}, {"no such host", "dns_name_not_found"}, {"certificate", "tls_certificate_error"}, {"handshake", "handshake_failed"}, {"no space left", "disk_full"}, {"invalid config", "invalid_configuration"}, {"failed to create new os thread", "core_thread_creation_failed"}, {"pthread_create failed", "core_thread_creation_failed"}, {"thread exhaustion", "core_thread_creation_failed"}, {"-thread limit", "core_thread_creation_failed"},
 			{"no route to host", "network_unreachable"}, {"connection reset", "connection_reset"}, {"broken pipe", "connection_reset"}, {"unexpected eof", "connection_closed"}, {": eof", "connection_closed"},
 			{"geoip", "geodata_unavailable"}, {"geosite", "geodata_unavailable"}, {"mmdb", "geodata_unavailable"},
-			{"sniff", "sniffer_issue"}, {"[tun]", "core_tun_issue"}, {"tun device", "core_tun_issue"}, {"/dev/net/tun", "core_tun_issue"}, {"dial", "dial_failed"}, {"dns", "dns_query_failed"}} {
+			// What failed to start: a listener, the TUN device, the configuration. Their lines hold
+			// the words below ("Start DNS server", "DNS NameServer[0]", "dialer-proxy").
+			{"start dns server", "core_listener_failed"}, {"listen err", "core_listener_failed"}, {"server error: listen ", "core_listener_failed"}, {"listener: listen ", "core_listener_failed"},
+			{"start tun listening", "core_tun_issue"}, {"parse config error", "invalid_configuration"}, {"dialer-proxy", "invalid_configuration"},
+			{"sniff", "sniffer_issue"}, {"[tun]", "core_tun_issue"}, {"tun device", "core_tun_issue"}, {"/dev/net/tun", "core_tun_issue"}, {"dial ", "dial_failed"}, {"dns", "dns_query_failed"}} {
 			if strings.Contains(line, x.needle) {
 				reason = x.reason
 				break
@@ -354,7 +358,8 @@ func (s *logSink) recordLine(line string) {
 	switch reason {
 	case "permission_denied":
 		detail = deniedOperation(original)
-	case "core_diagnostic":
+	case "core_diagnostic", "core_listener_failed", "invalid_configuration":
+		// Which listener, or what in the configuration.
 		detail = coreDetail(original)
 	}
 	s.r.LogDetail(source, level, reason, detail)

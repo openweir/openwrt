@@ -258,3 +258,51 @@ rip    0x47a1c1
 		t.Errorf("%+v", logs)
 	}
 }
+
+// What failed to start reads as a listener, the TUN device or the configuration, ahead of the
+// words "dns" and "dial" in the same line; a listener or the configuration keeps which one.
+func TestCoreLogNamesWhatFailedToStart(t *testing.T) {
+	const at = `time="2026-11-22T09:51:42.596400247-08:00" `
+	for _, c := range []struct{ line, level, reason, detail string }{
+		{at + `level=error msg="Start DNS server(UDP) error: listen udp 127.0.0.1:19764: bind: cannot assign requested address"`,
+			"error", "core_listener_failed", "start dns server udp error: listen udp <addr>: bind: cannot assign requested address"},
+		{at + `level=error msg="Start DNS server error: listen udp 127.0.0.1:19764: bind: address already in use"`, "error", "listen_address_in_use", ""},
+		{at + `level=error msg="Start TProxy server error: listen tcp [::]:19762: bind: address already in use"`, "error", "listen_address_in_use", ""},
+		{at + `level=warning msg="Failed to start TProxy UDP Listener: listen udp [::]:19762: setsockopt: protocol not available"`,
+			"warn", "core_listener_failed", "failed to start tproxy udp listener: listen udp <addr>: setsockopt: protocol not available"},
+		{at + `level=error msg="Listener lan-tproxy listen err: listen tcp 0.0.0.0:19762: bind: cannot assign requested address"`,
+			"error", "core_listener_failed", "listener lan-tproxy listen err: listen tcp <addr>: bind: cannot assign requested address"},
+		{at + `level=error msg="External controller listen error: listen tcp 127.0.0.1:19761: bind: cannot assign requested address"`,
+			"error", "core_listener_failed", "external controller listen error: listen tcp <addr>: bind: cannot assign requested address"},
+		{at + `level=error msg="Start Mixed(http+socks) server error: listen tcp 127.0.0.1:7890: bind: cannot assign requested address"`,
+			"error", "core_listener_failed", "start mixed http socks server error: listen tcp <addr>: bind: cannot assign requested address"},
+		{at + `level=error msg="Start TUN listening error: configure tun interface: device or resource busy"`, "error", "core_tun_issue", ""},
+		{at + `level=error msg="Start TUN listening error: create tun: invalid argument"`, "error", "core_tun_issue", ""},
+		{at + `level=fatal msg="Parse config error: DNS NameServer[0] format error: dns nameserver unsupport scheme: tls"`,
+			"error", "invalid_configuration", "parse config error: dns nameserver 0 format error: dns nameserver unsupport scheme: tls"},
+		{at + `level=fatal msg="Parse config error: proxy group[1]: 'name' missing"`, "error", "invalid_configuration", "parse config error: proxy group 1 : name missing"},
+		{at + `level=fatal msg="Parse config error: open ./rulesets/abc.mrs: no such file or directory"`,
+			"error", "invalid_configuration", "parse config error: open ./rulesets/<host>: no such file or directory"},
+		// The catch-all "dial " leaves a dialer-proxy configuration error alone.
+		{at + `level=error msg="The group [group:af60f450c0dd13e8eab38ef9bfaed433] with dialer-proxy configuration is not allowed"`,
+			"error", "invalid_configuration", "the group <group> with dialer-proxy configuration is not allowed"},
+		{at + `level=warning msg="[Inbound] relay: dial tcp 203.0.113.9:443: network is down"`, "", "", ""},
+	} {
+		r := NewRecords()
+		s := logSink{r: r}
+		_, _ = s.Write([]byte(c.line + "\n"))
+		logs := r.Logs(0, 10, "", "", "")
+		if c.reason == "" {
+			if len(logs) != 0 {
+				t.Errorf("%s\n logged %+v", c.line, logs)
+			}
+			continue
+		}
+		if len(logs) != 1 || logs[0].Level != c.level || logs[0].Message != c.reason || logs[0].Detail != c.detail {
+			t.Errorf("%s\n got %+v\nwant %s %s %q", c.line, logs, c.level, c.reason, c.detail)
+		}
+		if fatal := strings.Contains(c.line, "level=fatal"); fatal != (s.terminal == c.reason) {
+			t.Errorf("%s\n exit cause %q", c.line, s.terminal)
+		}
+	}
+}
