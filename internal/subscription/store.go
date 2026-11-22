@@ -401,17 +401,28 @@ func (s *Store) commit(ctx context.Context, t Ticket, c Candidate, recheck func(
 			}
 		}
 		r.CheckedTemplate = nil
+		// The profile records the routing choice it was read with, for a rollback to restore.
+		var choice *string
+		if routing != nil {
+			choice = new(string)
+			*choice = *routing
+		} else if r.Config != nil {
+			choice = new(string)
+			*choice = r.Config.Rules
+		}
 		if c.unchanged && r.Current != nil {
 			// The profile routes as the current one (Profile.routing), which the router runs
 			// and keeps the template it was committed with: it takes only what the profile
-			// shows, and the rollback snapshot stays. Usually nothing of the record file changes.
+			// shows and the choice it was read with, and the rollback snapshot stays. Usually
+			// nothing of the record file changes.
 			shown := *r.Current
-			shown.Notices, shown.Title, shown.Format = c.Profile.Notices, c.Profile.Title, c.Profile.Format
+			shown.Notices, shown.Title, shown.Format, shown.RoutingChoice = c.Profile.Notices, c.Profile.Title, c.Profile.Format, choice
 			r.Current = &shown
 			if t := c.Profile.Template; t != nil && shown.Template != nil && *t != *shown.Template {
 				r.CheckedTemplate = t
 			}
 		} else {
+			c.Profile.RoutingChoice = choice
 			r.Previous = r.Current
 			r.Current = &c.Profile
 		}
@@ -514,6 +525,11 @@ func (s *Store) RollbackChecked(ctx context.Context, id string, v Validator) err
 		r.Providers = nil
 		r.CheckedTemplate = nil
 		r.Current, r.Previous = r.Previous, r.Current
+		// The source routes by the restored profile again, and reads with the routing choice it
+		// was read with. One stored before profiles recorded theirs leaves the source's choice.
+		if choice := r.Current.RoutingChoice; choice != nil && r.Config != nil && (*choice == RoutingOwn || *choice == RoutingTemplate) {
+			r.Config.Rules = *choice
+		}
 		return nil
 	})
 }

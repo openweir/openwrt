@@ -101,6 +101,10 @@ type Profile struct {
 	Title         string      `json:"title,omitempty"`
 	// Template is set when the profile routes by subconv's template instead of its own rules.
 	Template *TemplateUse `json:"template,omitempty"`
+	// RoutingChoice is the source's routing choice (Source.Rules) the profile was read with,
+	// which the commit records and a rollback restores with the profile. Profiles stored
+	// before it was recorded have none: a rollback to one leaves the source's choice.
+	RoutingChoice *string `json:"routing_choice,omitempty"`
 }
 
 type Policy struct {
@@ -130,11 +134,12 @@ type Candidate struct {
 func (c Candidate) Unchanged() bool { return c.unchanged }
 
 // routing is what of a profile makes the router's configuration: all of it but what it only
-// shows (notices, title, format) and the bookkeeping of the template it routes by: the
-// template's version, why it was chosen and whether the router's copy served. A new template
-// version whose rules and rule sets are the same leaves the router's configuration as it is.
+// shows (notices, title, format), the routing choice it was read with and the bookkeeping of
+// the template it routes by: the template's version, why it was chosen and whether the
+// router's copy served. A new template version whose rules and rule sets are the same leaves
+// the router's configuration as it is.
 func (p Profile) routing() Profile {
-	p.Notices, p.Title, p.Format = nil, "", ""
+	p.Notices, p.Title, p.Format, p.RoutingChoice = nil, "", "", nil
 	if p.Template != nil {
 		p.Template = &TemplateUse{}
 	}

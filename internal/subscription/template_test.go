@@ -297,6 +297,98 @@ func TestRoutingChoiceSavedOnlyWithItsUpdate(t *testing.T) {
 	inUse("a scheduled refresh", RoutingTemplate)
 }
 
+// A rollback restores the routing choice the profile it goes back to was read with: the status
+// shows the routing in use, and the next refresh, a scheduled one too, reads with it instead of
+// switching back unasked. Rolled back again, the switch comes back with its choice.
+func TestRollbackRestoresTheRoutingChoice(t *testing.T) {
+	b := serveBranch(t, 42)
+	store := OpenStore(t.TempDir())
+	src := Source{ID: "sub", Name: "sub", Kind: "external", URL: "https://example.com/feed"}
+	if err := store.Configure(src); err != nil {
+		t.Fatal(err)
+	}
+	scheduled := b.fetcher()
+	scheduled.Client = &http.Client{Transport: setFixtureTransport(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(ownRules))}, nil
+	})}
+	template := RoutingTemplate
+	switched := scheduled
+	switched.Routing = &template
+	refresh := func(f Fetcher, policy Policy) Candidate {
+		t.Helper()
+		c, err := f.Refresh(t.Context(), store, src.ID, nil, policy)
+		if err != nil || c.Decision != "ready" {
+			t.Fatal(err, c.Decision, c.Notices)
+		}
+		return c
+	}
+	inUse := func(what, rules string) {
+		t.Helper()
+		st, err := store.Status(src.ID)
+		current, _ := store.Load(src.ID)
+		if err != nil || st.Rules != rules || (current.Template != nil) != (rules == RoutingTemplate) || (st.Template != nil) != (rules == RoutingTemplate) {
+			t.Fatal(what, err, st.Rules, current.Template)
+		}
+	}
+	rollback := func() {
+		t.Helper()
+		if err := store.Rollback(src.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	refresh(scheduled, Policy{})
+	refresh(switched, Policy{})
+	inUse("the switch", RoutingTemplate)
+
+	rollback()
+	inUse("the rollback", RoutingOwn)
+	if c := refresh(scheduled, Policy{Scheduled: true}); c.Profile.Template != nil || !c.Unchanged() {
+		t.Fatal("a scheduled refresh switched the rolled back routing", c.Profile.Template, c.Unchanged())
+	}
+	inUse("a scheduled refresh after the rollback", RoutingOwn)
+
+	rollback()
+	inUse("a second rollback", RoutingTemplate)
+	if c := refresh(scheduled, Policy{Scheduled: true}); c.Profile.Template == nil || !c.Unchanged() {
+		t.Fatal("a scheduled refresh lost the restored template", c.Profile.Template, c.Unchanged())
+	}
+	inUse("a scheduled refresh after the second rollback", RoutingTemplate)
+}
+
+// Profiles stored before they recorded their routing choice still load and roll back. The
+// source keeps its choice then, as before.
+func TestRollbackToAProfileWithoutItsRoutingChoice(t *testing.T) {
+	b := serveBranch(t, 42)
+	store, id := fileSource(t, RoutingOwn)
+	if _, err := b.fetcher().Refresh(t.Context(), store, id, []byte(ownRules), Policy{}); err != nil {
+		t.Fatal(err)
+	}
+	template := RoutingTemplate
+	switched := b.fetcher()
+	switched.Routing = &template
+	if c, err := switched.Refresh(t.Context(), store, id, []byte(ownRules), Policy{}); err != nil || c.Decision != "ready" {
+		t.Fatal(err, c.Decision, c.Notices)
+	}
+	// The record as an earlier version stored it.
+	if err := store.update(id, func(r *record) error {
+		r.Current.RoutingChoice, r.Previous.RoutingChoice = nil, nil
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if raw, err := os.ReadFile(store.path(id)); err != nil || strings.Contains(string(raw), "routing_choice") {
+		t.Fatal("record still holds a routing choice", err)
+	}
+	if err := store.Rollback(id); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Status(id)
+	current, _ := store.Load(id)
+	if err != nil || !st.Ready || current.Template != nil || current.Groups[0].Name != "Mine" || st.Rules != RoutingTemplate {
+		t.Fatal("rollback without a recorded choice", err, st.Ready, current.Template, st.Rules)
+	}
+}
+
 func TestTemplateSurvivesHostsThatDoNotAnswer(t *testing.T) {
 	b := serveBranch(t, 42)
 	store, id := fileSource(t, RoutingOwn)
