@@ -97,15 +97,6 @@ func run(args []string) error {
 		result, e = m.Bootstrap(ctx)
 	case "status":
 		result, e = m.Status()
-	case "provider-core":
-		if len(args) != 1 {
-			return errors.New("provider-core takes no options")
-		}
-		l, err := m.ProviderCore()
-		if err != nil {
-			os.Exit(69)
-		}
-		return execRestricted([]string{l.Path, "-d", runtimeHome, "-f", "-"})
 	case "capabilities":
 		result, e = m.Capabilities(*tag)
 	case "target-capabilities":
@@ -270,14 +261,16 @@ func inspect(ctx context.Context, l kernel.Launch, config string) error {
 	}
 	return nil
 }
+
+// restrictedArgs admits the two checks inspect runs, mihomo -v and mihomo -t, and no
+// invocation that would leave a core running.
 func restrictedArgs(args []string) (string, []string, error) {
 	if len(args) < 2 || !filepath.IsAbs(args[0]) || filepath.Clean(args[0]) != args[0] {
 		return "", nil, errors.New("invalid restricted invocation")
 	}
 	isVersion := len(args) == 2 && args[1] == "-v"
-	isProvider := len(args) == 5 && args[1] == "-d" && args[2] == runtimeHome && args[3] == "-f" && args[4] == "-"
 	isCheck := len(args) == 6 && args[1] == "-t" && args[2] == "-d" && args[3] == runtimeHome && args[4] == "-f" && (args[5] == "-" || filepath.IsAbs(args[5]) && filepath.Clean(args[5]) == args[5])
-	if !(isVersion || isProvider || isCheck) {
+	if !(isVersion || isCheck) {
 		return "", nil, errors.New("invalid restricted operation")
 	}
 	return args[0], []string{"PATH=/usr/bin:/bin", "HOME=/", "LANG=C"}, nil

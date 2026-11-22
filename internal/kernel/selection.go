@@ -64,23 +64,6 @@ func (m *Manager) Reject(tag string) error {
 	})
 }
 
-// ProviderCore verifies the selected installation without changing selection or creating
-// a launch transaction for the router. The caller drops all privileges before exec.
-func (m *Manager) ProviderCore() (l Launch, err error) {
-	err = m.locked(func(s *state) error {
-		v, e := m.stored(s.Selected)
-		if e != nil {
-			return e
-		}
-		if e = m.verifySlot(*s.Selected, v); e != nil {
-			return e
-		}
-		l = m.launch(*s.Selected, v)
-		return nil
-	})
-	return
-}
-
 // Check verifies an installed binary and checks a disposable copy of the new
 // configuration while the confirmed process continues to serve traffic.
 func (m *Manager) Check(ctx context.Context, tag, config string) error {

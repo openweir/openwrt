@@ -15,7 +15,7 @@ import (
 	"github.com/openweir/openwrt/internal/coregroup"
 )
 
-// execRestricted runs a core check or provider fetch in the running core's identity: root, so
+// execRestricted runs a core version or configuration check in the running core's identity: root, so
 // it reads the root-owned configuration and home, in the core group (coregroup: nogroup),
 // whose sockets the firewall exempts. Unlike the running core it holds no capability at all: the bounding set
 // is emptied and no_new_privs set before execve, which then gives root nothing back.
@@ -63,15 +63,6 @@ func execRestricted(args []string) error {
 	var none [2]unix.CapUserData
 	if e = unix.Capset(&unix.CapUserHeader{Version: unix.LINUX_CAPABILITY_VERSION_3}, &none[0]); e != nil {
 		return errors.New("cannot clear capabilities")
-	}
-	if args[1] == "-d" {
-		if err := unix.Prctl(unix.PR_SET_PDEATHSIG, uintptr(syscall.SIGKILL), 0, 0, 0); err != nil {
-			return err
-		}
-		parent, e := strconv.Atoi(os.Getenv("OPENWEIR_PROVIDER_PARENT"))
-		if e != nil || os.Getppid() != parent {
-			return errors.New("provider refresh ended")
-		}
 	}
 	return syscall.Exec(path, append([]string{path}, args[1:]...), env)
 }

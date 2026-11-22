@@ -43,3 +43,29 @@ func TestLaunchIssueKeepsOnlyKnownFailureClasses(t *testing.T) {
 		}
 	}
 }
+
+// Only the version and configuration checks run restricted; a core that would keep serving,
+// in a group whose sockets the firewall lets out uncaptured, is no restricted operation.
+func TestRestrictedArgsAdmitOnlyChecks(t *testing.T) {
+	for _, args := range [][]string{
+		{"/core", "-v"},
+		{"/core", "-t", "-d", runtimeHome, "-f", "-"},
+		{"/core", "-t", "-d", runtimeHome, "-f", "/tmp/candidate.yaml"},
+	} {
+		if path, env, err := restrictedArgs(args); err != nil || path != "/core" || len(env) == 0 {
+			t.Fatal(args, path, env, err)
+		}
+	}
+	for _, args := range [][]string{
+		{"/core", "-d", runtimeHome, "-f", "-"},
+		{"/core", "-d", runtimeHome, "-f", "/tmp/candidate.yaml"},
+		{"/core", "-t", "-d", "/tmp", "-f", "-"},
+		{"/core", "-t", "-d", runtimeHome, "-f", "candidate.yaml"},
+		{"core", "-v"},
+		{"/core"},
+	} {
+		if _, _, err := restrictedArgs(args); err == nil {
+			t.Fatal("admitted", args)
+		}
+	}
+}
