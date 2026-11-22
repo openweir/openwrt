@@ -34,41 +34,144 @@ func TestOwnershipDetection(t *testing.T) {
 		t.Fatal(c.sorted())
 	}
 }
-func TestConfirmOnlyTheInspectedConflict(t *testing.T) {
-	ctx := context.Background()
-	var stopped []string
-	now := time.Now()
-	res := []Resource{{"service", "passwall", "passwall"}}
-	c := Checker{Dir: t.TempDir(), Scan: func(context.Context) []Resource { return res }, Stop: func(_ context.Context, s string) error { stopped = append(stopped, s); return nil }, Now: func() time.Time { return now }}
-	first, e := c.Check(ctx, "")
-	if e != nil || !first.Blocked || first.Token == "" || len(stopped) != 0 {
-		t.Fatal(first, e)
+
+// fakePlugins stands in for the router: Stop takes a plugin's service and process away, and
+// any other resource stays until it is removed by hand.
+type fakePlugins struct {
+	found           []Resource
+	scans           int
+	stops, disables []string
+	stopErr, disErr map[string]error
+	stopAfter       int // further scans a stopped plugin's process lingers for
+	stoppedAt       map[string]int
+}
+
+func (f *fakePlugins) checker(t *testing.T) Checker {
+	return Checker{
+		Dir: t.TempDir(),
+		Scan: func(context.Context) []Resource {
+			f.scans++
+			var out []Resource
+			for _, r := range f.found {
+				at, stopped := f.stoppedAt[r.Service]
+				if stopped && (r.Kind == "service" || r.Kind == "process" && f.scans > at+f.stopAfter) {
+					continue
+				}
+				out = append(out, r)
+			}
+			return out
+		},
+		Stop: func(_ context.Context, s string) error {
+			f.stops = append(f.stops, s)
+			if e := f.stopErr[s]; e != nil {
+				return e
+			}
+			if f.stoppedAt == nil {
+				f.stoppedAt = map[string]int{}
+			}
+			f.stoppedAt[s] = f.scans
+			return nil
+		},
+		Disable: func(_ context.Context, s string) error {
+			f.disables = append(f.disables, s)
+			return f.disErr[s]
+		},
 	}
-	recheck, _ := c.Check(ctx, "")
-	if first.Token != recheck.Token {
-		t.Fatal("unexpected token churn")
-	}
-	res = append(res, Resource{"listener", "tcp/19761", ""})
-	if _, e = c.Check(ctx, first.Token); e == nil || len(stopped) > 0 {
-		t.Fatal("resource changes failed to invalidate consent")
-	}
-	fresh, _ := c.Check(ctx, "")
-	r, e := c.Check(ctx, fresh.Token)
-	if e != nil || !r.Blocked || !reflect.DeepEqual(stopped, []string{"passwall"}) {
-		t.Fatal(r, e, stopped)
-	}
-	if _, e = c.Check(ctx, fresh.Token); e == nil {
-		t.Fatal("permit reused")
-	}
-	fresh, _ = c.Check(ctx, "")
-	now = now.Add(6 * time.Minute)
-	if _, e = c.Check(ctx, fresh.Token); e == nil {
-		t.Fatal("expired permit accepted")
-	}
-	fresh, _ = c.Check(ctx, "")
-	c.Stop = func(context.Context, string) error { return errors.New("init script failed") }
-	if r, e = c.Check(ctx, fresh.Token); e == nil || !r.Blocked {
+}
+
+func TestResolveStopsAndDisablesConflictingPlugins(t *testing.T) {
+	f := &fakePlugins{found: []Resource{
+		{"nft", "inet table openclash", "openclash"},
+		{"process", "openclash", "openclash"},
+		{"service", "openclash", "openclash"},
+	}}
+	r, e := f.checker(t).Resolve(context.Background())
+	// The nft table outlives the stop here, so it still blocks, but the plugin itself is gone.
+	if e != nil || !r.Blocked || !reflect.DeepEqual(r.Resources, []Resource{{"nft", "inet table openclash", "openclash"}}) {
 		t.Fatal(r, e)
+	}
+	if !reflect.DeepEqual(f.stops, []string{"openclash"}) || !reflect.DeepEqual(f.disables, []string{"openclash"}) || !reflect.DeepEqual(r.Stopped, []string{"openclash"}) || f.scans != 2 {
+		t.Fatal(f.stops, f.disables, r.Stopped, f.scans)
+	}
+
+	f = &fakePlugins{found: []Resource{{"service", "homeproxy", "homeproxy"}, {"service", "passwall2", "passwall2"}}}
+	r, e = f.checker(t).Resolve(context.Background())
+	if e != nil || r.Blocked || len(r.Resources) != 0 || !reflect.DeepEqual(r.Stopped, []string{"homeproxy", "passwall2"}) || !reflect.DeepEqual(f.disables, r.Stopped) {
+		t.Fatal(r, e, f.disables)
+	}
+}
+
+func TestResolveLeavesWhatItCannotRemove(t *testing.T) {
+	f := &fakePlugins{found: []Resource{
+		{"dnsmasq", "nikki", "nikki"},
+		{"listener", "tcp/19761", ""},
+		{"process", "mihomo", ""},
+		{"service", "openclash", "openclash"},
+		{"service", "passwall", "passwall"},
+		{"service", "v2raya", "v2raya"},
+		{"unverified", "ubus", ""},
+	}}
+	f.stopErr = map[string]error{"nikki": errNotInstalled, "passwall": errors.New("exit status 1")}
+	f.disErr = map[string]error{"v2raya": errors.New("read-only")}
+	r, e := f.checker(t).Resolve(context.Background())
+	if e != nil || !r.Blocked {
+		t.Fatal(r, e)
+	}
+	// An uninstalled plugin is neither disabled nor reported; a failed stop is judged by the
+	// rescan; a plugin that stays enabled at boot blocks the start.
+	if !reflect.DeepEqual(f.stops, []string{"nikki", "openclash", "passwall", "v2raya"}) || !reflect.DeepEqual(f.disables, []string{"openclash", "passwall", "v2raya"}) {
+		t.Fatal(f.stops, f.disables)
+	}
+	want := []Resource{
+		{"dnsmasq", "nikki", "nikki"},
+		{"listener", "tcp/19761", ""},
+		{"process", "mihomo", ""},
+		{"service", "passwall", "passwall"},
+		{"unverified", "ubus", ""},
+		{"autostart", "v2raya", "v2raya"},
+	}
+	if !reflect.DeepEqual(r.Resources, want) || !reflect.DeepEqual(r.Stopped, []string{"openclash"}) {
+		t.Fatal(r)
+	}
+
+	f = &fakePlugins{found: []Resource{{"process", "mihomo", ""}, {"nft", "inet openweir (unknown owner)", ""}}}
+	r, e = f.checker(t).Resolve(context.Background())
+	if e != nil || !r.Blocked || len(r.Resources) != 2 || r.Stopped != nil || f.stops != nil || f.scans != 1 {
+		t.Fatal(r, e, f.stops, f.scans)
+	}
+}
+
+func TestResolveWaitsForStoppedProcesses(t *testing.T) {
+	f := &fakePlugins{found: []Resource{{"process", "openclash", "openclash"}, {"service", "openclash", "openclash"}}, stopAfter: 1}
+	c := f.checker(t)
+	c.Settle = 5 * time.Second
+	r, e := c.Resolve(context.Background())
+	if e != nil || r.Blocked || f.scans != 3 || !reflect.DeepEqual(r.Stopped, []string{"openclash"}) {
+		t.Fatal(r, e, f.scans)
+	}
+
+	// Without time to settle, a lingering process blocks and the plugin is not reported stopped.
+	f = &fakePlugins{found: f.found, stopAfter: 1}
+	r, e = f.checker(t).Resolve(context.Background())
+	if e != nil || !r.Blocked || f.scans != 2 || r.Stopped != nil || !reflect.DeepEqual(r.Resources, []Resource{{"process", "openclash", "openclash"}}) {
+		t.Fatal(r, e, f.scans)
+	}
+}
+
+func TestInitScriptsOnlyForKnownPlugins(t *testing.T) {
+	for _, name := range []string{"firewall", "dnsmasq", "openweir", "../../sbin/reboot", ""} {
+		if e := initScript(context.Background(), name, "disable"); e == nil || errors.Is(e, errNotInstalled) {
+			t.Fatal(name, e)
+		}
+	}
+}
+
+func TestRunUsage(t *testing.T) {
+	for _, args := range [][]string{nil, {"conflicts", "--confirm", "token"}, {"conflicts", "--resolve", "x"}} {
+		var out bytes.Buffer
+		if e := Run(context.Background(), args, &out); e == nil || out.Len() != 0 {
+			t.Fatal(args, e, out.String())
+		}
 	}
 }
 

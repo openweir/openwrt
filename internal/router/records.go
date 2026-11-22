@@ -21,7 +21,7 @@ type Event struct {
 	Source  string `json:"source"`
 	Level   string `json:"level"`
 	Message string `json:"message"`
-	Detail  string `json:"detail,omitempty"` // a redacted operation, only for unclassified core errors
+	Detail  string `json:"detail,omitempty"` // a redacted operation of a core error, or the plugins a start stopped
 }
 type Records struct {
 	minTime     int64

@@ -264,6 +264,10 @@ func (s *System) Start(ctx context.Context, i Intent) (err error) {
 			return e
 		}
 	}
+	// Stopping other proxy plugins takes their DNS files away before the prerequisites read them.
+	if err := s.clearConflicts(ctx); err != nil {
+		return err
+	}
 	// Missing firmware capabilities are independent of the selected core.
 	if err := checkNetworkRequirements(ctx); err != nil {
 		return err
@@ -284,12 +288,6 @@ func (s *System) Start(ctx context.Context, i Intent) (err error) {
 				}
 			}
 		}()
-	}
-	var conflict struct {
-		Blocked bool `json:"blocked"`
-	}
-	if e := jsonCmd(ctx, &conflict, "/usr/sbin/openweir-net", "conflicts"); e != nil || conflict.Blocked {
-		return errors.New("network resource conflict or incomplete inspection")
 	}
 	n, e := networkOptions(ctx)
 	s.observe(ctx, n, e)

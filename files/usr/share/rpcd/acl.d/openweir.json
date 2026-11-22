@@ -46,7 +46,6 @@
           "close_connection",
           "subscription_write",
           "kernel_write",
-          "confirm_conflicts",
           "kernel_upload"
         ]
       },

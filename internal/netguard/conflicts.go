@@ -1,21 +1,19 @@
 // Package netguard detects ownership conflicts before the router takes over
-// transparent traffic. It never directly modifies a foreign network resource.
+// transparent traffic. It never directly modifies a foreign network resource:
+// a recognised proxy plugin is only stopped and disabled through its own init script.
 package netguard
 
 import (
 	"bufio"
 	"bytes"
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -30,12 +28,9 @@ type Resource struct {
 }
 type Result struct {
 	Blocked   bool       `json:"blocked"`
-	Token     string     `json:"token,omitempty"`
 	Resources []Resource `json:"resources"`
-}
-type permit struct {
-	Token, Fingerprint string
-	Until              time.Time
+	// The plugins a resolve stopped and kept from starting at boot.
+	Stopped []string `json:"stopped,omitempty"`
 }
 
 var services = []string{"openclash", "passwall2", "passwall", "homeproxy", "v2raya", "shadowsocksr", "nikki", "momo"}
@@ -495,25 +490,60 @@ func Scan(ctx context.Context) []Resource {
 	return c.sorted()
 }
 
+// Checker clears the way for a takeover. Stop and Disable act on one recognised proxy plugin
+// through its init script.
 type Checker struct {
-	Dir  string
-	Scan func(context.Context) []Resource
-	Stop func(context.Context, string) error
-	Now  func() time.Time
+	Dir           string
+	Scan          func(context.Context) []Resource
+	Stop, Disable func(context.Context, string) error
+	// Settle bounds the wait for a stopped plugin's processes to exit: procd ends instances
+	// after the init script has returned.
+	Settle time.Duration
+}
+
+// A recognised plugin without an init script has nothing to stop; its leftovers stay found.
+var errNotInstalled = errors.New("service not installed")
+
+func initScript(ctx context.Context, service, action string) error {
+	if !slices.Contains(services, service) {
+		return errors.New("unknown service")
+	}
+	path := "/etc/init.d/" + service
+	if i, e := os.Stat(path); e != nil || !i.Mode().IsRegular() || i.Mode()&0111 == 0 {
+		return errNotInstalled
+	}
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, path, action)
+	cmd.Env = []string{"PATH=/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL=C"}
+	cmd.WaitDelay = time.Second
+	return cmd.Run()
 }
 
 func SystemChecker() Checker {
-	return Checker{"/var/run/openweir/conflicts", Scan, func(ctx context.Context, s string) error {
-		for _, name := range services {
-			if s == name {
-				_, e := command(ctx, "/etc/init.d/"+s, "stop")
+	return Checker{
+		Dir:  "/var/run/openweir/conflicts",
+		Scan: Scan,
+		Stop: func(ctx context.Context, s string) error { return initScript(ctx, s, "stop") },
+		Disable: func(ctx context.Context, s string) error {
+			if e := initScript(ctx, s, "disable"); e != nil {
 				return e
 			}
-		}
-		return errors.New("unknown service")
-	}, time.Now}
+			// disable reports only its last rm; enabled tells whether a boot link is left.
+			if initScript(ctx, s, "enabled") == nil {
+				return errors.New("service still enabled")
+			}
+			return nil
+		},
+		Settle: 10 * time.Second,
+	}
 }
-func (c Checker) Check(ctx context.Context, confirm string) (Result, error) {
+
+// Resolve stops every recognised proxy plugin the scan attributes something to and disables
+// its autostart, so it cannot take the traffic back after a reboot, then scans again. Whatever
+// is still found blocks the takeover: unknown processes, foreign or ownerless rules, leftovers
+// of an uninstalled plugin and incomplete inspections are not OpenWeir's to remove.
+func (c Checker) Resolve(ctx context.Context) (Result, error) {
 	if e := os.MkdirAll(c.Dir, 0700); e != nil {
 		return Result{Blocked: true}, e
 	}
@@ -525,73 +555,74 @@ func (c Checker) Check(ctx context.Context, confirm string) (Result, error) {
 	if e = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); e != nil {
 		return Result{Blocked: true}, e
 	}
-	resources := c.Scan(ctx)
-	r := Result{len(resources) > 0, "", resources}
-	store := filepath.Join(c.Dir, "permit.json")
-	if !r.Blocked {
-		_ = os.Remove(store)
-		return r, nil
-	}
-	b, _ := json.Marshal(resources)
-	finger := fmt.Sprintf("%x", sha256.Sum256(b))
-	b, _ = os.ReadFile(store)
-	var p permit
-	valid := json.Unmarshal(b, &p) == nil && p.Token != "" && p.Fingerprint == finger && c.Now().Before(p.Until)
-	if confirm != "" {
-		if !valid || confirm != p.Token {
-			return r, errors.New("confirmation expired or conflict resources changed")
+	found := c.Scan(ctx)
+	seen := map[string]bool{}
+	var acted []string
+	var enabled []Resource
+	for _, r := range found {
+		s := r.Service
+		if s == "" || seen[s] {
+			continue
 		}
-		if e = os.Remove(store); e != nil {
-			return r, e
+		seen[s] = true
+		// Init scripts often exit non-zero for nothing; the rescan decides whether it stopped.
+		if errors.Is(c.Stop(ctx, s), errNotInstalled) {
+			continue
 		}
-		// Only a recognised service associated with confirmed evidence can be stopped.
-		stopped := map[string]bool{}
-		for _, resource := range resources {
-			if s := resource.Service; s != "" && !stopped[s] {
-				stopped[s] = true
-				if e = c.Stop(ctx, s); e != nil {
-					return r, fmt.Errorf("service %s did not stop", s)
-				}
-			}
-		}
-		r.Resources = c.Scan(ctx)
-		r.Blocked = len(r.Resources) > 0
-		return r, nil
-	}
-	if !valid {
-		var id [24]byte
-		if _, e = rand.Read(id[:]); e != nil {
-			return r, e
-		}
-		p = permit{hex.EncodeToString(id[:]), finger, c.Now().Add(5 * time.Minute)}
-		b, _ = json.Marshal(p)
-		tmp, e := os.CreateTemp(c.Dir, "permit-")
-		if e != nil {
-			return r, e
-		}
-		defer os.Remove(tmp.Name())
-		if _, e = tmp.Write(b); e != nil {
-			tmp.Close()
-			return r, e
-		}
-		if e = tmp.Close(); e != nil {
-			return r, e
-		}
-		if e = os.Rename(tmp.Name(), store); e != nil {
-			return r, e
+		acted = append(acted, s)
+		if c.Disable(ctx, s) != nil {
+			enabled = append(enabled, Resource{"autostart", s, s})
 		}
 	}
-	r.Token = p.Token
+	if len(acted) > 0 {
+		found = c.settle(ctx, acted)
+	}
+	r := Result{Resources: append(found, enabled...)}
+	for _, s := range acted {
+		if !running(found, s) && !slices.Contains(enabled, Resource{"autostart", s, s}) {
+			r.Stopped = append(r.Stopped, s)
+		}
+	}
+	r.Blocked = len(r.Resources) > 0
 	return r, nil
 }
-func Run(ctx context.Context, args []string, out io.Writer) error {
-	var confirm string
-	if len(args) == 3 && args[0] == "conflicts" && args[1] == "--confirm" && args[2] != "" {
-		confirm = args[2]
-	} else if len(args) != 1 || args[0] != "conflicts" {
-		return errors.New("usage: openweir-net conflicts [--confirm TOKEN]")
+
+// running reports whether a plugin still has a live service instance or process.
+func running(found []Resource, service string) bool {
+	return slices.ContainsFunc(found, func(r Resource) bool {
+		return r.Service == service && (r.Kind == "service" || r.Kind == "process")
+	})
+}
+
+func (c Checker) settle(ctx context.Context, stopped []string) []Resource {
+	deadline := time.Now().Add(c.Settle)
+	for {
+		found := c.Scan(ctx)
+		if !slices.ContainsFunc(stopped, func(s string) bool { return running(found, s) }) || !time.Now().Before(deadline) {
+			return found
+		}
+		select {
+		case <-ctx.Done():
+			return found
+		case <-time.After(500 * time.Millisecond):
+		}
 	}
-	r, e := SystemChecker().Check(ctx, confirm)
+}
+
+// Run prints what holds the network. With --resolve it first stops and disables the
+// conflicting plugins; either way it fails while anything is left.
+func Run(ctx context.Context, args []string, out io.Writer) error {
+	var r Result
+	var e error
+	switch {
+	case slices.Equal(args, []string{"conflicts"}):
+		found := Scan(ctx)
+		r = Result{Blocked: len(found) > 0, Resources: found}
+	case slices.Equal(args, []string{"conflicts", "--resolve"}):
+		r, e = SystemChecker().Resolve(ctx)
+	default:
+		return errors.New("usage: openweir-net conflicts [--resolve]")
+	}
 	if w := json.NewEncoder(out).Encode(r); w != nil {
 		return w
 	}

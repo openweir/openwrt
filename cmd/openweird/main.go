@@ -469,7 +469,7 @@ func (s *app) handle(ctx context.Context, method string, r request) (any, error)
 			}
 			return nil, nil
 		})
-	case "subscription_read", "subscription_write", "kernel_read", "kernel_write", "conflicts", "confirm_conflicts":
+	case "subscription_read", "subscription_write", "kernel_read", "kernel_write", "conflicts":
 		return s.dispatch(ctx, method, r)
 	}
 	return nil, errors.New("unknown operation")
@@ -543,9 +543,6 @@ func (s *app) dispatch(ctx context.Context, method string, r request) (any, erro
 		return s.kernelJob(r)
 	case "conflicts":
 		return child(ctx, "openweir-net", []string{"conflicts"}, nil)
-	case "confirm_conflicts":
-		bin = "openweir-net"
-		arg = []string{"conflicts", "--confirm", r.Token}
 	}
 	return s.runJob(lane, method+"/"+r.Action, func(ctx context.Context) (json.RawMessage, error) {
 		out, e := child(ctx, bin, arg, body)
