@@ -257,6 +257,9 @@ var proxiedCN = []string{"+.googleapis.cn", "+.xn--ngstr-lra8j.com"}
 
 // Mainland names and addresses keep QUIC. The address check uses no-resolve: a connection
 // that only names its host matches by name, without a lookup for the rule.
+// quicProxied refuses QUIC to mainland names the proxy must carry; records.js labels it.
+var quicProxied = "AND,((NETWORK,UDP),(DST-PORT,443),(RULE-SET," + proxiedCNSet + ")),REJECT"
+
 var quicBlock = "AND,((NETWORK,UDP),(DST-PORT,443),(NOT,((RULE-SET," + dnsDomesticSet + "))),(NOT,((RULE-SET," + domesticIPSet + ",no-resolve)))),REJECT"
 
 // Time sync names resolve over plain DNS sent straight out, not over encrypted DNS through
@@ -584,7 +587,7 @@ func Compile(i Intent, p subscription.Profile, c kernel.TargetCapabilities, n Ne
 	// sniffing and routing are reliable. Direct devices and mainland destinations keep QUIC,
 	// and so does other UDP on port 443 to the mainland (WireGuard, DTLS). Mainland names the
 	// proxy must carry count as foreign.
-	rules = append(rules, "AND,((NETWORK,UDP),(DST-PORT,443),(RULE-SET,"+proxiedCNSet+")),REJECT", quicBlock)
+	rules = append(rules, quicProxied, quicBlock)
 	// The only providers of the mainland lists: DNS policy, the QUIC rule, the fake-ip filter and
 	// every mainland routing rule (mainlandSets) use these two.
 	providers[dnsDomesticSet] = obj{"type": "file", "format": "mrs", "behavior": "domain", "path": chinaList(cnlist.Domains)}

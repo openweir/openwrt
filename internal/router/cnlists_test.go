@@ -241,3 +241,19 @@ func TestPagesNameTheChinaListsAsTheCore(t *testing.T) {
 		}
 	}
 }
+
+// The connection log names the router's QUIC rules by the payload the core reports for them:
+// the rule as compiled, without its target. A change to either rule must change its label key in
+// records.js too, or the log falls back to the raw rule.
+func TestConnectionLogNamesTheQUICRules(t *testing.T) {
+	page, err := os.ReadFile("../../files/www/luci-static/resources/openweir/pages/records.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rule := range []string{quicProxied, quicBlock} {
+		payload := strings.TrimSuffix(rule, ",REJECT")
+		if payload == rule || !strings.Contains(string(page), "'"+payload+"'") {
+			t.Errorf("records.js routerRules has no label for %s", payload)
+		}
+	}
+}
