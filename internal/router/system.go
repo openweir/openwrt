@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/openweir/openwrt/internal/control"
-	"github.com/openweir/openwrt/internal/coregroup"
 	"github.com/openweir/openwrt/internal/kernel"
 	"github.com/openweir/openwrt/internal/subscription"
 )
@@ -264,8 +263,10 @@ func (s *System) Start(ctx context.Context, i Intent) (err error) {
 		}
 	}
 	// Stopping other proxy plugins takes their DNS files away before the prerequisites read them.
-	if err := s.clearConflicts(ctx); err != nil {
-		return err
+	// The core's group is resolved first: an unusable one fails the start with them still running.
+	gid, e := s.prepareTakeover(ctx)
+	if e != nil {
+		return e
 	}
 	// Missing firmware capabilities are independent of the selected core.
 	if err := checkNetworkRequirements(ctx); err != nil {
@@ -309,10 +310,6 @@ func (s *System) Start(ctx context.Context, i Intent) (err error) {
 	profile, e := LoadProfile(i, startupSources)
 	if e != nil {
 		return errors.New("active subscription unavailable")
-	}
-	gid, e := coregroup.GID()
-	if e != nil {
-		return e
 	}
 	for _, dir := range []string{coreHome, RunDir + "/core"} {
 		if e = reclaimDir(dir); e != nil {

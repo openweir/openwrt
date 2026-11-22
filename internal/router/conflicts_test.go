@@ -2,6 +2,7 @@ package router
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 
@@ -55,5 +56,39 @@ func TestStartClearsConflictingPlugins(t *testing.T) {
 				t.Fatal(events)
 			}
 		})
+	}
+}
+
+// An unusable nogroup entry fails the start before OpenClash, PassWall or HomeProxy is stopped.
+func TestStartResolvesTheCoreGroupBeforeStoppingPlugins(t *testing.T) {
+	savedGID, savedResolve := coreGID, resolveConflicts
+	t.Cleanup(func() { coreGID, resolveConflicts = savedGID, savedResolve })
+	stopped := 0
+	resolveConflicts = func(context.Context) (netguard.Result, error) {
+		stopped++
+		return netguard.Result{Stopped: []string{"openclash"}}, nil
+	}
+	for _, fails := range []string{"invalid core group", "core group unavailable"} {
+		coreGID = func() (int, error) { return 0, errors.New(fails) }
+		s := NewSystem()
+		gid, err := s.prepareTakeover(context.Background())
+		if err == nil || err.Error() != fails || gid != 0 {
+			t.Fatal(gid, err)
+		}
+		if stopped != 0 {
+			t.Fatal("plugins were stopped for a start that cannot run the core")
+		}
+		if events := s.Records().Logs(0, 100, "", "", ""); len(events) != 0 {
+			t.Fatal(events)
+		}
+	}
+	coreGID = func() (int, error) { return 4242, nil }
+	if gid, err := NewSystem().prepareTakeover(context.Background()); err != nil || gid != 4242 || stopped != 1 {
+		t.Fatal(gid, err, stopped)
+	}
+	// A plugin that still holds the network fails the start after the group is known.
+	resolveConflicts = func(context.Context) (netguard.Result, error) { return netguard.Result{Blocked: true}, nil }
+	if _, err := NewSystem().prepareTakeover(context.Background()); !errors.Is(err, errConflictInspection) {
+		t.Fatal(err)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/openweir/openwrt/internal/coregroup"
 	"github.com/openweir/openwrt/internal/netguard"
 )
 
@@ -24,6 +25,21 @@ var resolveConflicts = func(ctx context.Context) (netguard.Result, error) {
 		return r, errConflictInspection
 	}
 	return r, nil
+}
+
+// coreGID is the group the core runs in (coregroup); tests stand in their own.
+var coreGID = coregroup.GID
+
+// prepareTakeover resolves the core's group, then clears the other proxy plugins
+// (clearConflicts). The core is launched in that group and the network helper exempts it from
+// the capture (applyArgs), so the two never disagree; a group the core cannot run in fails the
+// start before any plugin is stopped.
+func (s *System) prepareTakeover(ctx context.Context) (int, error) {
+	gid, err := coreGID()
+	if err != nil {
+		return 0, err
+	}
+	return gid, s.clearConflicts(ctx)
 }
 
 // clearConflicts runs on every start. Another proxy plugin is stopped and kept from starting at
