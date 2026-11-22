@@ -51,7 +51,10 @@ type System struct {
 
 func NewSystem() *System { return &System{records: NewRecords()} }
 
-// The trial starts after core listeners and the network takeover are in place.
+// confirmPeriod is how long a start must stay healthy before it counts as running.
+const confirmPeriod = 3 * time.Second
+
+// The confirmation starts after core listeners and the network takeover are in place.
 func (s *System) ConfirmationSeconds() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -479,15 +482,14 @@ applyLoop:
 	if e != nil {
 		return e
 	}
-	window := time.Duration(0)
-	if launch.Token != "" {
-		// Four healthy checks in a row (checked every second) confirm the new core.
-		window = 3 * time.Second
-		s.mu.Lock()
-		s.confirmUntil = time.Now().Add(window)
-		s.mu.Unlock()
-		defer func() { s.mu.Lock(); s.confirmUntil = time.Time{}; s.mu.Unlock() }()
-	}
+	// Every start, not only a new core's trial, holds four healthy checks in a row (checked
+	// every second) before it counts as running: a core or takeover that comes up and falls
+	// over at once fails the start here instead of after the page already shows it connected.
+	window := confirmPeriod
+	s.mu.Lock()
+	s.confirmUntil = time.Now().Add(window)
+	s.mu.Unlock()
+	defer func() { s.mu.Lock(); s.confirmUntil = time.Time{}; s.mu.Unlock() }()
 	if e = confirmWindow(ctx, window, time.Second, time.Second, s.verify, s.beat); e != nil {
 		return e
 	}
