@@ -176,9 +176,17 @@ func (s *providers) prefetchInputs(inputs []providerInput, budget int) error {
 	return s.ctx.Err()
 }
 
+// templateSetError is a failure of the rule sets of subconv's routing template: the router
+// cannot use one (ruleSet), or all of them together. The refresh routes as when they did not
+// arrive (readConverted).
+type templateSetError struct{ error }
+
+func (e templateSetError) Unwrap() error { return e.error }
+
 // expandSourceProviders downloads a converted document's providers into it. It returns the rule
 // sets the document gained and notices about provider content and options. The rule sets of
-// subconv's routing template come with it (template, by provider name; fetchTemplateSets).
+// subconv's routing template come with it (template, by provider name; fetchTemplateSets), and
+// make up all of its rule sets then: their failures are templateSetErrors.
 func (f Fetcher) expandSourceProviders(ctx context.Context, m map[string]any, origin string, template map[string][]byte) ([]BinarySet, []Notice, error) {
 	s := &providers{trustedOrigin: strings.TrimSuffix(providerAddress(origin), "/"), trusted: f, ctx: ctx, cache: map[string][]byte{}, template: template}
 	var done func()
@@ -197,6 +205,9 @@ func (f Fetcher) expandSourceProviders(ctx context.Context, m map[string]any, or
 	for _, rs := range s.binary {
 		total += len(rs.Data)
 		if total > MaxBody {
+			if template != nil {
+				return nil, nil, templateSetError{errors.New("provider_size_limit")}
+			}
 			return nil, nil, errors.New("provider_size_limit")
 		}
 	}
@@ -359,12 +370,13 @@ func (s *providers) clash(m map[string]any) error {
 		v := object(rp[name])
 		var raw []byte
 		var err error
+		fromTemplate := false
 		switch field(v, "type") {
 		case "http":
 			if s.template == nil {
 				raw = s.cache[ruleInputs[name].key()]
 			} else {
-				raw = s.template[name]
+				raw, fromTemplate = s.template[name], true
 			}
 		case "file":
 			if raw, err = s.trusted.localClashSet(field(v, "path")); err != nil {
@@ -377,12 +389,18 @@ func (s *providers) clash(m map[string]any) error {
 		default:
 			continue
 		}
-		if name == DomesticIPSet || name == DomesticDomainSet {
-			return errRulePayload
-		}
 		set, err := ruleSet(name, field(v, "format"), field(v, "behavior"), raw)
+		switch {
+		case name == DomesticIPSet || name == DomesticDomainSet:
+			err = errRulePayload
+		case err != nil:
+			err = providerFailure("rule", field(v, "url"), err)
+		}
+		if err != nil && fromTemplate {
+			return templateSetError{err}
+		}
 		if err != nil {
-			return providerFailure("rule", field(v, "url"), err)
+			return err
 		}
 		s.binary = append(s.binary, set)
 		delete(rp, name)

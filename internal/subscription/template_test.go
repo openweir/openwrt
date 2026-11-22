@@ -734,6 +734,80 @@ func TestTemplateArrivingInPartKeepsTheCopy(t *testing.T) {
 	}
 }
 
+// A rule set that matches its manifest but that the router cannot use (ruleSet): a web page.
+const unusableSet = "<!DOCTYPE html><html><body>Not found</body></html>\n"
+
+// A version whose rule sets the router cannot use, though subconv and the manifest accept them,
+// is as one that did not arrive: the refresh routes by the router's copy, which stays, or by
+// default without one; the version never becomes the copy.
+func TestTemplateUnusableRuleSetsKeepTheCopy(t *testing.T) {
+	b := serveBranch(t, 42)
+	store, id := fileSource(t, RoutingOwn)
+	if _, err := b.fetcher().Refresh(t.Context(), store, id, []byte(twoLinks), Policy{}); err != nil {
+		t.Fatal(err)
+	}
+	b.version, b.set = 43, unusableSet
+	c, err := b.fetcher().Refresh(t.Context(), store, id, []byte(twoLinks+jpLink), Policy{Scheduled: true})
+	if !routesByCopy(c, err) {
+		t.Fatal(err, c.Decision, c.Profile.Template, c.Notices)
+	}
+	if v := copiedVersion(t); v != 42 {
+		t.Fatal("the copy holds version", v)
+	}
+	b.down.Store(true)
+	c, err = b.fetcher().Refresh(t.Context(), store, id, []byte(twoLinks), Policy{Scheduled: true})
+	if !routesByCopy(c, err) {
+		t.Fatal(err, c.Decision, c.Profile.Template, c.Notices)
+	}
+
+	// Without a copy: default routing, and still no copy.
+	b = serveBranch(t, 42)
+	b.set = unusableSet
+	store, id = fileSource(t, RoutingTemplate)
+	c, err = b.fetcher().Refresh(t.Context(), store, id, []byte(ownRules), Policy{})
+	if err != nil || c.Decision != "ready" || !c.Profile.Local || c.Profile.Template != nil ||
+		!slices.ContainsFunc(c.Notices, func(n Notice) bool { return n.Code == "subconv_template_unavailable" }) {
+		t.Fatal(err, c.Decision, c.Profile.Template, c.Notices)
+	}
+	if _, err := os.Lstat(filepath.Join(TemplateDir, templateCurrent)); err == nil {
+		t.Fatal("a version the router cannot use became its copy")
+	}
+}
+
+// A copy whose rule sets the router cannot use, as an earlier version may have kept: the
+// refresh routes by default rather than failing, which the administrator confirms, as any
+// loss of the routing.
+func TestTemplateUnusableCopyRoutesByDefault(t *testing.T) {
+	b := serveBranch(t, 42)
+	store, id := fileSource(t, RoutingOwn)
+	if _, err := b.fetcher().Refresh(t.Context(), store, id, []byte(twoLinks), Policy{}); err != nil {
+		t.Fatal(err)
+	}
+	b.set = unusableSet
+	r, err := b.srv.Client().Get(b.srv.URL + "/" + rules.ManifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := io.ReadAll(r.Body)
+	r.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	gen, _ := os.Readlink(filepath.Join(TemplateDir, templateCurrent))
+	for path, data := range map[string]string{rules.ManifestPath: string(manifest), "providers/dler/lan.classical.txt": unusableSet} {
+		path = filepath.Join(TemplateDir, gen, path)
+		if os.Remove(path) != nil || os.WriteFile(path, []byte(data), 0600) != nil {
+			t.Fatal("cannot rewrite", path)
+		}
+	}
+	b.down.Store(true)
+	c, err := b.fetcher().Refresh(t.Context(), store, id, []byte(twoLinks), Policy{Scheduled: true})
+	if err != nil || c.Decision != "confirmation_required" || c.Profile.Template != nil || len(c.Profile.Rules) != 0 ||
+		!slices.ContainsFunc(c.Notices, func(n Notice) bool { return n.Code == "subconv_template_unavailable" }) {
+		t.Fatal(err, c.Decision, c.Profile.Template, c.Notices)
+	}
+}
+
 // The template stage leaves the refresh the time it needs after it: out of time, the refresh
 // routes by the router's copy, or by default, rather than failing.
 func TestTemplateStageKeepsTheRefreshsTime(t *testing.T) {

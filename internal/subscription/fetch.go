@@ -649,77 +649,88 @@ func (f Fetcher) readProfile(ctx context.Context, s Source, file []byte, usage *
 
 // readConverted converts a subscription's body with its routing choice (convert) and reads it
 // as the router routes it: with the template's rule sets or its own providers, through the
-// router's checks (parseVerified).
+// router's checks (parseVerified). Only a template version the router read whole becomes its
+// copy (promote).
 func (f Fetcher) readConverted(ctx context.Context, s Source, body []byte, headers http.Header, origin string, inventory nodeInventory, branch *templateBranch) (Profile, error) {
-	var c conversion
-	var template map[string][]byte
-	var err error
+	// switched is why the router sent a subscription subconv left on its own rules to the
+	// template; unusable, that the router cannot use the template's rule sets, nor its copy's.
+	var switched *TemplateUse
+	unusable := false
 	for {
-		if c, err = convert(ctx, body, s.Rules, branch.Client); err != nil {
+		c, err := convert(ctx, body, s.Rules, branch.Client)
+		if err != nil {
 			// The notices tell a subscription of Snell nodes without a psk apart (credentialIssue).
 			p := Profile{SchemaVersion: SchemaVersion, Source: s.ID}
 			p.converted(c)
 			return p, err
 		}
-		if c.template == nil {
-			break
+		var template map[string][]byte
+		if c.template != nil && !unusable {
+			template, err = branch.sets(ctx, c.template.Version, object(c.doc["rule-providers"]))
+			if err := ctx.Err(); err != nil {
+				return Profile{}, err
+			}
+			// The version the hosts serve did not arrive whole within the template stage: route
+			// by the router's copy of the template, as when no host answers.
+			if err != nil && !c.template.Cached && branch.offline() {
+				continue
+			}
 		}
-		template, err = branch.sets(ctx, c.template.Version, object(c.doc["rule-providers"]))
+		if c.template != nil && template == nil {
+			// Rule sets no host serves and the router never got, or none it can use: route by
+			// default this time, as without the template.
+			c.defaultRouting()
+			c.notices = append(c.notices, Notice{Code: "subconv_template_unavailable"})
+		}
+		f.sourceID = s.ID
+		sets, expansion, err := f.expandSourceProviders(ctx, c.doc, origin, template)
+		if errors.As(err, new(templateSetError)) {
+			// The router cannot use the rule sets of the version the hosts serve, which subconv
+			// and the manifest accepted: as when they did not arrive, the router's copy, and
+			// failing that, default routing.
+			if online := branch.offline(); !online || c.template.Cached {
+				unusable = true
+			}
+			continue
+		}
+		if err != nil {
+			if provider := FailureProvider(err); provider != nil {
+				provider.Warnings = templateWarningSummary(headers)
+			}
+			return Profile{}, err
+		}
 		if err := ctx.Err(); err != nil {
 			return Profile{}, err
 		}
-		if err == nil {
-			branch.promote()
-			break
-		}
-		// The version the hosts serve did not arrive whole within the template stage: route by
-		// the router's copy of the template, as when no host answers.
-		if !c.template.Cached && branch.offline() {
+		p, err := parseVerified(s.ID, c, sets, expansion...)
+		if t := c.routerTemplate(p); err == nil && t != nil {
+			// subconv kept the subscription's own rules, but the router cannot route by enough of
+			// them: the template, as subconv would have taken it, with the reason and counts that
+			// include the rules the router dropped.
+			s.Rules, switched = RoutingTemplate, t
 			continue
 		}
-		// Rule sets no host serves and the router never got: route by default this time,
-		// as without the template.
-		c.defaultRouting()
-		c.notices = append(c.notices, Notice{Code: "subconv_template_unavailable"})
-		break
-	}
-	f.sourceID = s.ID
-	sets, expansion, err := f.expandSourceProviders(ctx, c.doc, origin, template)
-	if err != nil {
-		if provider := FailureProvider(err); provider != nil {
-			provider.Warnings = templateWarningSummary(headers)
+		if err == nil && template != nil {
+			branch.promote()
 		}
-		return Profile{}, err
-	}
-	if err := ctx.Err(); err != nil {
-		return Profile{}, err
-	}
-	p, err := parseVerified(s.ID, c, sets, expansion...)
-	if t := c.routerTemplate(p); err == nil && t != nil {
-		// subconv kept the subscription's own rules, but the router cannot route by enough of
-		// them: the template, as subconv would have taken it, with the reason and counts that
-		// include the rules the router dropped.
-		s.Rules = RoutingTemplate
-		p, err = f.readConverted(ctx, s, body, headers, origin, inventory, branch)
-		if p.Template != nil {
-			p.Template.Reason, p.Template.Dropped, p.Template.Total = t.Reason, t.Dropped, t.Total
+		if switched != nil && p.Template != nil {
+			p.Template.Reason, p.Template.Dropped, p.Template.Total = switched.Reason, switched.Dropped, switched.Total
+		}
+		p.Title = subscriptionTitle(headers)
+		if s.Kind == "platform" {
+			_, params, _ := mime.ParseMediaType(headers.Get("Content-Disposition"))
+			if p.Format == "clash" && (strings.EqualFold(params["filename"], "openweir.yaml") || strings.EqualFold(params["filename"], "openweir.yml")) {
+				p.Format = "openweir"
+			}
+			if err == nil {
+				inventory.reportOmissions(&p)
+			}
+		}
+		if warnings := templateWarningSummary(headers); warnings != "" {
+			p.notice("platform_routing_warnings", warnings, false)
 		}
 		return p, err
 	}
-	p.Title = subscriptionTitle(headers)
-	if s.Kind == "platform" {
-		_, params, _ := mime.ParseMediaType(headers.Get("Content-Disposition"))
-		if p.Format == "clash" && (strings.EqualFold(params["filename"], "openweir.yaml") || strings.EqualFold(params["filename"], "openweir.yml")) {
-			p.Format = "openweir"
-		}
-		if err == nil {
-			inventory.reportOmissions(&p)
-		}
-	}
-	if warnings := templateWarningSummary(headers); warnings != "" {
-		p.notice("platform_routing_warnings", warnings, false)
-	}
-	return p, err
 }
 
 func templateWarningSummary(headers http.Header) string {
