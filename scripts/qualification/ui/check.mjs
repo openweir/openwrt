@@ -47,6 +47,15 @@ const browser = await chromium.launch({
 function kernelRow(page) {
 	return page.locator('.ow-row').filter({ has: page.locator('.ow-label > span', { hasText: /^内核$/ }) });
 }
+// Waits for the overview's power button to show a look: on is the red disconnect control, pulse
+// the ring that pulses while the proxy connects or disconnects. The word is the one in view, not
+// one still fading out; a phone hides it, so it only has to be in the page.
+async function powerShows(page, text, { on = false, pulse = false, name = text } = {}) {
+	const look = (on ? '.on' : ':not(.on)') + (pulse ? '.pulse' : ':not(.pulse)');
+	await page.locator('.ow-power' + look + '[aria-label="' + name + '"] .ow-power-label > span:not([aria-hidden])')
+		.filter({ hasText: new RegExp('^' + text + '$') })
+		.waitFor({ state: 'attached' });
+}
 async function centered(dialog, viewport) {
 	const box = await dialog.boundingBox();
 	assert.ok(box, 'visible modal');
@@ -220,6 +229,10 @@ async function checkOverviewPolling(page, base, width) {
 		await page.evaluate(phase => { window.model.controls.phase = phase; }, phase);
 		await page.clock.runFor(3500);
 		await page.getByRole('heading', {name: heading, exact: true}).waitFor();
+		// A fault keeps the proxy on: the steady red 断开. Asked to proxy, a router still reporting
+		// direct has yet to take up the start, so the button reads 连接中.
+		if (phase === 'direct') await powerShows(page, '连接中', {pulse: true, name: '连接中，点按断开'});
+		else await powerShows(page, '断开', {on: true});
 		assert.equal((await metrics()).hero, first.hero, 'fault and stop states keep the card height');
 		if (phase === 'protected') {
 			await page.getByText('代理流量已暂停，等待内核恢复').waitFor();
@@ -236,7 +249,8 @@ async function checkOverviewPolling(page, base, width) {
 	const problem = page.locator('.ow-connection [role=alert]');
 	await problem.filter({hasText: '仍有无法自动处理的冲突：服务 OpenClash'}).waitFor();
 	await problem.getByRole('button', {name: '查看日志'}).waitFor();
-	assert.equal(await page.getByRole('button', {name: '点按断开'}).getAttribute('aria-describedby'), await problem.getAttribute('id'));
+	await powerShows(page, '断开', {on: true});
+	assert.equal(await page.locator('.ow-power').getAttribute('aria-describedby'), await problem.getAttribute('id'));
 	assert.equal(await page.locator('.ow-main .ow-warning').count(), 0, 'no banner above the overview');
 	await page.screenshot({ path: path.join(output, 'service-problem-' + width + '.png') });
 	await page.evaluate(() => {
@@ -403,17 +417,46 @@ try {
 		await page.getByRole('button', { name: /香港 01/ }).first().getByText('87 ms').waitFor();
 		assert.equal(await page.getByText('context canceled', { exact: true }).count(), 0);
 		await page.getByRole('link', { name: '概览', exact: true }).click();
-		await page.getByRole('button', { name: '点按断开' }).click();
-		await page.getByRole('dialog').getByRole('button', { name: '断开', exact: true }).click();
+		// Connected, the whole button is the red disconnect control and holds still; 直连 mode keeps it so.
+		const power = page.locator('.ow-power');
+		await powerShows(page, '断开', { on: true });
+		const modes = page.getByRole('group', { name: '代理模式' });
+		await modes.getByRole('button', { name: '直连', exact: true }).click();
+		await page.getByRole('heading', { name: '全屋直连', exact: true }).waitFor();
+		await powerShows(page, '断开', { on: true });
+		await modes.getByRole('button', { name: '智能', exact: true }).click();
+		await page.getByRole('heading', { name: '已连接', exact: true }).waitFor();
+		// 断开 asks first; then the button is the theme colour's 连接 again.
+		await power.click();
+		await page.getByRole('dialog', { name: '断开代理' }).getByRole('button', { name: '断开', exact: true }).click();
 		await page.getByRole('heading', { name: '未连接', exact: true }).waitFor();
+		await powerShows(page, '连接');
 		assert.equal((await hero.boundingBox()).height, fixed);
-		// A start the router refuses says why under the status line, beside the power button.
+		// Connecting keeps the theme colour and pulses the ring until the core runs, then turns red.
+		await page.evaluate(() => { window.model.controls.holdStart = true; });
+		await power.click();
+		await page.getByRole('heading', { name: '连接中', exact: true }).waitFor();
+		await powerShows(page, '连接中', { pulse: true, name: '连接中，点按断开' });
+		assert.ok(await power.evaluate(el => el.getAnimations().some(a => a.animationName === 'ow-power-pulse')), 'the ring pulses while connecting');
+		await page.evaluate(() => { window.model.controls.holdStart = false; });
+		await page.getByRole('heading', { name: '已连接', exact: true }).waitFor();
+		await powerShows(page, '断开', { on: true });
+		// With reduced motion the button changes at once: no pulse, no fades.
+		await page.emulateMedia({ reducedMotion: 'reduce' });
+		await power.click();
+		await page.getByRole('dialog', { name: '断开代理' }).getByRole('button', { name: '断开', exact: true }).click();
+		await page.getByRole('heading', { name: '未连接', exact: true }).waitFor();
+		await powerShows(page, '连接');
+		assert.equal(await power.evaluate(el => el.getAnimations({ subtree: true }).length), 0, 'reduced motion runs no animation');
+		await page.emulateMedia({ reducedMotion: null });
+		// A start the router refuses says why under the status line, beside the power button, which
+		// reads 连接 again.
 		await page.evaluate(() => { window.model.controls.fail = { start: 'no authorized primary source' }; });
-		const connect = page.getByRole('button', { name: '点按连接' });
-		await connect.click();
+		await power.click();
 		const startLine = page.locator('.ow-connection [role=alert]');
 		await startLine.filter({ hasText: '没有可用的主订阅' }).waitFor();
-		assert.equal(await connect.getAttribute('aria-describedby'), await startLine.getAttribute('id'));
+		await powerShows(page, '连接');
+		assert.equal(await power.getAttribute('aria-describedby'), await startLine.getAttribute('id'));
 		assert.ok(await page.locator('.ow-alert').isHidden(), 'no alert above the page');
 		await page.screenshot({ path: path.join(output, 'start-failure-' + width + '.png') });
 		await page.evaluate(() => { delete window.model.controls.fail; });

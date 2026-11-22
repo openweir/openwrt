@@ -78,7 +78,12 @@ export function fixture(empty = false, preparing = false) {
 		enabled: false,
 		networks: ['lan'],
 	};
-	const phase = () => controls.phase || (saved.enabled && saved.mode !== 'direct' ? 'running' : 'direct'),
+	// A start goes through starting: the first status read after it reports starting, and so does
+	// every read while controls.holdStart is set.
+	let starting = false,
+		startSeen = false;
+	const phase = () =>
+			controls.phase || (saved.enabled && saved.mode !== 'direct' ? (starting ? 'starting' : 'running') : 'direct'),
 		activeSince = Date.now() - 86400000;
 	const job = (result) => {
 		const task = 'job-' + ++serial;
@@ -91,6 +96,8 @@ export function fixture(empty = false, preparing = false) {
 		if (controls.fail?.[m]) throw Error(controls.fail[m]);
 		switch (m) {
 			case 'status':
+				if (startSeen && !controls.holdStart) starting = false;
+				startSeen = starting;
 				return { saved, phase: phase(), running_since: activeSince, ...(controls.problem ? { error: controls.problem } : {}) };
 			case 'subscription_read': {
 				const action = r.action;
@@ -331,9 +338,12 @@ export function fixture(empty = false, preparing = false) {
 				break;
 			case 'start':
 				saved.enabled = true;
+				starting = true;
+				startSeen = false;
 				break;
 			case 'stop':
 				saved.enabled = false;
+				starting = false;
 				break;
 			case 'policy':
 				saved.policy = r.policy;
