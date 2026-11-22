@@ -44,7 +44,6 @@ var updaterReasons = map[string]bool{
 }
 
 type request struct {
-	ID        string `json:"id,omitempty"`
 	Method    string `json:"method,omitempty"`
 	scheduled bool
 	Level     string          `json:"level,omitempty"`
@@ -318,11 +317,6 @@ func (s *app) handle(ctx context.Context, method string, r request) (any, error)
 		return nil, errors.New("uninstall in progress")
 	}
 	switch method {
-	case "close_connection":
-		if err := s.sys.Client().CloseConnection(ctx, r.ID); err != nil {
-			return nil, err
-		}
-		return map[string]bool{"accepted": true}, nil
 	case "save_network":
 		var prefs router.Preferences
 		if json.Unmarshal(r.Args, &prefs) != nil {
