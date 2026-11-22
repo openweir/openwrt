@@ -181,9 +181,9 @@ func fakeMixedPort(t *testing.T, status string) <-chan string {
 		t.Skip(err)
 	}
 	// This process owns the listener, standing in for the core's account.
-	previous, account := mixedProxy, coreAccount
-	mixedProxy, coreAccount = ln.Addr().String(), u.Username
-	t.Cleanup(func() { mixedProxy, coreAccount = previous, account; ln.Close() })
+	previous, owner := mixedProxy, coreOwner
+	mixedProxy, coreOwner = ln.Addr().String(), u.Uid
+	t.Cleanup(func() { mixedProxy, coreOwner = previous, owner; ln.Close() })
 	targets := make(chan string, 1)
 	go func() {
 		c, err := ln.Accept()
@@ -230,7 +230,7 @@ func TestMixedPortTunnelsByNameOrCheckedAddress(t *testing.T) {
 	// Another account took the port, as after a core restart: nothing is sent to it.
 	if other, err := user.Lookup("nobody"); err == nil && other.Uid != strconv.Itoa(os.Getuid()) {
 		targets := fakeMixedPort(t, "200 Connection established")
-		coreAccount = other.Username
+		coreOwner = other.Uid
 		if _, err := dialMixed(t.Context(), "tcp", "sub.test:443"); err == nil || err.Error() != "proxy_not_core" {
 			t.Fatal(err)
 		}
@@ -276,9 +276,11 @@ func TestRouterFallbackFollowsTakeover(t *testing.T) {
 		t.Skip("no group named after the user")
 	}
 	dir := t.TempDir()
-	previous := []string{coreAccount, takeoverState, procTCP}
-	defer func() { coreAccount, takeoverState, procTCP = previous[0], previous[1], previous[2] }()
-	coreAccount, takeoverState, procTCP = u.Username, dir, filepath.Join(dir, "tcp")
+	previous := []string{coreGroup, coreOwner, takeoverState, procTCP}
+	defer func() {
+		coreGroup, coreOwner, takeoverState, procTCP = previous[0], previous[1], previous[2], previous[3]
+	}()
+	coreGroup, coreOwner, takeoverState, procTCP = u.Username, u.Uid, dir, filepath.Join(dir, "tcp")
 	write := func(name, content string) {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0600); err != nil {
 			t.Fatal(err)
@@ -331,5 +333,35 @@ func TestDialAsGroup(t *testing.T) {
 		if _, err := dialAsGroup(t.Context(), 0, "tcp", ln.Addr().String()); err == nil || err.Error() != "socket_group_unavailable" {
 			t.Fatal("unprivileged group change went unnoticed", err)
 		}
+	}
+}
+
+// The core runs as root: a listener counts as the core's once root holds it with a file, and an
+// account other than root cannot list as root.
+func TestRootCoreHoldsTheMixedPort(t *testing.T) {
+	dir := t.TempDir()
+	previous := []string{coreOwner, procTCP}
+	defer func() { coreOwner, procTCP = previous[0], previous[1] }()
+	coreOwner, procTCP = "0", filepath.Join(dir, "tcp")
+	local := fmt.Sprintf("%08X:%04X", binary.NativeEndian.Uint32([]byte{127, 0, 0, 1}), 19763)
+	head := "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode\n"
+	listen := func(uid, inode string) {
+		line := "   0: " + local + " 00000000:0000 0A 00000000:00000000 00:00000000 00000000 " + uid + "        0 " + inode + " 1 0000000000000000 100 0 0 10 0\n"
+		if err := os.WriteFile(procTCP, []byte(head+line), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range []struct {
+		uid, inode string
+		core       bool
+	}{{"0", "4242", true}, {"0", "0", false}, {"65534", "4242", false}, {"1000", "4242", false}} {
+		listen(c.uid, c.inode)
+		if coreListening() != c.core {
+			t.Errorf("uid %s inode %s: core=%v", c.uid, c.inode, !c.core)
+		}
+	}
+	os.WriteFile(procTCP, []byte(head), 0o600)
+	if coreListening() {
+		t.Fatal("no listener taken for the core")
 	}
 }

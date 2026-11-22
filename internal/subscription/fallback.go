@@ -38,10 +38,12 @@ type route struct {
 	tlsOnly bool
 }
 
-// The account, paths and port are those of the package, the network helper and the core
-// (router.MixedPort).
+// The group, paths and port are those of the package, the network helper and the core
+// (router.MixedPort). The core runs as root in coreGroup; coreOwner is the account its
+// sockets are listed under in /proc/net/tcp (tests stand in their own).
 var (
-	coreAccount   = "openweir-core"
+	coreGroup     = "openweir-core"
+	coreOwner     = "0"
 	takeoverState = "/var/run/openweir/network"
 	wanResolvers  = "/tmp/resolv.conf.d/resolv.conf.auto"
 	procTCP       = "/proc/net/tcp"
@@ -53,7 +55,7 @@ func routerFallback() *route {
 	backend, _ := os.ReadFile(takeoverState + "/backend")
 	if _, err := os.Stat(takeoverState + "/owned"); err == nil && strings.TrimSpace(string(backend)) == "fw4" {
 		// The firewall returns sockets of the core's group (meta skgid) before capturing.
-		g, err := user.LookupGroup(coreAccount)
+		g, err := user.LookupGroup(coreGroup)
 		if err != nil {
 			return nil
 		}
@@ -118,53 +120,43 @@ func procAddr(ap netip.AddrPort) string {
 	return fmt.Sprintf("%08X:%04X", binary.NativeEndian.Uint32(ip[:]), ap.Port())
 }
 
-// coreUID is the core's account, which is never root; "" if there is none.
-func coreUID() string {
-	account, err := user.Lookup(coreAccount)
-	if err != nil || account.Uid == "0" {
-		return ""
-	}
-	return account.Uid
-}
-
 var anyPeer = netip.AddrPortFrom(netip.IPv4Unspecified(), 0)
 
-// mixedOwner is the account /proc/net/tcp lists for the mixed-port socket whose peer is
-// remote (anyPeer: the listener), or "". The kernel takes it from the socket's file: a
-// connection not yet accepted is listed as root, then as the account that accepted it.
-func mixedOwner(remote netip.AddrPort) string {
+// mixedOwner is the account and inode /proc/net/tcp lists for the mixed-port socket whose
+// peer is remote (anyPeer: the listener), or "" for none. The kernel takes both from the
+// socket's file: a connection not yet accepted has none, so it is listed as root with inode
+// 0, then as the account that accepted it.
+func mixedOwner(remote netip.AddrPort) (uid, inode string) {
 	b, err := os.ReadFile(procTCP)
 	if err != nil {
-		return ""
+		return "", ""
 	}
 	local, peer := procAddr(netip.MustParseAddrPort(mixedProxy)), procAddr(remote)
 	for _, line := range strings.Split(string(b), "\n") {
 		f := strings.Fields(line)
-		if len(f) > 7 && f[1] == local && f[2] == peer {
-			return f[7]
+		if len(f) > 9 && f[1] == local && f[2] == peer {
+			return f[7], f[9]
 		}
 	}
-	return ""
+	return "", ""
 }
 
-// coreListening reports whether the core's own account holds the mixed port, so that no
-// other local program is taken for the proxy.
+// coreListening reports whether the core's account holds the mixed port, so that no other
+// local program is taken for the proxy: an account other than root cannot list as root.
 func coreListening() bool {
-	uid := coreUID()
-	return uid != "" && mixedOwner(anyPeer) == uid
+	uid, inode := mixedOwner(anyPeer)
+	return uid == coreOwner && inode != "" && inode != "0"
 }
 
 // coreAccepted waits briefly for the core's account to accept the connection from local.
 // The core may have restarted since the route was chosen, and another program may hold
-// the port: only this very connection's owner counts.
+// the port: only this very connection's owner counts, once it has a file (inode).
 func coreAccepted(ctx context.Context, local netip.AddrPort) bool {
-	uid := coreUID()
-	for deadline := time.Now().Add(time.Second); uid != "" && ctx.Err() == nil && time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
-		switch owner := mixedOwner(local); owner {
-		case uid:
+	for deadline := time.Now().Add(time.Second); ctx.Err() == nil && time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+		switch uid, inode := mixedOwner(local); {
+		case uid == coreOwner && inode != "" && inode != "0":
 			return true
-		case "", "0":
-		default:
+		case uid != "" && uid != "0" && uid != coreOwner:
 			return false
 		}
 	}
