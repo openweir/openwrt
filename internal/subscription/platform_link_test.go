@@ -1,6 +1,7 @@
 package subscription
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -322,6 +324,77 @@ func TestExpiredPlanRemainsEligibleForRefreshWithoutLogin(t *testing.T) {
 		t.Fatal("renewed plan still unavailable", err, c.Decision)
 	}
 	if _, err := store.Load(id); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A suspended plan that resumes with the content it had tells the router again, which dropped
+// it, but keeps its rollback snapshot: the profile it returns with only repeats the current one.
+func TestResumedPlanKeepsRollbackSnapshot(t *testing.T) {
+	var usable atomic.Bool
+	var config atomic.Value
+	usable.Store(true)
+	config.Store("proxies: [{name: Old, type: http, server: old.example, port: 8080}]\nrules: ['MATCH,DIRECT']")
+	host := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/app/proxy/subscriptions/1/nodes":
+			fmt.Fprintf(w, `{"usable":%t,"nodes":[]}`, usable.Load())
+		case "/api/v1/app/billing/subscriptions":
+			fmt.Fprintf(w, `[{"id":1,"userId":"member","status":"active","usable":%t}]`, usable.Load())
+		case "/api/v1/app/billing/subscriptions/1":
+			fmt.Fprint(w, `{"id":1,"userId":"member","status":"active","usable":true,"url":null,"subscriptionAccess":"app"}`)
+		case "/api/v1/app/proxy/subscriptions/1/config":
+			fmt.Fprint(w, config.Load())
+		default:
+			t.Error("unexpected route", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer host.Close()
+	a := Account{origin: host.URL, userID: "member", token: "member-session", Site: Site{Name: "Platform"},
+		Plans: []Plan{{ID: 1, Name: "Plan", Status: "active", Usable: true}}}
+	store := OpenStore(t.TempDir())
+	intent, err := store.BeginLogin(host.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids, err := store.SaveAccount(a, intent)
+	if err != nil || len(ids) != 1 {
+		t.Fatal(ids, err)
+	}
+	id := ids[0]
+	checks := 0
+	f := Fetcher{Client: host.Client(), BeforeCommit: func(context.Context, Profile) (func() error, error) {
+		checks++
+		return func() error { return nil }, nil
+	}}
+	if c, err := f.Refresh(t.Context(), store, id, nil, Policy{}); err != nil || c.Decision != "ready" {
+		t.Fatal(err, c.Decision)
+	}
+	config.Store("proxies: [{name: New, type: http, server: new.example, port: 8080}]\nrules: ['MATCH,DIRECT']")
+	if c, err := f.Refresh(t.Context(), store, id, nil, Policy{}); err != nil || c.Decision != "ready" || c.Unchanged() {
+		t.Fatal(err, c.Decision)
+	}
+	usable.Store(false)
+	if _, err := f.Refresh(t.Context(), store, id, nil, Policy{}); !errors.Is(err, ErrSuspended) {
+		t.Fatal(err)
+	}
+	usable.Store(true)
+	checks = 0
+	if c, err := f.Refresh(t.Context(), store, id, nil, Policy{}); err != nil || c.Decision != "ready" || c.Unchanged() || checks != 1 {
+		t.Fatal("resumed plan not checked and applied", err, c.Decision, c.Unchanged(), checks)
+	}
+	r, err := store.read(id)
+	if err != nil || r.Suspended || !slices.Equal(nodeNames(r.Current), []string{"New"}) || !slices.Equal(nodeNames(r.Previous), []string{"Old"}) {
+		t.Fatal("rollback snapshot after resuming", err, r.Suspended, nodeNames(r.Current), nodeNames(r.Previous))
+	}
+	if st, err := store.Status(id); err != nil || !st.Ready || !st.HasHistory {
+		t.Fatal(err, st.Ready, st.HasHistory)
+	}
+	if err := store.Rollback(id); err != nil {
+		t.Fatal(err)
+	}
+	if p, err := store.Load(id); err != nil || p.Nodes[0].Name != "Old" {
 		t.Fatal(err)
 	}
 }

@@ -423,7 +423,11 @@ func (s *Store) commit(ctx context.Context, t Ticket, c Candidate, recheck func(
 			}
 		} else {
 			c.Profile.RoutingChoice = choice
-			r.Previous = r.Current
+			// A suspended plan that resumes routing as before tells the router again, but its
+			// profile only repeats the current one: the rollback snapshot stays.
+			if !r.Suspended || r.Current == nil || digest(c.Profile.routing()) != digest(r.Current.routing()) {
+				r.Previous = r.Current
+			}
 			r.Current = &c.Profile
 		}
 		r.NeedsRefresh = false
