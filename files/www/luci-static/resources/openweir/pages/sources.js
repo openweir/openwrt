@@ -190,7 +190,7 @@ const pendingUpdates = {
     update_blocked: { text: '自动更新取到的新版本无法使用，已保留上次配置', action: '查看原因' },
 };
 function pendingMessage(pending) {
-    const details = (pending.notices || []).map((code) => notices[code]).filter(Boolean).slice(0, 2);
+    const details = (pending.notices || []).map((code) => notices[code] || diagnosticMessage(code)).filter(Boolean).slice(0, 2);
     return [pendingUpdates[pending.code]?.text || '自动更新取到的新版本尚未应用', ...details].join(' · ');
 }
 
