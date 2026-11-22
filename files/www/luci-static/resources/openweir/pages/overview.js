@@ -569,9 +569,21 @@ export async function overview(ui) {
 		);
 		graph.replaceChildren(chart(history));
 	}
-	function timer(st = ui.status) {
-		if (st.phase === 'starting' && st.confirmation_seconds > 0) {
-			sub.textContent = '已接管流量，内核健康确认剩余 ' + st.confirmation_seconds + ' 秒';
+	// Once the core runs and the traffic is taken over, the router waits a few seconds for the
+	// core to stay healthy before it counts the start; those seconds count down here every second,
+	// between status reads. The router rounds up, so the earliest end it has given is the closest;
+	// one more than a second later belongs to a new attempt.
+	let confirmEnd = 0;
+	function confirming(st) {
+		if (!(st.confirmation_seconds > 0)) return;
+		const end = Date.now() + st.confirmation_seconds * 1000;
+		confirmEnd = confirmEnd && end <= confirmEnd + 1000 ? Math.min(confirmEnd, end) : end;
+	}
+	// Short enough for the line beside the button on a phone.
+	function timer() {
+		if (ui.status.phase === 'starting' && confirmEnd) {
+			const left = Math.ceil((confirmEnd - Date.now()) / 1000);
+			sub.textContent = '已接管流量，确认中' + (left > 0 ? ' ' + left + ' 秒' : '');
 			return;
 		}
 		sub.textContent =
@@ -579,7 +591,9 @@ export async function overview(ui) {
 				? '已运行 ' + uptime(Date.now() - ui.status.running_since)
 				: phaseDetail[ui.status.phase] || '';
 	}
+	confirming(ui.status);
 	timer();
+	ui.poll(timer, 1000);
 	traffic(running ? await ui.rpc('traffic').catch(() => null) : null);
 	const statusSide = h(
 		'div',
@@ -901,12 +915,14 @@ export async function overview(ui) {
 	ui.poll(async () => {
 		const st = await ui.rpc('status');
 		if (ui.signal.aborted) return;
+		// The countdown keeps in step while an open dialog holds a redraw back.
+		if (st.phase === ui.status.phase) confirming(st);
 		if (st.phase !== ui.status.phase || st.saved.revision !== intent.revision) {
 			if (content.closest('.ow')?.querySelector('dialog[open]')) return;
 			await ui.refresh();
 			return;
 		}
-		timer(st);
+		timer();
 		if (running) {
 			const [t, r] = await Promise.all([ui.rpc('traffic'), ui.rpc('routes', { limit: 12 })]);
 			if (ui.signal.aborted) return;

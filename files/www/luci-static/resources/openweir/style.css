@@ -1229,6 +1229,10 @@
 	}
 	.ow .ow-connection > span {
 		grid-row: 2;
+		/* One line in its row: a longer phase or countdown ends in an ellipsis. */
+		white-space: nowrap;
+		overflow: hidden;
+		text-overflow: ellipsis;
 	}
 	.ow .ow-connection > strong {
 		grid-row: 3;
