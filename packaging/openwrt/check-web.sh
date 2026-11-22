@@ -92,7 +92,8 @@ uhttpd -f -h /www -p 127.0.0.1:18890 >/tmp/web-peer.log 2>&1 & peer=$!
 curl -fsS --retry 5 --retry-connrefused http://127.0.0.1:18890/luci-static/resources/openweir/app.js -o /dev/null
 printf '%s' '{"config":{"id":"package-probes","name":"Package fixture","kind":"file"}}' |
  openweir-subscription configure | jsonfilter -e '@.ok' | grep -qx true
-printf '%s' '{"source":"package-probes","content":"http://127.0.0.1:18890#loopback"}' |
+# A subscription with its own final rule keeps the routing template, and so the network, out of the test.
+printf '%s' '{"source":"package-probes","content":"proxies:\n  - {name: loopback, type: http, server: 127.0.0.1, port: 18890}\nrules:\n  - MATCH,DIRECT\n"}' |
  openweir-subscription refresh | jsonfilter -e '@.data.decision' | grep -qx ready
 node=$(printf '%s' '{"source":"package-probes"}' | openweir-subscription nodes | jsonfilter -e '@.data.items[0].id')
 [ -n "$node" ]

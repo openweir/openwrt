@@ -97,7 +97,8 @@ uci commit openweir
 for i in $(seq 1 20); do [ -S /var/run/openweir/manager.sock ] && break; sleep 1; done
 wait_job "$(call subscription_write '{"action":"configure","args":{"config":{"id":"qa","name":"Test","kind":"file"}}}')"
 for attempt in 1 2 3; do
- if wait_job "$(call subscription_write '{"action":"refresh","args":{"source":"qa","content":"socks5://198.18.0.33:1080#Fixture"}}')" >/tmp/refresh-result; then
+ # Its own final rule keeps the routing template, and so the network, out of the fixture.
+ if wait_job "$(call subscription_write '{"action":"refresh","args":{"source":"qa","content":"proxies:\n  - {name: Fixture, type: socks5, server: 198.18.0.33, port: 1080}\nrules:\n  - MATCH,DIRECT\n"}}')" >/tmp/refresh-result; then
   break
  fi
  cat /tmp/refresh-result

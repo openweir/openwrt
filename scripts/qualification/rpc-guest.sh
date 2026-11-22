@@ -24,7 +24,8 @@ run_task(){
  return 1
 }
 run_task subscription_write '{"action":"configure","args":{"config":{"id":"local","kind":"file","name":"Fixture"}}}'
-run_task subscription_write '{"action":"refresh","args":{"source":"local","content":"http://user:password@127.0.0.1:18888#one"}}'
+# Its own final rule keeps the routing template, and so the network, out of the test.
+run_task subscription_write '{"action":"refresh","args":{"source":"local","content":"proxies:\n  - {name: one, type: http, server: 127.0.0.1, port: 18888, username: user, password: password}\nrules:\n  - MATCH,DIRECT\n"}}'
 ubus call openweir source '{"source":"local"}' >/dev/null
 summary=$(ubus call openweir subscription_read '{"action":"nodes","args":{"source":"local"}}')
 node=$(printf %s "$summary" | jsonfilter -e '@.data.items[0].id')
