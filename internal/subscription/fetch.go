@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/openweir/openwrt/internal/tlsdiag"
-	"github.com/openweir/subconv/rules"
 )
 
 // Source holds private request details. It must not be returned by an RPC read.
@@ -617,36 +616,48 @@ func (f Fetcher) readProfile(ctx context.Context, s Source, file []byte, usage *
 		}
 		*f.providerReceipt = providerReceipt{Key: key, Checked: now}
 	}
-	branch, done := f.branch()
-	defer done()
+	branch := f.branch(ctx)
+	defer branch.close()
 	return f.readConverted(ctx, s, body, headers, origin, inventory, branch)
 }
 
 // readConverted converts a subscription's body with its routing choice (convert) and reads it
 // as the router routes it: with the template's rule sets or its own providers, through the
 // router's checks (parseVerified).
-func (f Fetcher) readConverted(ctx context.Context, s Source, body []byte, headers http.Header, origin string, inventory nodeInventory, branch *rules.Client) (Profile, error) {
-	c, err := convert(ctx, body, s.Rules, branch)
-	if err != nil {
-		// The notices tell a subscription of Snell nodes without a psk apart (credentialIssue).
-		p := Profile{SchemaVersion: SchemaVersion, Source: s.ID}
-		p.converted(c)
-		return p, err
-	}
-	f.sourceID = s.ID
+func (f Fetcher) readConverted(ctx context.Context, s Source, body []byte, headers http.Header, origin string, inventory nodeInventory, branch *templateBranch) (Profile, error) {
+	var c conversion
 	var template map[string][]byte
-	if c.template != nil {
-		template, err = fetchTemplateSets(ctx, branch, c.template.Version, object(c.doc["rule-providers"]))
+	var err error
+	for {
+		if c, err = convert(ctx, body, s.Rules, branch.Client); err != nil {
+			// The notices tell a subscription of Snell nodes without a psk apart (credentialIssue).
+			p := Profile{SchemaVersion: SchemaVersion, Source: s.ID}
+			p.converted(c)
+			return p, err
+		}
+		if c.template == nil {
+			break
+		}
+		template, err = branch.sets(ctx, c.template.Version, object(c.doc["rule-providers"]))
 		if err := ctx.Err(); err != nil {
 			return Profile{}, err
 		}
-		if err != nil {
-			// Rule sets no host serves and the router never got: route by default this time,
-			// as without the template.
-			c.defaultRouting()
-			c.notices = append(c.notices, Notice{Code: "subconv_template_unavailable"})
+		if err == nil {
+			branch.promote()
+			break
 		}
+		// The version the hosts serve did not arrive whole within the template stage: route by
+		// the router's copy of the template, as when no host answers.
+		if !c.template.Cached && branch.offline() {
+			continue
+		}
+		// Rule sets no host serves and the router never got: route by default this time,
+		// as without the template.
+		c.defaultRouting()
+		c.notices = append(c.notices, Notice{Code: "subconv_template_unavailable"})
+		break
 	}
+	f.sourceID = s.ID
 	sets, expansion, err := f.expandSourceProviders(ctx, c.doc, origin, template)
 	if err != nil {
 		if provider := FailureProvider(err); provider != nil {

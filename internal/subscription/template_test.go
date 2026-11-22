@@ -1,6 +1,7 @@
 package subscription
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -61,8 +62,11 @@ const branchLAN = "IP-CIDR,192.168.0.0/16,no-resolve\nDOMAIN-SUFFIX,lan\n"
 type testBranch struct {
 	srv      *httptest.Server
 	version  int64
+	set      string // the rule set of the manifest, branchLAN when empty
 	lan      string // served in place of the manifest's rule set when set
+	hang     string // requests under this path wait until the client gives up
 	down     atomic.Bool
+	setDown  atomic.Bool // the rule set alone is unavailable
 	requests atomic.Int32
 }
 
@@ -73,8 +77,16 @@ func serveBranch(t *testing.T, version int64) *testBranch {
 		sum := sha256.Sum256([]byte(data))
 		return rules.File{Path: path, Size: int64(len(data)), SHA256: hex.EncodeToString(sum[:]), Kind: kind, Updated: "2026-11-21"}
 	}
+	release := make(chan struct{})
 	b.srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b.requests.Add(1)
+		if b.hang != "" && strings.HasPrefix(r.URL.Path, b.hang) {
+			select {
+			case <-r.Context().Done():
+			case <-release:
+			}
+			return
+		}
 		if b.down.Load() {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
@@ -83,18 +95,23 @@ func serveBranch(t *testing.T, version int64) *testBranch {
 		case "/" + rules.ManifestPath:
 			m, _ := json.Marshal(rules.Manifest{Version: b.version, Files: []rules.File{
 				file(rules.TemplatePath, "template", branchTemplate),
-				file("providers/dler/lan.classical.txt", "rule-set", branchLAN),
+				file("providers/dler/lan.classical.txt", "rule-set", first(b.set, branchLAN)),
 			}})
 			w.Write(m)
 		case "/" + rules.TemplatePath:
 			w.Write([]byte(branchTemplate))
 		case "/providers/dler/lan.classical.txt":
-			w.Write([]byte(first(b.lan, branchLAN)))
+			if b.setDown.Load() {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			w.Write([]byte(first(b.lan, b.set, branchLAN)))
 		default:
 			http.NotFound(w, r)
 		}
 	}))
 	t.Cleanup(b.srv.Close)
+	t.Cleanup(func() { close(release) })
 	hosts, dir := TemplateHosts, TemplateDir
 	TemplateHosts, TemplateDir = []rules.Host{{Base: b.srv.URL, Operator: "test"}}, t.TempDir()
 	t.Cleanup(func() { TemplateHosts, TemplateDir = hosts, dir })
@@ -140,7 +157,7 @@ func TestTemplateRoutesASubscriptionWithoutRules(t *testing.T) {
 	}
 	// The router keeps what it got on flash, under the branch's paths.
 	for _, path := range []string{rules.ManifestPath, rules.TemplatePath, "providers/dler/lan.classical.txt"} {
-		if _, err := os.Stat(filepath.Join(TemplateDir, path)); err != nil {
+		if _, err := os.Stat(filepath.Join(TemplateDir, templateCurrent, path)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -229,7 +246,7 @@ func TestTemplateRuleSetsMustMatchTheManifest(t *testing.T) {
 	if !slices.ContainsFunc(c.Notices, func(n Notice) bool { return n.Code == "subconv_template_unavailable" }) {
 		t.Fatal(c.Notices)
 	}
-	if _, err := os.Stat(filepath.Join(TemplateDir, "providers/dler/lan.classical.txt")); err == nil {
+	if _, err := os.Stat(filepath.Join(TemplateDir, templateCurrent, "providers/dler/lan.classical.txt")); err == nil {
 		t.Fatal("tampered rule set cached")
 	}
 	b.lan = ""
@@ -430,7 +447,7 @@ func TestTemplateSetsDownloadInParallel(t *testing.T) {
 		files = append(files, rules.File{Path: path, Size: int64(len(data)), SHA256: hex.EncodeToString(sum[:])})
 		providers[fmt.Sprintf("s%d", i)] = map[string]any{"type": "http", "url": srv.URL + "/" + path}
 	}
-	client := &rules.Client{HTTP: srv.Client(), Hosts: []rules.Host{{Base: srv.URL, Operator: "test"}}, Cache: templateCache{dir: t.TempDir()}}
+	client := &rules.Client{HTTP: srv.Client(), Hosts: []rules.Host{{Base: srv.URL, Operator: "test"}}, Cache: &rules.MemoryCache{}}
 	sets, err := fetchTemplateSets(t.Context(), client, 7, providers)
 	if err != nil || len(sets) != 70 || string(sets["s3"]) != "DOMAIN,providers/set3.txt\n" {
 		t.Fatal(err, len(sets))
@@ -455,9 +472,9 @@ func TestWithoutTemplateTheRouterRoutesByDefault(t *testing.T) {
 
 func TestBuildLeavesTheConfigToTheRouter(t *testing.T) {
 	b := serveBranch(t, 42)
-	branch, done := b.fetcher().branch()
-	defer done()
-	c, err := convert(t.Context(), []byte(ownRules), RoutingTemplate, branch)
+	branch := b.fetcher().branch(t.Context())
+	defer branch.close()
+	c, err := convert(t.Context(), []byte(ownRules), RoutingTemplate, branch.Client)
 	if err != nil || c.template == nil {
 		t.Fatal(err, c.notices)
 	}
@@ -478,28 +495,140 @@ func TestBranchKeepsTheProviderPolicy(t *testing.T) {
 	}
 }
 
-func TestTemplateCacheWritesOnlyChanges(t *testing.T) {
-	c := templateCache{dir: t.TempDir()}
-	c.Put("providers/a.txt", []byte("one"))
-	path := filepath.Join(c.dir, "providers", "a.txt")
-	old := time.Now().Add(-time.Hour)
-	if err := os.Chtimes(path, old, old); err != nil {
+const jpLink = "ss://YWVzLTEyOC1nY206cA@jp.example.com:8388#JP%2001\n"
+
+// The version the router's copy holds.
+func copiedVersion(t *testing.T) int64 {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(TemplateDir, templateCurrent, rules.ManifestPath))
+	if err != nil {
 		t.Fatal(err)
 	}
-	c.Put("providers/a.txt", []byte("one"))
-	if st, _ := os.Stat(path); !st.ModTime().Equal(old) {
-		t.Fatal("unchanged value rewritten")
+	m, err := rules.ParseManifest(b)
+	if err != nil {
+		t.Fatal(err)
 	}
-	c.Put("providers/a.txt", []byte("two"))
-	if b, ok := c.Get("providers/a.txt"); !ok || string(b) != "two" {
-		t.Fatal("changed value not kept")
+	return m.Version
+}
+
+// routesByCopy reports a refresh that routed by the router's copy of version 42.
+func routesByCopy(c Candidate, err error) bool {
+	p := c.Profile
+	return err == nil && c.Decision == "ready" && p.Template != nil && p.Template.Version == 42 && p.Template.Cached &&
+		len(p.BinarySets) == 1 && string(p.BinarySets[0].Data) == branchLAN &&
+		!slices.ContainsFunc(c.Notices, func(n Notice) bool { return n.Code == "subconv_template_unavailable" })
+}
+
+// A version that arrives in part leaves the router's copy as it was: the refresh routes by the
+// copy, as do later ones without hosts, scheduled ones included.
+func TestTemplateArrivingInPartKeepsTheCopy(t *testing.T) {
+	b := serveBranch(t, 42)
+	store, id := fileSource(t, RoutingOwn)
+	if _, err := b.fetcher().Refresh(t.Context(), store, id, []byte(twoLinks), Policy{}); err != nil {
+		t.Fatal(err)
 	}
-	c.Put("../escape", []byte("x"))
-	if _, ok := c.Get("../escape"); ok {
-		t.Fatal("cache left its directory")
+	// Version 43 changes the rule set, and no host serves it.
+	b.version, b.set = 43, branchLAN+"DOMAIN-SUFFIX,new.example\n"
+	b.setDown.Store(true)
+	c, err := b.fetcher().Refresh(t.Context(), store, id, []byte(twoLinks+jpLink), Policy{Scheduled: true})
+	if !routesByCopy(c, err) {
+		t.Fatal(err, c.Decision, c.Profile.Template, c.Notices)
 	}
-	if entries, _ := os.ReadDir(filepath.Join(c.dir, "providers")); len(entries) != 1 {
-		t.Fatal("temporary file left behind", entries)
+	if v := copiedVersion(t); v != 42 {
+		t.Fatal("the copy holds version", v)
+	}
+	b.down.Store(true)
+	c, err = b.fetcher().Refresh(t.Context(), store, id, []byte(twoLinks), Policy{Scheduled: true})
+	if !routesByCopy(c, err) {
+		t.Fatal(err, c.Decision, c.Profile.Template, c.Notices)
+	}
+	// Once the rule set arrives, the copy moves to 43.
+	b.down.Store(false)
+	b.setDown.Store(false)
+	c, err = b.fetcher().Refresh(t.Context(), store, id, []byte(twoLinks), Policy{})
+	if err != nil || c.Profile.Template == nil || c.Profile.Template.Version != 43 || c.Profile.Template.Cached || copiedVersion(t) != 43 {
+		t.Fatal(err, c.Profile.Template)
+	}
+}
+
+// The template stage leaves the refresh the time it needs after it: out of time, the refresh
+// routes by the router's copy, or by default, rather than failing.
+func TestTemplateStageKeepsTheRefreshsTime(t *testing.T) {
+	b := serveBranch(t, 42)
+	store, id := fileSource(t, RoutingOwn)
+	if _, err := b.fetcher().Refresh(t.Context(), store, id, []byte(twoLinks), Policy{}); err != nil {
+		t.Fatal(err)
+	}
+	// Version 43's rule set takes longer than the refresh has.
+	b.version, b.set, b.hang = 43, branchLAN+"DOMAIN-SUFFIX,new.example\n", "/providers/"
+	ctx, cancel := context.WithTimeout(t.Context(), templateReserve+time.Second)
+	defer cancel()
+	c, err := b.fetcher().Refresh(ctx, store, id, []byte(twoLinks+jpLink), Policy{})
+	if !routesByCopy(c, err) || ctx.Err() != nil {
+		t.Fatal(err, c.Decision, c.Profile.Template, c.Notices)
+	}
+	if v := copiedVersion(t); v != 42 {
+		t.Fatal("the copy holds version", v)
+	}
+	// A refresh already within its reserve asks no host.
+	ctx, cancel = context.WithTimeout(t.Context(), templateReserve-time.Second)
+	defer cancel()
+	before := b.requests.Load()
+	c, err = b.fetcher().Refresh(ctx, store, id, []byte(twoLinks), Policy{})
+	if !routesByCopy(c, err) || b.requests.Load() != before {
+		t.Fatal(err, c.Decision, c.Profile.Template, b.requests.Load()-before)
+	}
+
+	// Without a copy, hosts that do not answer in time leave the router's default routing.
+	b = serveBranch(t, 42)
+	b.hang = "/"
+	store, id = fileSource(t, RoutingTemplate)
+	ctx, cancel = context.WithTimeout(t.Context(), templateReserve+time.Second)
+	defer cancel()
+	c, err = b.fetcher().Refresh(ctx, store, id, []byte(ownRules), Policy{})
+	if err != nil || c.Decision != "ready" || !c.Profile.Local || c.Profile.Template != nil || ctx.Err() != nil ||
+		!slices.ContainsFunc(c.Notices, func(n Notice) bool { return n.Code == "subconv_template_unavailable" }) {
+		t.Fatal(err, c.Decision, c.Profile.Template, c.Notices)
+	}
+}
+
+// When the router's own drops send a subscription to the template, the second reading keeps
+// within the stage too.
+func TestTemplateStageCoversTheAutomaticChoice(t *testing.T) {
+	b := serveBranch(t, 42)
+	store, id := fileSource(t, RoutingOwn)
+	f := b.fetcher()
+	f.ruleImportRoot = t.TempDir()
+	geo := []string{"GEOSITE,google,Proxy", "GEOSITE,youtube,Proxy", "GEOSITE,cn,DIRECT", "GEOIP,CN,DIRECT", "DOMAIN-SUFFIX,a.example,Proxy"}
+	body := mirrorRules(append(geo, "MATCH,Proxy")...)
+	if c, err := f.Refresh(t.Context(), store, id, []byte(body), Policy{}); err != nil || c.Profile.Template == nil || copiedVersion(t) != 42 {
+		t.Fatal(err, c.Profile.Template)
+	}
+	b.version, b.set, b.hang = 43, branchLAN+"DOMAIN-SUFFIX,new.example\n", "/providers/"
+	ctx, cancel := context.WithTimeout(t.Context(), templateReserve+time.Second)
+	defer cancel()
+	body = mirrorRules(append(geo, "DOMAIN-SUFFIX,b.example,Proxy", "MATCH,Proxy")...)
+	c, err := f.Refresh(ctx, store, id, []byte(body), Policy{Scheduled: true})
+	if !routesByCopy(c, err) || c.Profile.Template.Reason != subconv.TemplateDropped || c.Profile.Template.Dropped != 4 || c.Profile.Template.Total != 7 ||
+		ctx.Err() != nil || copiedVersion(t) != 42 {
+		t.Fatal(err, c.Decision, c.Profile.Template, c.Notices)
+	}
+}
+
+// The stage starts at its first request, and ends before the refresh's reserve.
+func TestTemplateStageDeadline(t *testing.T) {
+	start := time.Now()
+	tr := &branchTransport{}
+	if d := tr.until(); d.Before(start.Add(templateTimeout)) || d.After(time.Now().Add(templateTimeout)) {
+		t.Fatal("without a refresh deadline:", d.Sub(start))
+	}
+	end := time.Now().Add(templateReserve + 5*time.Second)
+	tr = &branchTransport{latest: end.Add(-templateReserve)}
+	if d := tr.until(); !d.Equal(end.Add(-templateReserve)) || !tr.until().Equal(d) {
+		t.Fatal("not before the reserve:", d.Sub(start))
+	}
+	if !tr.stop() || tr.stop() || !tr.until().IsZero() {
+		t.Fatal("a stopped stage has time")
 	}
 }
 

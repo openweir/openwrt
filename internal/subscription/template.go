@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -42,85 +40,71 @@ type TemplateUse struct {
 	Total   int `json:"total,omitempty"`
 }
 
-// templateCache is the rules client's cache on flash: the last good manifest, template and
-// rule sets, for when no host answers. Keys are branch paths. A value is written, in one
-// rename, only when it changed.
-type templateCache struct{ dir string }
-
-func (c templateCache) path(key string) (string, bool) {
-	if !rules.ValidPath(key) {
-		return "", false
-	}
-	return filepath.Join(c.dir, filepath.FromSlash(key)), true
+// templateBranch is the rules client of one refresh (Client, nil without hosts). Its requests
+// go as provider downloads do (Fetcher.request: public addresses only, the redirect policy, the
+// router's second way out), and its answers are kept for the refresh, so the rule sets are
+// fetched against the manifest the template came with. It reads and stages the router's copy
+// of the branch (templateStage), which promote updates. close releases it.
+type templateBranch struct {
+	*rules.Client
+	stage     *templateStage
+	transport *branchTransport
+	done      func()
 }
 
-func (c templateCache) Get(key string) ([]byte, bool) {
-	path, ok := c.path(key)
-	if !ok {
-		return nil, false
-	}
-	b, err := os.ReadFile(path)
-	return b, err == nil
-}
-
-func (c templateCache) Put(key string, value []byte) {
-	path, ok := c.path(key)
-	if !ok || len(value) > MaxBody {
-		return
-	}
-	if old, err := os.ReadFile(path); err == nil && bytes.Equal(old, value) {
-		return
-	}
-	// A cache that cannot store a value drops it; the client checks what it reads.
-	_ = writeFileAtomic(path, value)
-}
-
-func writeFileAtomic(path string, data []byte) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return err
-	}
-	f, err := os.CreateTemp(dir, ".new-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name())
-	_, err = f.Write(data)
-	if err == nil {
-		err = f.Sync()
-	}
-	if closeErr := f.Close(); err == nil {
-		err = closeErr
-	}
-	if err == nil {
-		err = os.Rename(f.Name(), path)
-	}
-	if err != nil {
-		return err
-	}
-	return syncDirectory(dir)
-}
-
-// branch is the rules client of one refresh. Its requests go as provider downloads do
-// (Fetcher.request: public addresses only, the redirect policy, the router's second way out),
-// and its answers are kept for the refresh, so the rule sets are fetched against the manifest
-// the template came with.
-func (f Fetcher) branch() (*rules.Client, func()) {
+func (f Fetcher) branch(ctx context.Context) *templateBranch {
 	if len(TemplateHosts) == 0 {
-		return nil, func() {}
+		return &templateBranch{done: func() {}}
 	}
 	e, done := f.embeddedFetcher()
-	cache := templateCache{dir: TemplateDir}
-	return &rules.Client{
+	b := &templateBranch{stage: &templateStage{root: TemplateDir}, done: done}
+	b.transport = &branchTransport{f: e, seen: map[string]branchAnswer{}}
+	if end, ok := ctx.Deadline(); ok {
+		b.transport.latest = end.Add(-templateReserve)
+	}
+	b.Client = &rules.Client{
 		HTTP: &http.Client{
-			Transport:     &branchTransport{f: e, seen: map[string]branchAnswer{}},
+			Transport:     b.transport,
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
 		// The client keeps its own rollback floor in the cache: a version only one mirror served
 		// must not become a floor that agreeing hosts cannot lower.
 		Hosts: TemplateHosts,
-		Cache: cache,
-	}, done
+		Cache: b.stage,
+	}
+	return b
+}
+
+// sets gets the rule sets of the template's providers (fetchTemplateSets) within the stage.
+func (b *templateBranch) sets(ctx context.Context, version int64, providers map[string]any) (map[string][]byte, error) {
+	ctx, cancel := context.WithDeadline(ctx, b.transport.until())
+	defer cancel()
+	return fetchTemplateSets(ctx, b.Client, version, providers)
+}
+
+// offline leaves the client the router's copy alone: no more requests, and nothing of what the
+// refresh got. It reports whether the client was online.
+func (b *templateBranch) offline() bool {
+	if b.Client == nil || !b.transport.stop() {
+		return false
+	}
+	b.stage.discard()
+	return true
+}
+
+// promote makes what the refresh got the router's copy, once the template's rule sets all
+// arrived.
+func (b *templateBranch) promote() {
+	if b.stage != nil {
+		b.stage.promote()
+	}
+}
+
+func (b *templateBranch) close() {
+	if b.stage != nil {
+		b.stage.close()
+	}
+	b.done()
 }
 
 type branchAnswer struct {
@@ -129,20 +113,56 @@ type branchAnswer struct {
 }
 
 type branchTransport struct {
-	f    Fetcher
-	mu   sync.Mutex
-	seen map[string]branchAnswer
+	f  Fetcher
+	mu sync.Mutex
+	// latest is when the template stage must end for the rest of the refresh (zero: no limit),
+	// deadline when it ends, from its first request.
+	latest, deadline time.Time
+	stopped          bool
+	seen             map[string]branchAnswer
+}
+
+// until is when the template stage ends: templateTimeout after its first request, and
+// templateReserve before the refresh's deadline at the latest.
+func (t *branchTransport) until() time.Time {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.deadline.IsZero() {
+		t.deadline = time.Now().Add(templateTimeout)
+		if !t.latest.IsZero() && t.latest.Before(t.deadline) {
+			t.deadline = t.latest
+		}
+	}
+	if t.stopped {
+		return time.Time{}
+	}
+	return t.deadline
+}
+
+// stop ends the stage. It reports whether it was still running.
+func (t *branchTransport) stop() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	stopped := t.stopped
+	t.stopped = true
+	return !stopped
 }
 
 func (t *branchTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	ctx, cancel := context.WithDeadline(req.Context(), t.until())
+	defer cancel()
+	// Out of time, no host answers: subconv takes the router's copy, as without hosts.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	key := req.URL.String()
 	t.mu.Lock()
 	a, ok := t.seen[key]
 	t.mu.Unlock()
 	if !ok {
-		a.r, a.err = t.f.request(req.Context(), http.MethodGet, key, nil, "", "OpenWeir", false, MaxBody)
-		// A request the client gave up on says nothing about the host.
-		if req.Context().Err() == nil {
+		a.r, a.err = t.f.request(ctx, http.MethodGet, key, nil, "", "OpenWeir", false, MaxBody)
+		// A request the client gave up on, or ran out of time for, says nothing about the host.
+		if ctx.Err() == nil {
 			t.mu.Lock()
 			t.seen[key] = a
 			t.mu.Unlock()
@@ -173,21 +193,23 @@ func (f Fetcher) embeddedFetcher() (Fetcher, func()) {
 	return e, tr.CloseIdleConnections
 }
 
-// Template rule sets download six at a time, and all of them within a share of the refresh's
-// time: a cold cache holds some seventy.
+// The template stage of a refresh, the template and then its rule sets, has templateTimeout
+// and leaves the refresh's last templateReserve to what follows: the subscription's own
+// providers, the candidate's checks and its commit. Out of time, the refresh routes by the
+// router's copy of the template, or by default. Rule sets download six at a time: a cold cache
+// holds some seventy.
 const (
 	templateParallel = 6
 	templateTimeout  = 40 * time.Second
+	templateReserve  = 20 * time.Second
 )
 
 var errTemplateSet = errors.New("template_rule_set_unavailable")
 
 // fetchTemplateSets gets the rule set of each of the template's providers (by provider name):
 // from the hosts serving the template's version, checked against its manifest, or else from the
-// router's cache of that version. It fails when any is unavailable.
+// router's copy of that version, which takes no time. It fails when any is unavailable.
 func fetchTemplateSets(ctx context.Context, client *rules.Client, version int64, providers map[string]any) (map[string][]byte, error) {
-	ctx, cancel := context.WithTimeout(ctx, templateTimeout)
-	defer cancel()
 	paths := map[string]string{}
 	for name, def := range providers {
 		path, ok := branchPath(client.Hosts, field(object(def), "url"))
@@ -196,48 +218,49 @@ func fetchTemplateSets(ctx context.Context, client *rules.Client, version int64,
 		}
 		paths[name] = path
 	}
-	get := func(path string) ([]byte, error) { return nil, errTemplateSet }
-	if snap, err := client.Latest(ctx); err == nil && snap.Manifest.Version == version {
-		get = func(path string) ([]byte, error) { return snap.Fetch(ctx, path) }
-	} else if b, ok := client.Cache.Get(rules.ManifestPath); ok {
-		if m, err := rules.ParseManifest(b); err == nil && m.Version == version {
-			get = func(path string) ([]byte, error) {
-				file, listed := m.File(path)
-				if data, ok := client.Cache.Get(path); listed && ok && file.Matches(data) {
-					return data, nil
-				}
-				return nil, errTemplateSet
-			}
-		}
-	}
 	sets := make(map[string][]byte, len(paths))
-	var mu sync.Mutex
-	var failure error
-	slots := make(chan struct{}, templateParallel)
-	var wg sync.WaitGroup
-	for name, path := range paths {
-		wg.Go(func() {
-			slots <- struct{}{}
-			defer func() { <-slots }()
-			if ctx.Err() != nil {
-				return
-			}
-			data, err := get(path)
-			mu.Lock()
-			defer mu.Unlock()
-			if err != nil && failure == nil {
-				failure = err
-				cancel()
-			}
-			sets[name] = data
-		})
+	if snap, err := client.Latest(ctx); err == nil && snap.Manifest.Version == version {
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		var mu sync.Mutex
+		var failure error
+		slots := make(chan struct{}, templateParallel)
+		var wg sync.WaitGroup
+		for name, path := range paths {
+			wg.Go(func() {
+				slots <- struct{}{}
+				defer func() { <-slots }()
+				if ctx.Err() != nil {
+					return
+				}
+				data, err := snap.Fetch(ctx, path)
+				mu.Lock()
+				defer mu.Unlock()
+				if err != nil && failure == nil {
+					failure = err
+					cancel()
+				}
+				sets[name] = data
+			})
+		}
+		wg.Wait()
+		if failure != nil || ctx.Err() != nil {
+			return nil, errTemplateSet
+		}
+		return sets, nil
 	}
-	wg.Wait()
-	if failure == nil {
-		failure = ctx.Err()
-	}
-	if failure != nil {
+	b, _ := client.Cache.Get(rules.ManifestPath)
+	m, err := rules.ParseManifest(b)
+	if err != nil || m.Version != version {
 		return nil, errTemplateSet
+	}
+	for name, path := range paths {
+		file, listed := m.File(path)
+		data, ok := client.Cache.Get(path)
+		if !listed || !ok || !file.Matches(data) {
+			return nil, errTemplateSet
+		}
+		sets[name] = data
 	}
 	return sets, nil
 }
