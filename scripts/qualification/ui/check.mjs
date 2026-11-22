@@ -223,6 +223,57 @@ async function checkMiddleWidth(browser, base) {
 		assert.deepEqual(errors, []);
 	} finally { await page.close(); }
 }
+// The overview in the dark scheme, connected: the power button is filled with its dark red, kept
+// apart from the theme's lighter danger colour so its white word stays legible, and no text in the
+// status card is drawn in the colour behind it.
+async function checkDarkOverview(browser, base) {
+	const page = await browser.newPage({viewport: {width: 1280, height: 900}});
+	const errors = [];
+	page.on('pageerror', (e) => errors.push(e.message));
+	try {
+		await page.emulateMedia({colorScheme: 'dark'});
+		await page.goto(base);
+		await page.getByRole('heading', {name:'已连接', exact:true}).waitFor();
+		await powerShows(page, '断开', {on: true});
+		await page.waitForFunction(() => document.querySelector('.ow-power').getAnimations().length === 0);
+		const fill = await page.locator('.ow-power').evaluate(el => {
+			// A custom property computes to its text; a probe inside the button resolves it as a colour.
+			const resolve = (value) => {
+				const probe = document.createElement('i');
+				probe.style.color = value;
+				el.append(probe);
+				const color = getComputedStyle(probe).color;
+				probe.remove();
+				return color;
+			};
+			return {
+				dark: matchMedia('(prefers-color-scheme: dark)').matches,
+				background: getComputedStyle(el).backgroundColor,
+				red: resolve('var(--ow-power-red)'),
+				danger: resolve('var(--ow-danger)'),
+			};
+		});
+		assert.ok(fill.dark, 'the page renders in the dark scheme');
+		assert.equal(fill.background, fill.red, 'the connected power button is filled with --ow-power-red');
+		assert.notEqual(fill.red, fill.danger, 'the dark scheme gives the power button its own red');
+		const clashes = await page.locator('.ow-hero').evaluate(hero => {
+			const behind = (el) => {
+				for (let node = el; node; node = node.parentElement) {
+					const color = getComputedStyle(node).backgroundColor;
+					if (color !== 'rgba(0, 0, 0, 0)' && color !== 'transparent') return color;
+				}
+				return '';
+			};
+			return [...hero.querySelectorAll('*')]
+				.filter(el => el.getClientRects().length && [...el.childNodes].some(n => n.nodeType === Node.TEXT_NODE && n.textContent.trim()))
+				.map(el => [el.textContent.trim(), getComputedStyle(el).color, behind(el)])
+				.filter(([, color, background]) => color === background);
+		});
+		assert.deepEqual(clashes, [], 'status card text drawn in the colour behind it');
+		await page.screenshot({path: path.join(output, 'overview-dark-1280.png')});
+		assert.deepEqual(errors, []);
+	} finally { await page.close(); }
+}
 // Advance the browser clock through ten minutes of normal overview polling.
 // Measuring document and chart bounds catches cumulative layout growth that
 // a screenshot taken immediately after mount does not show.
@@ -815,6 +866,8 @@ try {
 	}
 	await checkMiddleWidth(browser, base);
 	console.log('800×900 two subscription cards a row, stacked rule columns and two rule-set cards a row passed');
+	await checkDarkOverview(browser, base);
+	console.log('1280×900 dark overview: the power button\'s dark red and legible status text passed');
 } finally {
 	await browser.close();
 	await new Promise((resolve) => server.close(resolve));
