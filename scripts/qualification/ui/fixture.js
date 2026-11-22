@@ -117,11 +117,16 @@ export function fixture(empty = false, preparing = false) {
 		networks: ['lan'],
 	};
 	// A start goes through starting: the first status read after it reports starting, and so does
-	// every read while controls.holdStart is set.
+	// every read while controls.holdStart is set. From that first read the router confirms the
+	// start for 3 seconds, and reports the seconds left as it does.
+	// A stop goes through releasing while controls.holdStop is set.
 	let starting = false,
-		startSeen = false;
+		startSeen = false,
+		confirmUntil = 0,
+		releasing = false;
 	const phase = () =>
-			controls.phase || (saved.enabled && saved.mode !== 'direct' ? (starting ? 'starting' : 'running') : 'direct'),
+			controls.phase || (releasing ? 'releasing'
+				: saved.enabled && saved.mode !== 'direct' ? (starting ? 'starting' : 'running') : 'direct'),
 		activeSince = Date.now() - 86400000;
 	const job = (result) => {
 		const task = 'job-' + ++serial;
@@ -133,10 +138,18 @@ export function fixture(empty = false, preparing = false) {
 		// controls.fail = { method: 'router error' } makes that call fail as rpcd reports it.
 		if (controls.fail?.[m]) throw Error(controls.fail[m]);
 		switch (m) {
-			case 'status':
+			case 'status': {
 				if (startSeen && !controls.holdStart) starting = false;
 				startSeen = starting;
-				return { saved, phase: phase(), running_since: activeSince, ...(controls.problem ? { error: controls.problem } : {}) };
+				if (!controls.holdStop) releasing = false;
+				if (starting && !confirmUntil) confirmUntil = Date.now() + 3000;
+				const left = phase() === 'starting' && confirmUntil ? Math.ceil((confirmUntil - Date.now()) / 1000) : 0;
+				return {
+					saved, phase: phase(), running_since: activeSince,
+					...(left > 0 ? { confirmation_seconds: left } : {}),
+					...(controls.problem ? { error: controls.problem } : {}),
+				};
+			}
 			case 'subscription_read': {
 				const action = r.action;
 				reads.push(action);
@@ -408,10 +421,14 @@ export function fixture(empty = false, preparing = false) {
 				saved.enabled = true;
 				starting = true;
 				startSeen = false;
+				confirmUntil = 0;
 				break;
 			case 'stop':
+				// The router refuses a change made against a revision that is no longer current.
+				if (r.revision !== saved.revision) throw Error('configuration revision changed');
 				saved.enabled = false;
 				starting = false;
+				releasing = !!controls.holdStop;
 				break;
 			case 'policy':
 				saved.policy = r.policy;

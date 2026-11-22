@@ -330,6 +330,25 @@ async function checkOverviewPolling(page, base, width) {
 	assert.equal(await page.locator('.ow-power').getAttribute('aria-describedby'), await problem.getAttribute('id'));
 	assert.equal(await page.locator('.ow-main .ow-warning').count(), 0, 'no banner above the overview');
 	await page.screenshot({ path: path.join(output, 'service-problem-' + width + '.png') });
+	// The router's retries clear the problem while they start again and set it when they fail: the
+	// same problem back in a new line shows without being read out again.
+	const announced = await problem.elementHandle();
+	await page.evaluate(() => {
+		window.model.controls.phase = 'starting';
+		delete window.model.controls.problem;
+	});
+	await page.clock.runFor(3500);
+	await page.getByRole('heading', {name: '连接中', exact: true}).waitFor();
+	await page.evaluate(() => {
+		window.model.controls.phase = 'fail_open';
+		window.model.controls.problem = 'network takeover blocked by: service openclash';
+	});
+	await page.clock.runFor(3500);
+	await page.getByRole('heading', {name: '已回退直连', exact: true}).waitFor();
+	const retold = page.locator('.ow-connection > .ow-feedback');
+	await retold.filter({hasText: '仍有无法自动处理的冲突：服务 OpenClash'}).waitFor();
+	assert.ok(await announced.evaluate(line => !line.isConnected), 'the problem is in a new line');
+	assert.equal(await retold.getAttribute('role'), 'status', 'an unchanged problem is not announced again');
 	await page.evaluate(() => {
 		window.model.controls.phase = null;
 		delete window.model.controls.problem;
@@ -503,21 +522,79 @@ try {
 		await powerShows(page, '断开', { on: true });
 		await modes.getByRole('button', { name: '智能', exact: true }).click();
 		await page.getByRole('heading', { name: '已连接', exact: true }).waitFor();
-		// 断开 asks first; then the button is the theme colour's 连接 again.
-		await power.click();
-		await page.getByRole('dialog', { name: '断开代理' }).getByRole('button', { name: '断开', exact: true }).click();
+		// 断开 asks first. A double click asks once: its second click, outside the question, leaves it open.
+		const disconnect = page.getByRole('dialog', { name: '断开代理' });
+		const focused = () => power.evaluate(el => el === document.activeElement);
+		await power.dblclick();
+		await disconnect.waitFor();
+		assert.equal(await page.locator('dialog[open]').count(), 1, 'a double click keeps the question open');
+		// A stop the router refuses says why in the question; the button is the red 断开 again.
+		await page.evaluate(() => { window.model.controls.fail = { stop: 'configuration revision changed' }; });
+		await disconnect.getByRole('button', { name: '断开', exact: true }).click();
+		await disconnect.locator('.ow-modal-status').filter({ hasText: '配置已被其他操作修改，请刷新后重试' }).waitFor();
+		await powerShows(page, '断开', { on: true });
+		assert.equal(await power.getAttribute('aria-disabled'), null, 'a refused stop leaves 断开 usable');
+		await page.evaluate(() => { delete window.model.controls.fail; });
+		await page.keyboard.press('Escape');
+		await disconnect.waitFor({ state: 'detached' });
+		// The stop names the revision current when it is confirmed: a change saved while the question
+		// was open does not fail it. While the router lets go the button reads 断开中, its ring ebbs,
+		// and it is marked unavailable: a press does nothing. The focus stays on it through the redraws.
+		await power.focus();
+		await page.keyboard.press('Enter');
+		await disconnect.waitFor();
+		await page.evaluate(() => {
+			window.model.saved.revision++;
+			window.model.controls.holdStop = true;
+		});
+		await disconnect.getByRole('button', { name: '断开', exact: true }).click();
+		await disconnect.waitFor({ state: 'detached' });
+		await page.getByRole('heading', { name: '断开中', exact: true }).waitFor();
+		await powerShows(page, '断开中', { pulse: true });
+		assert.ok(await power.evaluate(el => el.classList.contains('gentle') && el.getAnimations().some(a => a.animationName === 'ow-power-ebb')), 'the ring ebbs while disconnecting');
+		assert.equal(await power.getAttribute('aria-disabled'), 'true', '断开中 is marked unavailable');
+		assert.ok(await focused(), 'the focus returns to the power button after the question');
+		await page.keyboard.press('Enter');
+		assert.equal(await page.locator('dialog[open]').count(), 0, 'a press while disconnecting opens nothing');
+		assert.equal(await power.getAttribute('aria-disabled'), 'true', 'a press while disconnecting keeps it unavailable');
+		await page.evaluate(() => { window.model.controls.holdStop = false; });
 		await page.getByRole('heading', { name: '未连接', exact: true }).waitFor();
 		await powerShows(page, '连接');
+		assert.equal(await power.getAttribute('aria-disabled'), null);
+		assert.ok(await focused(), 'the focus stays on the power button once disconnected');
 		assert.equal((await hero.boundingBox()).height, fixed);
 		// Connecting keeps the theme colour and pulses the ring until the core runs, then turns red.
+		// Pressed from the keyboard, the button keeps the focus through every redraw.
 		await page.evaluate(() => { window.model.controls.holdStart = true; });
-		await power.click();
+		await power.focus();
+		await page.keyboard.press('Enter');
+		// The router's confirmation counts down every second, between its status reads (every 2.5 s).
+		const confirmation = page.locator('.ow-connection > span.ow-muted'),
+			statusReads = () => page.evaluate(() => window.model.trace.filter(m => m === 'status').length);
+		await confirmation.filter({ hasText: /^已接管流量，确认中 3 秒$/ }).waitFor();
+		const reads = await statusReads();
+		await confirmation.filter({ hasText: /^已接管流量，确认中 [12] 秒$/ }).waitFor();
+		assert.equal(await statusReads(), reads, 'the countdown ticks between status reads');
 		await page.getByRole('heading', { name: '连接中', exact: true }).waitFor();
 		await powerShows(page, '连接中', { pulse: true, name: '连接中，点按断开' });
 		assert.ok(await power.evaluate(el => el.getAnimations().some(a => a.animationName === 'ow-power-pulse')), 'the ring pulses while connecting');
+		assert.ok(await focused(), 'the focus follows the power button into the redraw');
+		// A redraw keeps the pulse in step: the new ring's cycles start when the old one's did.
+		const pulseOrigin = (el) => page.waitForFunction(el => {
+			const a = el.getAnimations().find(a => a.animationName === 'ow-power-pulse');
+			return a?.startTime != null && a.startTime + a.effect.getTiming().delay;
+		}, el).then(v => v.jsonValue());
+		const pulsing = await power.elementHandle(),
+			origin = await pulseOrigin(pulsing);
+		await page.evaluate(() => { window.model.saved.revision++; });
+		await page.waitForFunction(el => !el.isConnected, pulsing);
+		await powerShows(page, '连接中', { pulse: true, name: '连接中，点按断开' });
+		const carried = await pulseOrigin(await power.elementHandle());
+		assert.ok(Math.abs(carried - origin) < 34, 'the pulse keeps its timing across a redraw (' + origin + ' → ' + carried + ')');
 		await page.evaluate(() => { window.model.controls.holdStart = false; });
 		await page.getByRole('heading', { name: '已连接', exact: true }).waitFor();
 		await powerShows(page, '断开', { on: true });
+		assert.ok(await focused(), 'a connect pressed from the keyboard keeps the focus on the power button');
 		// With reduced motion the button changes at once: no pulse, no fades.
 		await page.emulateMedia({ reducedMotion: 'reduce' });
 		await power.click();
