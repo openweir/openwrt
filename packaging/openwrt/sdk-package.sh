@@ -168,6 +168,8 @@ case "$RELEASE" in
  25.*)
   apk=staging_dir/host/bin/apk
   mkdir -p "$pkg/lib/apk/packages"
+  # The core runs as root; the firewall knows its sockets by the openweir-core group. The
+  # user of the same name only comes with the group (here and in opkg's Require-User).
   echo 'openweir-core:openweir-core' > "$pkg/lib/apk/packages/$name.rusers"
   # apk stores protected configuration under /etc; register the package file list for OpenWrt tooling.
   (cd "$pkg" && find . \( -type f -o -type l \) | sed 's,^\.,,') > "$pkg/lib/apk/packages/$name.list"
