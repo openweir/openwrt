@@ -381,6 +381,11 @@ func (s *System) Start(ctx context.Context, i Intent) (err error) {
 	if e = ctx.Err(); e != nil {
 		return e
 	}
+	// The core inherits the manager's open-file limit. procd already applies it to the
+	// service; setting it here also stops Go from handing the core its original soft limit.
+	if setFileLimit(coreFiles) != nil {
+		s.records.Log("core", "warn", "core_file_limit_low")
+	}
 	// PR_SET_PDEATHSIG follows the creating Linux thread, so keep that
 	// thread alive until the supervised core exits.
 	done := make(chan struct{})

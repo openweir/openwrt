@@ -4,7 +4,9 @@ package router
 
 import (
 	"bytes"
+	"errors"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"syscall"
@@ -27,11 +29,13 @@ func TestCoreKeepsRootInItsGroupAlone(t *testing.T) {
 	if a.Cloneflags != 0 || a.Unshareflags != 0 || a.Chroot != "" || a.AmbientCaps != nil || a.UidMappings != nil || a.GidMappings != nil {
 		t.Fatal(a)
 	}
+	if coreFiles != 1000000 {
+		t.Fatal(coreFiles)
+	}
 }
 
-// procStatus reads the fields of /proc/<pid>/status that describe a process's privileges.
-func procStatus(t *testing.T, b []byte) map[string]string {
-	t.Helper()
+// procStatus reads the "Name: value" fields of /proc/<pid>/status.
+func procStatus(b []byte) map[string]string {
 	fields := map[string]string{}
 	for _, line := range strings.Split(string(b), "\n") {
 		name, value, ok := strings.Cut(line, ":")
@@ -40,6 +44,51 @@ func procStatus(t *testing.T, b []byte) map[string]string {
 		}
 	}
 	return fields
+}
+
+// openFiles reads the soft and hard limit from /proc/<pid>/limits.
+func openFiles(b []byte) string {
+	for _, line := range strings.Split(string(b), "\n") {
+		if rest, ok := strings.CutPrefix(line, "Max open files"); ok {
+			if f := strings.Fields(rest); len(f) >= 2 {
+				return f[0] + " " + f[1]
+			}
+		}
+	}
+	return ""
+}
+
+// Go puts its original soft limit back in each child unless the program set the limit.
+func TestSetFileLimitReachesChildren(t *testing.T) {
+	var lim syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &lim); err != nil {
+		t.Fatal(err)
+	}
+	hard := strconv.FormatUint(lim.Max, 10)
+	child := func() string {
+		out, err := exec.Command("/bin/cat", "/proc/self/limits").Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return openFiles(out)
+	}
+	// Without privilege the hard limit can only fall, and stays fallen: keep it.
+	if err := setFileLimit(lim.Max); err != nil {
+		t.Fatal(err)
+	}
+	if got := child(); got != hard+" "+hard {
+		t.Fatal(got, hard)
+	}
+	if os.Geteuid() == 0 {
+		return
+	}
+	// Refused: children still get the soft limit raised to the hard one.
+	if err := setFileLimit(lim.Max + 1); !errors.Is(err, syscall.EPERM) {
+		t.Fatal(err)
+	}
+	if got := child(); got != hard+" "+hard {
+		t.Fatal(got, hard)
+	}
 }
 
 // As root, start a shell the way the core is started and read what it holds. The fixture
@@ -52,20 +101,26 @@ func TestCoreLaunchHoldsEveryCapability(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	fixture := os.Getenv("OPENWEIR_CORE_FIXTURE") == "1"
+	// A container's root may lack CAP_SYS_RESOURCE; procd's root on a router does not.
+	limited := setFileLimit(coreFiles) == nil
+	if !limited && fixture {
+		t.Fatal("cannot set the core's open-file limit")
+	}
 	dir := t.TempDir()
 	cmd := coreCommand(kernel.Launch{Path: "/bin/sh", Config: "/dev/null"}, dir, gid)
-	cmd.Args = []string{"sh", "-c", "exec cat /proc/self/status"}
+	cmd.Args = []string{"sh", "-c", "exec cat /proc/self/status /proc/self/limits"}
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	if err := cmd.Run(); err != nil {
 		t.Fatal(err)
 	}
-	child := procStatus(t, out.Bytes())
+	child := procStatus(out.Bytes())
 	self, err := os.ReadFile("/proc/self/status")
 	if err != nil {
 		t.Fatal(err)
 	}
-	parent := procStatus(t, self)
+	parent := procStatus(self)
 	g := strconv.Itoa(gid)
 	if child["Uid"] != "0 0 0 0" || child["Gid"] != strings.Repeat(g+" ", 3)+g || child["Groups"] != "" {
 		t.Fatal(child["Uid"], child["Gid"], child["Groups"])
@@ -79,7 +134,10 @@ func TestCoreLaunchHoldsEveryCapability(t *testing.T) {
 	if child["NoNewPrivs"] != parent["NoNewPrivs"] {
 		t.Fatal(child["NoNewPrivs"], parent["NoNewPrivs"])
 	}
-	if os.Getenv("OPENWEIR_CORE_FIXTURE") == "1" && child["NoNewPrivs"] != "0" {
+	if fixture && child["NoNewPrivs"] != "0" {
 		t.Fatal("no_new_privs set", child["NoNewPrivs"])
+	}
+	if got := openFiles(out.Bytes()); limited && got != "1000000 1000000" {
+		t.Fatal("open files", got)
 	}
 }

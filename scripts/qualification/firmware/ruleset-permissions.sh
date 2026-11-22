@@ -92,6 +92,8 @@ awk -v gid="$gid" -v bnd="$bounding" '
  $1 ~ /^Cap(Prm|Eff|Bnd):$/ { ok += $2 == bnd }
  $1 == "NoNewPrivs:" { ok += $2 == 0 }
  END { exit ok != 7 }' "/proc/$p/status"
+# And 1000000 open files, soft and hard, as OpenClash's core has.
+awk '$1 == "Max" && $2 == "open" && $3 == "files" { ok = $4 == 1000000 && $5 == 1000000 } END { exit !ok }' "/proc/$p/limits"
 report core_identity
 # Confirm the running core, under its real UID, loaded both providers.
 key=$(cat /etc/openweir/private/control.token)

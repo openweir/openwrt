@@ -26,8 +26,9 @@ case "$(basename "$archive")" in
 esac
 chmod 755 "$work/mihomo"
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o "$work/manager" ./cmd/openweir-kernel
-# The running core is root in base-files' nogroup group (65534) alone with every capability,
-# as openweird starts it: router.test runs that launch code on this userland. The restricted
+# The running core is root in base-files' nogroup group (65534) alone with every capability
+# and 1000000 open files, as openweird starts it: router.test runs that launch code on this
+# userland, from procd's default open-file limits (1024 soft, 4096 hard). The restricted
 # checks (exec-restricted) keep the same identity but hold no capability, under no_new_privs.
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go test -c -trimpath -o "$work/router.test" ./internal/router
 cat > "$work/probe.go" <<'PROBE'
@@ -55,7 +56,7 @@ func main() {
 PROBE
 CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -o "$work/probe" "$work/probe.go"
 for release in 23.05.6 24.10.8 25.12.6; do
-    cid=$(docker create --env CORE_TAG="$version" --cap-add NET_ADMIN --network none --platform linux/arm64 "openweir-test/openwrt:$release-arm64" sh -ec '
+    cid=$(docker create --env CORE_TAG="$version" --cap-add NET_ADMIN --cap-add SYS_RESOURCE --ulimit nofile=1024:4096 --network none --platform linux/arm64 "openweir-test/openwrt:$release-arm64" sh -ec '
         test "$(awk -F: "\$1 == \"nogroup\" { print \$3 }" /etc/group)" = 65534
         echo private >/tmp/foreign && chown 4242:4242 /tmp/foreign && chmod 0600 /tmp/foreign
         mkdir -p /etc/config

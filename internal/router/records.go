@@ -246,11 +246,17 @@ func (s *logSink) recordLine(line string) {
 		break
 	}
 	denied := strings.Contains(line, "permission denied") || strings.Contains(line, "operation not permitted")
+	// Out of descriptors (EMFILE for the core, or ENFILE for the whole system): the core can
+	// neither accept nor open connections, which browsers report as a connection closed
+	// unexpectedly. A failed dial still becomes a connection record, and the cause is logged.
+	exhausted := strings.Contains(line, "too many open files")
 	if !fatal && !denied && slices.ContainsFunc(ordinary, func(n string) bool { return strings.Contains(line, n) }) {
 		if c, ok := control.FailedDial(original, time.Now().UnixMilli()); ok {
 			s.r.Failed(c)
 		}
-		return
+		if !exhausted {
+			return
+		}
 	}
 	source := "core"
 	if strings.Contains(line, "dns:") || strings.Contains(line, "dns/") {
@@ -259,6 +265,8 @@ func (s *logSink) recordLine(line string) {
 	reason := "core_diagnostic"
 	if denied {
 		reason = corePermissionReason(line)
+	} else if exhausted {
+		reason = "core_file_limit_reached"
 	} else {
 		for _, x := range []struct{ needle, reason string }{{"address already in use", "listen_address_in_use"}, {"connection refused", "connection_refused"}, {"network is unreachable", "network_unreachable"}, {"i/o timeout", "io_timeout"}, {"context deadline exceeded", "deadline_exceeded"}, {"no such host", "dns_name_not_found"}, {"certificate", "tls_certificate_error"}, {"handshake", "handshake_failed"}, {"no space left", "disk_full"}, {"invalid config", "invalid_configuration"}, {"failed to create new os thread", "core_thread_creation_failed"}, {"pthread_create failed", "core_thread_creation_failed"},
 			{"no route to host", "network_unreachable"}, {"connection reset", "connection_reset"}, {"broken pipe", "connection_reset"}, {"unexpected eof", "connection_closed"}, {": eof", "connection_closed"},

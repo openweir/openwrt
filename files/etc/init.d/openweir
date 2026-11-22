@@ -21,6 +21,8 @@ start_service() {
   procd_set_param command /usr/sbin/openweird "$role"
   procd_set_param respawn 3600 5 0
   procd_set_param term_timeout 20
+  # The core inherits this from openweird, as OpenClash's core has it.
+  procd_set_param limits nofile="1000000 1000000"
   procd_set_param stderr 1
   procd_close_instance
  done
