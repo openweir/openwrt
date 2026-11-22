@@ -734,6 +734,10 @@ func (f Fetcher) Refresh(ctx context.Context, store *Store, id string, file []by
 	// change always wins and a transport error cannot overwrite its history.
 	defer func() {
 		var reason string
+		// The subscription was read but its update not applied, which ends an earlier failure.
+		// A scheduled refresh leaves the update on the source for the administrator; one they
+		// ran themselves has shown it to them. A replacement link's update is not the source's.
+		reviewed := failure == nil && candidate.Decision != "ready" && f.ReplacementURL == ""
 		switch {
 		case errors.Is(ctx.Err(), context.Canceled), errors.Is(failure, context.Canceled), errors.Is(failure, ErrSuperseded), errors.Is(failure, ErrRevoked):
 			return
@@ -741,13 +745,13 @@ func (f Fetcher) Refresh(ctx context.Context, store *Store, id string, file []by
 			reason = failure.Error()
 		case candidate.Decision == "blocked":
 			reason = candidate.Profile.credentialIssue()
-			if reason == "" {
+			if reason == "" && !reviewed {
 				return
 			}
-		default:
+		case !reviewed:
 			return
 		}
-		if len(reason) > 60 || reason == "" || strings.Trim(reason, "abcdefghijklmnopqrstuvwxyz_0123456789") != "" {
+		if len(reason) > 60 || (reason == "" && failure != nil) || strings.Trim(reason, "abcdefghijklmnopqrstuvwxyz_0123456789") != "" {
 			reason = "update_failed"
 		}
 		diagnosticCtx := ctx
@@ -767,7 +771,13 @@ func (f Fetcher) Refresh(ctx context.Context, store *Store, id string, file []by
 			}
 			r.LastProvider = FailureProvider(failure)
 			r.LastProviderScope = ""
-			// A retry that fails the same way leaves the record as it was.
+			if reviewed {
+				r.PendingUpdate = nil
+				if policy.Scheduled {
+					r.PendingUpdate = candidate.Pending()
+				}
+			}
+			// A retry that ends the same way leaves the record as it was.
 			if failureDigest(r) == before {
 				return errUnchanged
 			}

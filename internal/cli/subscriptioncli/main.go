@@ -211,7 +211,12 @@ func run(ctx context.Context, store *sub.Store, method string, in input, f sub.F
 		if c.Decision == "ready" && !c.Unchanged() {
 			changes = append(changes, in.Source)
 		}
-		return map[string]any{"changes": c.Changes, "decision": c.Decision, "retains_routing": c.RetainsRouting, "confirmation_id": c.ConfirmationID, "notices": nonNil(c.Notices), "node_count": len(c.Profile.Nodes), "group_count": len(c.Profile.Groups), "rule_count": len(c.Profile.Rules), "local": c.Profile.Local}, changes, nil
+		data := map[string]any{"changes": c.Changes, "decision": c.Decision, "retains_routing": c.RetainsRouting, "confirmation_id": c.ConfirmationID, "notices": nonNil(c.Notices), "node_count": len(c.Profile.Nodes), "group_count": len(c.Profile.Groups), "rule_count": len(c.Profile.Rules), "local": c.Profile.Local}
+		// The daemon logs an update the router did not apply apart from a done refresh.
+		if pending := c.Pending(); pending != nil {
+			data["pending_update"] = pending
+		}
+		return data, changes, nil
 	case "rollback":
 		e := store.RollbackChecked(ctx, in.Source, f.BeforeCommit)
 		return nil, []string{in.Source}, e

@@ -46,6 +46,7 @@ type record struct {
 	LastFailure          string              `json:"last_failure,omitempty"`
 	LastProvider         *ProviderDiagnostic `json:"last_provider,omitempty"`
 	LastChange           *ChangeCounts       `json:"last_change,omitempty"`
+	PendingUpdate        *PendingUpdate      `json:"pending_update,omitempty"`
 	UpdatedAt            string              `json:"updated_at,omitempty"`
 	SchemaVersion        int                 `json:"schema_version"`
 	Source               string              `json:"source"`
@@ -70,7 +71,7 @@ const maxRecord = 64 << 20
 var errUnchanged = errors.New("record unchanged")
 
 func failureDigest(r *record) string {
-	return digest([]any{r.LastFailure, r.LastTLS, r.ClockRetryGeneration, r.LastProvider, r.LastProviderScope})
+	return digest([]any{r.LastFailure, r.LastTLS, r.ClockRetryGeneration, r.LastProvider, r.LastProviderScope, r.PendingUpdate})
 }
 
 // A single writer lock covers read, authorization check and publication. All
@@ -288,6 +289,7 @@ func (s *Store) commit(ctx context.Context, t Ticket, c Candidate, recheck func(
 		r.ClockRetryGeneration = 0
 		r.LastProvider = nil
 		r.LastChange = &ChangeCounts{len(c.Changes.Added), len(c.Changes.Removed), len(c.Changes.Groups)}
+		r.PendingUpdate = nil
 		r.Suspended = false
 		r.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 		r.Attempts, r.AttemptedAt = 0, ""
@@ -384,6 +386,7 @@ func (s *Store) Revoke(id string) error {
 		r.ClockRetryGeneration = 0
 		r.LastProvider = nil
 		r.LastChange = nil
+		r.PendingUpdate = nil
 		r.LoginRequired = false
 		r.Current = nil
 		r.Previous = nil
@@ -408,6 +411,7 @@ func (s *Store) RevokeIfCurrent(t Ticket) error {
 		r.ClockRetryGeneration = 0
 		r.LastProvider = nil
 		r.LastChange = nil
+		r.PendingUpdate = nil
 		r.Current = nil
 		r.Previous = nil
 		return nil
@@ -457,6 +461,7 @@ func (s *Store) configure(src Source, authenticated bool) error {
 				r.LastProviderScope = ""
 				r.DownloadMembers = nil
 				r.LastProvider = nil
+				r.PendingUpdate = nil
 				r.Current = nil
 				r.Previous = nil
 			}
@@ -647,6 +652,7 @@ type Status struct {
 	LastFailure      string              `json:"last_failure,omitempty"`
 	LastProvider     *ProviderDiagnostic `json:"last_provider,omitempty"`
 	LastChange       *ChangeCounts       `json:"last_change,omitempty"`
+	PendingUpdate    *PendingUpdate      `json:"pending_update,omitempty"`
 	Plan             *Plan               `json:"plan,omitempty"`
 	Agent            string              `json:"agent,omitempty"`
 	CustomAgent      bool                `json:"custom_agent,omitempty"`
@@ -673,7 +679,7 @@ type Status struct {
 }
 
 func statusOf(r *record) Status {
-	st := Status{NeedsRefresh: r.NeedsRefresh, LastTLS: r.LastTLS, RetryAfterClock: r.ClockRetryGeneration != 0 && r.ClockRetryGeneration == r.Generation, Attempts: r.Attempts, AttemptedAt: r.AttemptedAt, LastFailure: r.LastFailure, LastProvider: r.LastProvider, LastChange: r.LastChange, UpdatedAt: r.UpdatedAt, Source: r.Source, Epoch: r.Epoch, Generation: r.Generation, Suspended: r.Suspended, Revoked: r.Revoked, LoginRequired: r.LoginRequired, Ready: r.Current != nil && !r.Revoked && !r.Suspended}
+	st := Status{NeedsRefresh: r.NeedsRefresh, LastTLS: r.LastTLS, RetryAfterClock: r.ClockRetryGeneration != 0 && r.ClockRetryGeneration == r.Generation, Attempts: r.Attempts, AttemptedAt: r.AttemptedAt, LastFailure: r.LastFailure, LastProvider: r.LastProvider, LastChange: r.LastChange, PendingUpdate: r.PendingUpdate, UpdatedAt: r.UpdatedAt, Source: r.Source, Epoch: r.Epoch, Generation: r.Generation, Suspended: r.Suspended, Revoked: r.Revoked, LoginRequired: r.LoginRequired, Ready: r.Current != nil && !r.Revoked && !r.Suspended}
 	if r.Config != nil {
 		st.DownloadOverride = len(r.DownloadMembers) > 0
 		st.Name = publicLabel(r.Config.Name, "Subscription")

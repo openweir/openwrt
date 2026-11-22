@@ -82,3 +82,19 @@ func TestOnlyChangedProfilesNotifyRouter(t *testing.T) {
 		t.Fatal("identical refresh displaced rollback snapshot", err)
 	}
 }
+
+// The daemon logs a refresh whose update was not applied by the code it returns.
+func TestRefreshReturnsPendingUpdate(t *testing.T) {
+	st := sub.OpenStore(t.TempDir())
+	if err := st.Configure(sub.Source{ID: "file", Kind: "file", Name: "File"}); err != nil {
+		t.Fatal(err)
+	}
+	const feed = "proxies: [{name: Edge, type: http, server: edge.example, port: 8080}]\nrules: ['DOMAIN,ads.example,REJECT', 'MATCH,DIRECT']"
+	for i, text := range []string{feed, strings.Replace(feed, "REJECT", "DIRECT", 1)} {
+		out, _, err := run(t.Context(), st, "refresh", input{Source: "file", Content: text, Scheduled: true}, sub.Fetcher{})
+		raw, _ := json.Marshal(out)
+		if pending := strings.Contains(string(raw), `"pending_update":{"code":"confirmation_required","notices":["rejection_removed"]}`); err != nil || pending != (i == 1) {
+			t.Fatal(err, string(raw))
+		}
+	}
+}

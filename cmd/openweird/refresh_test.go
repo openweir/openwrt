@@ -3,7 +3,10 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -150,5 +153,72 @@ func TestClockChangeRepairsFutureScheduleWithoutFlooding(t *testing.T) {
 	src.LoginRequired = true
 	if recoveredClock(src, now) {
 		t.Fatal("retried after login expired")
+	}
+}
+
+type feedTransport func(*http.Request) (*http.Response, error)
+
+func (f feedTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+// A scheduled refresh whose update waits for the administrator is not a success: the source
+// keeps its back-off, so the scheduler does not download it again every 15 minutes, and the
+// log tells the task apart from a done refresh.
+func TestPendingUpdateKeepsBackoff(t *testing.T) {
+	store := subscription.OpenStore(t.TempDir())
+	src := subscription.Source{ID: "sub", Name: "sub", Kind: "external", URL: "https://example.com/feed"}
+	if err := store.Configure(src); err != nil {
+		t.Fatal(err)
+	}
+	body := "proxies: [{name: Edge, type: http, server: edge.example, port: 8080}]\nrules: ['DOMAIN,ads.example,REJECT', 'MATCH,DIRECT']"
+	downloads := 0
+	f := subscription.Fetcher{Client: &http.Client{Transport: feedTransport(func(*http.Request) (*http.Response, error) {
+		downloads++
+		return &http.Response{StatusCode: http.StatusOK, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})}}
+	c, err := f.Refresh(t.Context(), store, src.ID, nil, subscription.Policy{})
+	if err != nil || c.Decision != "ready" {
+		t.Fatal(err, c.Decision)
+	}
+	if data, _ := json.Marshal(map[string]any{"decision": c.Decision}); heldUpdate("subscription_write/refresh", data) != "" {
+		t.Fatal("applied update logged as held")
+	}
+	// Without its REJECT rule the update needs the administrator's confirmation.
+	body = strings.Replace(body, "'DOMAIN,ads.example,REJECT'", "'DOMAIN,media.example,DIRECT'", 1)
+	const interval = 24 * time.Hour
+	for attempt := 1; attempt <= 3; attempt++ {
+		c, err := f.Refresh(t.Context(), store, src.ID, nil, subscription.Policy{Scheduled: true})
+		if err != nil || c.Decision != "confirmation_required" {
+			t.Fatal(err, c.Decision)
+		}
+		// The data the subscription helper returns for the task.
+		data, _ := json.Marshal(map[string]any{"decision": c.Decision, "pending_update": c.Pending()})
+		if code := heldUpdate("subscription_write/refresh", data); code != subscription.PendingConfirmation {
+			t.Fatalf("logged as %q", code)
+		}
+		st, err := store.Status(src.ID)
+		if err != nil || st.PendingUpdate == nil || st.PendingUpdate.Code != subscription.PendingConfirmation || st.Attempts != attempt {
+			t.Fatal(err, st.PendingUpdate, st.Attempts)
+		}
+		at, err := time.Parse(time.RFC3339, st.AttemptedAt)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// The update interval has long passed: only the back-off holds the next download.
+		st.UpdatedAt = at.Add(-2 * interval).Format(time.RFC3339)
+		wait := retryDelay(attempt, interval)
+		if dueForRefresh(st, at.Add(wait-time.Minute), time.Time{}, interval) || !dueForRefresh(st, at.Add(wait), time.Time{}, interval) {
+			t.Fatal("pending update ignored the back-off", attempt)
+		}
+	}
+	if downloads != 4 {
+		t.Fatal(downloads)
+	}
+	for _, data := range []string{`[]`, `{"pending_update":{"code":"something_else"}}`, ``} {
+		if heldUpdate("subscription_write/refresh", json.RawMessage(data)) != "" {
+			t.Fatal(data)
+		}
+	}
+	if heldUpdate("kernel/install-json", json.RawMessage(`{"pending_update":{"code":"update_blocked"}}`)) != "" {
+		t.Fatal("other task logged as held")
 	}
 }

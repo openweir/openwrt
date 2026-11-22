@@ -145,8 +145,25 @@ func (s *app) runRefresh(body json.RawMessage, scheduled bool) (any, error) {
 	return job, err
 }
 
-// retryDelay spaces out a refresh that keeps failing: 15 minutes, doubling up to 6 hours or
-// the update interval if that is shorter. Each attempt rewrites the whole record on flash.
+// heldUpdate returns the code of the update a refresh downloaded but did not apply
+// (subscription.PendingUpdate), so that the log does not report it as done.
+func heldUpdate(action string, data json.RawMessage) string {
+	var v struct {
+		Pending *subscription.PendingUpdate `json:"pending_update"`
+	}
+	if action != "subscription_write/refresh" || json.Unmarshal(data, &v) != nil || v.Pending == nil {
+		return ""
+	}
+	switch v.Pending.Code {
+	case subscription.PendingConfirmation, subscription.PendingBlocked:
+		return v.Pending.Code
+	}
+	return ""
+}
+
+// retryDelay spaces out a refresh that keeps failing, or keeps finding an update it cannot
+// apply by itself: 15 minutes, doubling up to 6 hours or the update interval if that is
+// shorter. Each attempt rewrites the whole record on flash.
 func retryDelay(attempts int, interval time.Duration) time.Duration {
 	limit := 6 * time.Hour
 	if interval > 0 {

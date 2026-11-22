@@ -601,8 +601,9 @@ func (s *app) runJob(lane, action string, fn func(context.Context) (json.RawMess
 			j.Result = out
 		}
 		var response struct {
-			OK    *bool  `json:"ok"`
-			Error string `json:"error"`
+			OK    *bool           `json:"ok"`
+			Error string          `json:"error"`
+			Data  json.RawMessage `json:"data"`
 		}
 		if e == nil && json.Unmarshal(out, &response) == nil && response.OK != nil && !*response.OK {
 			if len(response.Error) > 0 && len(response.Error) <= 64 && strings.Trim(response.Error, "abcdefghijklmnopqrstuvwxyz0123456789_-") == "" {
@@ -625,13 +626,16 @@ func (s *app) runJob(lane, action string, fn func(context.Context) (json.RawMess
 		if quietTask(action, e) {
 			return
 		}
-		event := action + " " + j.Stage + " " + id
+		event, level := action+" "+j.Stage+" "+id, map[bool]string{true: "warn", false: "info"}[e != nil]
 		if action == bootstrapAction && j.Error != "" || response.Error != "" && response.Error == j.Error {
 			event += " " + j.Error
 		} else if action == bootstrapAction {
 			event += " " + string(publicBootstrapResult(j.Result))
+		} else if code := heldUpdate(action, response.Data); e == nil && code != "" {
+			// The task is done, but the update it downloaded waits for the administrator.
+			event, level = action+" held "+id+" "+code, "warn"
 		}
-		s.sys.Records().Log("task", map[bool]string{true: "warn", false: "info"}[e != nil], event)
+		s.sys.Records().Log("task", level, event)
 	}()
 	return map[string]string{"task": id}, nil
 }
