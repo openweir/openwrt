@@ -395,12 +395,15 @@ try {
 			if (name === '订阅') {
 				// Three cards a row on a wide page and one on a phone; a row's cards share one height.
 				const boxes = await page.locator('.ow-source-card').evaluateAll(cards => cards.map(card => {
-					const box = card.getBoundingClientRect();
-					return [Math.round(box.top), Math.round(box.height)];
+					const box = card.getBoundingClientRect(),
+						buttons = card.querySelector(':scope > .ow-actions').getBoundingClientRect();
+					return [Math.round(box.top), Math.round(box.height), Math.round(buttons.bottom)];
 				}));
 				const firstRow = boxes.filter(([top]) => top === boxes[0][0]);
 				assert.equal(firstRow.length, width > 1000 ? 3 : 1, 'subscription cards per row');
 				assert.ok(firstRow.every(([, height]) => height === firstRow[0][1]), 'a row of subscription cards shares one height');
+				// The provider card carries a plan and a notice its neighbours lack; their buttons still line up along the foot.
+				assert.ok(firstRow.every(([, , buttons]) => buttons === firstRow[0][2]), 'a row of subscription cards lines up its buttons');
 				const clockProblem = page.locator('.ow-source-card').filter({hasText:'备用订阅'});
 				await clockProblem.getByText(/证书尚未生效.*1970-01-02.*2026-01-01.*2027-01-01.*UTC/).waitFor();
 				const savedProblem = page.locator('.ow-source-card').filter({hasText:'家庭套餐'});

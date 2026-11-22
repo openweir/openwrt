@@ -1386,7 +1386,8 @@
 @container (max-width: 900px) {
 	.ow .ow-source-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
-.ow .ow-source-card .ow-actions:last-child { margin-top: auto; }
+/* The buttons keep to the card's foot so a row's line up; the card's line, once it says something, follows under them. */
+.ow .ow-source-card > .ow-actions { margin-top: auto; }
 .ow .ow-source-mobile { display: none; }
 .ow .ow-sources > .ow-row { flex-direction: row; }
 @container (max-width: 650px) {
