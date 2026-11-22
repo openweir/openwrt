@@ -425,7 +425,7 @@ try {
 				await edit.getByRole('button', { name: '保存', exact: true }).click();
 				const failure = page.getByRole('dialog', { name: '已保留上次配置' });
 				await centered(failure, { width, height });
-				await failure.getByText('测试节点 24 · 规则无法转换').scrollIntoViewIfNeeded();
+				await failure.getByText('测试节点 24 · 这条规则无法转换为内核规则').scrollIntoViewIfNeeded();
 				assert.ok(await failure.locator('.ow-modal-body').evaluate(el => el.scrollTop > 0));
 				const header = await failure.locator('.ow-modal-head').boundingBox(), frame = await failure.boundingBox();
 				assert.ok(Math.abs(header.y - frame.y) <= 2, 'long content keeps dialog controls visible');

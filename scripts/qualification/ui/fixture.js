@@ -184,7 +184,7 @@ export function fixture(empty = false, preparing = false) {
 					if (controls.longRefresh) {
 						controls.longRefresh = false;
 						return job({ ok: true, data: { decision: 'blocked', notices: Array.from({ length: 24 }, (_, i) => ({
-							at: '测试节点 ' + (i+1), code: 'unsupported_rule',
+							at: '测试节点 ' + (i+1), code: 'subconv_unsupported_rule',
 						})) } });
 					}
 					const row = sources.find(s => s.source === r.args.source);
