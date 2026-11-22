@@ -15,7 +15,7 @@ import (
 
 	"github.com/openweir/openwrt/internal/cnlist"
 	"github.com/openweir/openwrt/internal/subscription"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 const coreHome = RunDir + "/mihomo"

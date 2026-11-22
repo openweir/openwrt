@@ -10,7 +10,7 @@ import (
 
 	"github.com/openweir/subconv"
 	"github.com/openweir/subconv/rules"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // conversion is a subscription in the OpenWeir format: the Clash document subconv makes of a

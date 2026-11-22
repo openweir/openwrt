@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // docOf is a document as it reaches the router after its providers were expanded: subconv checks

@@ -20,7 +20,7 @@ import (
 	"time"
 
 	"github.com/klauspost/compress/zstd"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 type setFixtureTransport func(*http.Request) (*http.Response, error)

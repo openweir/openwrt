@@ -12,7 +12,7 @@ import (
 	"github.com/openweir/openwrt/internal/kernel"
 	"github.com/openweir/openwrt/internal/router"
 	"github.com/openweir/openwrt/internal/subscription"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // Stage a private core home containing only this snapshot's exact providers.

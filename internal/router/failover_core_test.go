@@ -11,7 +11,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 	"math/big"
 	"net"
 	"net/http"

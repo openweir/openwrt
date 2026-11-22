@@ -3,7 +3,7 @@ package router
 import (
 	"errors"
 	"fmt"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 	"maps"
 	"net/netip"
 	"path/filepath"

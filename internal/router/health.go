@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/openweir/openwrt/internal/control"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 func pulse() error { return Atomic(RunDir+"/pulse", []byte("ok\n"), 0600) }

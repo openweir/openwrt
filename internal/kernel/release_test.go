@@ -16,7 +16,7 @@ import (
 	"strings"
 	"testing"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 type releaseTransport func(*http.Request) (*http.Response, error)

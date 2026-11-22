@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/openweir/subconv"
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 const maxProviderBody = 2 << 20
