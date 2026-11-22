@@ -826,6 +826,7 @@ export async function subscriptions(u) {
         // The card's other actions report under its buttons; a failed background import is told
         // here too, unless the message above already shows the failure the router recorded.
         const cardLine = u.feedback(null, 'source:' + s.source, { covered: !!s.last_failure });
+        const heading = 'ow-source-' + ids();
         const card = u.h(
             'section',
             { class: 'ow-card ow-source-card', 'data-kind': s.kind },
@@ -834,7 +835,7 @@ export async function subscriptions(u) {
                 { class: 'ow-source-title' },
                 avatar,
                 kind,
-                u.h('strong', { class: 'ow-source-name', title: s.name || '订阅' }, s.name || '订阅'),
+                u.h('strong', { class: 'ow-source-name', id: heading, title: s.name || '订阅' }, s.name || '订阅'),
                 u.h('div', { class: 'ow-muted ow-source-meta', hidden: !meta }, meta),
                 use,
             ),
@@ -852,6 +853,8 @@ export async function subscriptions(u) {
             ),
             cardLine,
         );
+        // Every card has the same buttons; the subscription's name tells them apart.
+        for (const b of card.querySelectorAll('button')) b.setAttribute('aria-describedby', heading);
         attach(card, cardLine);
         return card;
     }

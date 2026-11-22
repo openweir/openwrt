@@ -404,6 +404,12 @@ try {
 				assert.ok(firstRow.every(([, height]) => height === firstRow[0][1]), 'a row of subscription cards shares one height');
 				// The provider card carries a plan and a notice its neighbours lack; their buttons still line up along the foot.
 				assert.ok(firstRow.every(([, , buttons]) => buttons === firstRow[0][2]), 'a row of subscription cards lines up its buttons');
+				// Every card has an 更新 button; each is described by its subscription's name.
+				const updates = await page.locator('.ow-source-card').evaluateAll(cards => cards.slice(0, 2).map(card => {
+					const update = [...card.querySelectorAll('button')].find(b => b.textContent === '更新');
+					return (update.getAttribute('aria-describedby') || '').split(/\s+/).map(id => document.getElementById(id)?.textContent).join(' ');
+				}));
+				assert.deepEqual(updates, ['示例服务商 · 标准套餐', '外部订阅'], 'card buttons are described by their subscription');
 				const clockProblem = page.locator('.ow-source-card').filter({hasText:'备用订阅'});
 				await clockProblem.getByText(/证书尚未生效.*1970-01-02.*2026-01-01.*2027-01-01.*UTC/).waitFor();
 				const savedProblem = page.locator('.ow-source-card').filter({hasText:'家庭套餐'});
